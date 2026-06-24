@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# uv / virtualenv
+.venv/
+
+# Build output
+build/
+dist/
+*.spec
+*.new.exe
+
+# Optional local Codex app copies
+CodexPortableApp/
+CodexPortableApp.bak/
+
+# Local/editor state
+.agents/
+.codex/
+.idea/
+.vscode/
+*.log
+
+# OS files
+Thumbs.db
+Desktop.ini
