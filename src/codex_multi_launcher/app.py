@@ -12,6 +12,8 @@ APP_NAME = "Codex 多账号启动器"
 ICON_FILE_NAME = "app.ico"
 CONFIG_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "CodexMultiLauncher"
 CONFIG_PATH = CONFIG_DIR / "config.json"
+CONFIG_LAST_GOOD_PATH = CONFIG_DIR / "config.json.last-good.json"
+CONFIG_PREVIOUS_GOOD_PATH = CONFIG_DIR / "config.json.prev-good.json"
 DEFAULT_PROFILE_ROOT = Path.home() / "Documents" / "CodexProfiles"
 DEFAULT_CODEX_ENV_PATH = Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".codex" / ".env"
 PORTABLE_APP_DIR_NAME = "CodexPortableApp"
@@ -34,12 +36,23 @@ LOGIN_SENSITIVE_DIR_NAMES = {
 
 
 def load_config():
-    """读取启动器配置；不存在时返回默认配置。"""
-    if CONFIG_PATH.exists():
+    """读取启动器配置；主配置损坏时尝试从最近备份恢复。"""
+    if not CONFIG_PATH.exists():
+        return default_config()
+
+    try:
+        return read_config_file(CONFIG_PATH)
+    except Exception:
+        backup_corrupted_config()
+
+    for backup_path in (CONFIG_LAST_GOOD_PATH, CONFIG_PREVIOUS_GOOD_PATH):
         try:
-            return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            config = read_config_file(backup_path)
         except Exception:
-            return default_config()
+            continue
+        write_config_file(CONFIG_PATH, config)
+        return config
+
     return default_config()
 
 
@@ -54,12 +67,41 @@ def default_config():
 
 
 def save_config(config):
-    """保存启动器配置，便于下次双击直接使用。"""
+    """保存启动器配置，并保留最近两次可用备份。"""
+    write_config_file(CONFIG_PATH, config)
+    update_config_backups(config)
+
+
+def read_config_file(path):
+    """读取并解析指定配置文件。"""
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_config_file(path, config):
+    """用临时文件替换目标文件，避免中途失败导致配置损坏。"""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    serialized = json.dumps(config, ensure_ascii=False, indent=2)
+    temp_path = path.with_name(f".{path.name}.tmp")
+    temp_path.write_text(serialized, encoding="utf-8")
+    os.replace(temp_path, path)
+
+
+def update_config_backups(config):
+    """轮转配置备份，最多保留最近两份可恢复配置。"""
+    if CONFIG_LAST_GOOD_PATH.exists():
+        shutil.copy2(CONFIG_LAST_GOOD_PATH, CONFIG_PREVIOUS_GOOD_PATH)
+    write_config_file(CONFIG_LAST_GOOD_PATH, config)
+
+
+def backup_corrupted_config():
+    """备份损坏的主配置，方便用户后续排查。"""
+    if not CONFIG_PATH.exists():
+        return
+    corrupted_path = CONFIG_DIR / "config.json.corrupt"
+    try:
+        shutil.copy2(CONFIG_PATH, corrupted_path)
+    except Exception:
+        pass
 
 
 def resource_path(*parts):
@@ -331,6 +373,30 @@ def ensure_profile_env_file(codex_home_dir):
     shutil.copy2(DEFAULT_CODEX_ENV_PATH, target_env_path)
 
 
+def check_directory_writable(path):
+    """检查目录是否可写，不保留测试文件。"""
+    if not path.exists() or not path.is_dir():
+        return False
+    try:
+        test_path = path / ".codex_multi_launcher_write_test"
+        test_path.write_text("ok", encoding="utf-8")
+        test_path.unlink()
+        return True
+    except Exception:
+        return False
+
+
+def format_health_status(health):
+    """把账号健康检查结果转换成界面短状态。"""
+    if health["running"]:
+        return "运行中", "#16803c"
+    if health["errors"]:
+        return "异常", "#b42318"
+    if health["warnings"]:
+        return "需处理", "#9a5b00"
+    return "就绪", "#666666"
+
+
 class Launcher(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -421,6 +487,7 @@ class Launcher(tk.Tk):
             side="left", padx=(8, 0)
         )
         tk.Button(action_row, text="刷新状态", command=self.render_profiles, width=12).pack(side="left", padx=(8, 0))
+        tk.Button(action_row, text="诊断", command=self.show_diagnostics, width=10).pack(side="left", padx=(8, 0))
         tk.Button(action_row, text="打开配置目录", command=self.open_config_dir, width=14).pack(side="left", padx=(8, 0))
 
     def render_profiles(self):
@@ -440,14 +507,13 @@ class Launcher(tk.Tk):
             return
         running_commands = read_running_codex_commands()
         for index, name in enumerate(profiles, start=1):
-            is_running = self.is_profile_running(name, running_commands)
+            health = self.get_profile_health(name, running_commands)
+            status_text, status_color = format_health_status(health)
             row = tk.Frame(self.profile_frame)
             row.pack(fill="x", pady=4)
             tk.Label(row, text=f"{index}. {name}", anchor="w", font=("Microsoft YaHei UI", 10)).pack(
                 side="left", fill="x", expand=True
             )
-            status_text = "运行中" if is_running else "未运行"
-            status_color = "#16803c" if is_running else "#666666"
             tk.Label(row, text=status_text, fg=status_color, width=8, font=("Microsoft YaHei UI", 9)).pack(
                 side="right", padx=(0, 8)
             )
@@ -523,6 +589,49 @@ class Launcher(tk.Tk):
             normalize_path_for_match(user_data_dir),
         ]
         return any(target in running_commands for target in match_targets)
+
+    def get_profile_health(self, profile_name, running_commands=None):
+        """检查账号目录、程序副本、配置目录和版本状态。"""
+        running_commands = running_commands if running_commands is not None else read_running_codex_commands()
+        codex_path = self.config_data.get("codex_path", "")
+        profile_dir = self.get_profile_dir(profile_name)
+        codex_home_dir = profile_dir / "CodexHome"
+        appdata_dir = profile_dir / "AppData" / "Roaming"
+        localappdata_dir = profile_dir / "AppData" / "Local"
+        user_data_dir = self.get_user_data_dir(profile_name)
+        target_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
+        target_codex_path = target_app_dir / "Codex.exe"
+        errors = []
+        warnings = []
+
+        if not profile_dir.exists():
+            errors.append("账号目录不存在")
+        if not target_codex_path.exists():
+            errors.append("程序副本缺失")
+        if not codex_home_dir.exists():
+            errors.append("CodexHome 目录缺失")
+        if not appdata_dir.exists():
+            warnings.append("APPDATA 目录尚未创建")
+        if not localappdata_dir.exists():
+            warnings.append("LOCALAPPDATA 目录尚未创建")
+        if not user_data_dir.exists():
+            warnings.append("Web 容器数据目录尚未创建")
+        if not check_directory_writable(profile_dir):
+            errors.append("账号目录不可写")
+        if DEFAULT_CODEX_ENV_PATH.exists() and not (codex_home_dir / ".env").exists():
+            warnings.append(".env 尚未同步")
+        if codex_path and Path(codex_path).exists() and target_codex_path.exists():
+            try:
+                if portable_app_needs_update(codex_path, target_app_dir):
+                    warnings.append("程序副本需同步新版")
+            except Exception:
+                warnings.append("程序副本版本状态无法读取")
+
+        return {
+            "running": self.is_profile_running(profile_name, running_commands),
+            "errors": errors,
+            "warnings": warnings,
+        }
 
     def refresh_store_info(self, codex_path=None):
         """刷新界面展示的微软商店版地址和版本号。"""
@@ -780,6 +889,73 @@ class Launcher(tk.Tk):
         """打开启动器配置目录，方便用户查看生成的配置文件。"""
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(str(CONFIG_DIR))
+
+    def show_diagnostics(self):
+        """打开诊断窗口，展示当前环境和账号目录状态。"""
+        report = self.build_diagnostic_report()
+        window = tk.Toplevel(self)
+        window.title("诊断报告")
+        window.geometry("760x520")
+        window.transient(self)
+
+        text = tk.Text(window, wrap="word", font=("Microsoft YaHei UI", 9))
+        text.pack(side="left", fill="both", expand=True)
+        scrollbar = tk.Scrollbar(window, command=text.yview)
+        scrollbar.pack(side="right", fill="y")
+        text.configure(yscrollcommand=scrollbar.set)
+        text.insert("1.0", report)
+        text.configure(state="disabled")
+
+    def build_diagnostic_report(self):
+        """生成轻量诊断报告，帮助定位启动和隔离目录问题。"""
+        lines = []
+        profiles = self.config_data.get("profiles", [])
+        profile_root = Path(self.config_data.get("profile_root") or DEFAULT_PROFILE_ROOT)
+        codex_path = self.config_data.get("codex_path", "")
+        running_commands = read_running_codex_commands()
+
+        lines.append("Codex 多账号启动器诊断报告")
+        lines.append("")
+        lines.append("基础信息")
+        lines.append(f"- 配置文件：{CONFIG_PATH}")
+        lines.append(f"- 配置文件存在：{'是' if CONFIG_PATH.exists() else '否'}")
+        lines.append(f"- 最近备份存在：{'是' if CONFIG_LAST_GOOD_PATH.exists() else '否'}")
+        lines.append(f"- 上一次备份存在：{'是' if CONFIG_PREVIOUS_GOOD_PATH.exists() else '否'}")
+        lines.append(f"- 账号根目录：{profile_root}")
+        lines.append(f"- 账号根目录可写：{'是' if check_directory_writable(profile_root) else '否'}")
+        lines.append(f"- 商店版路径：{codex_path or '未设置'}")
+        lines.append(f"- 商店版存在：{'是' if codex_path and Path(codex_path).exists() else '否'}")
+        lines.append(f"- 商店版版本：{get_file_version(codex_path) if codex_path and Path(codex_path).exists() else '未识别'}")
+        lines.append(f"- 默认 .env：{DEFAULT_CODEX_ENV_PATH}")
+        lines.append(f"- 默认 .env 存在：{'是' if DEFAULT_CODEX_ENV_PATH.exists() else '否'}")
+        lines.append(f"- 已登记账号数：{len(profiles)}")
+
+        lines.append("")
+        lines.append("账号状态")
+        if not profiles:
+            lines.append("- 暂无账号")
+        for profile_name in profiles:
+            profile_dir = self.get_profile_dir(profile_name)
+            target_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
+            target_codex_path = target_app_dir / "Codex.exe"
+            codex_home_dir = profile_dir / "CodexHome"
+            health = self.get_profile_health(profile_name, running_commands)
+            status_text, _ = format_health_status(health)
+            lines.append(f"- {profile_name}")
+            lines.append(f"  状态：{status_text}")
+            lines.append(f"  账号目录：{profile_dir}")
+            lines.append(f"  程序副本：{target_codex_path}")
+            lines.append(f"  程序副本存在：{'是' if target_codex_path.exists() else '否'}")
+            lines.append(f"  CodexHome：{codex_home_dir}")
+            lines.append(f"  CodexHome 存在：{'是' if codex_home_dir.exists() else '否'}")
+            if health["errors"]:
+                lines.append(f"  异常：{'；'.join(health['errors'])}")
+            if health["warnings"]:
+                lines.append(f"  提醒：{'；'.join(health['warnings'])}")
+            if not health["errors"] and not health["warnings"]:
+                lines.append("  检查结果：未发现明显问题")
+
+        return "\n".join(lines)
 
     def launch_profile(self, profile_name):
         """按账号隔离环境变量后启动 Codex 桌面端。"""

@@ -16,6 +16,8 @@ dist/
 *.new.exe
 *.exe
 
+codex-tools-2.0.5
+
 # Optional local Codex app copies
 CodexPortableApp/
 CodexPortableApp.bak/
