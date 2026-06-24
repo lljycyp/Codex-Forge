@@ -5,7 +5,7 @@ import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import messagebox, simpledialog
 
 
 APP_NAME = "Codex 多账号启动器"
@@ -13,7 +13,9 @@ ICON_FILE_NAME = "app.ico"
 CONFIG_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "CodexMultiLauncher"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 DEFAULT_PROFILE_ROOT = Path.home() / "Documents" / "CodexProfiles"
+DEFAULT_CODEX_ENV_PATH = Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".codex" / ".env"
 PORTABLE_APP_DIR_NAME = "CodexPortableApp"
+SOURCE_VERSION_FILE_NAME = ".source_version.json"
 LOGIN_SENSITIVE_FILE_NAMES = {
     "auth.json",
     "Cookies",
@@ -110,33 +112,96 @@ def read_running_codex_commands():
     return normalize_path_for_match(result.stdout)
 
 
-def find_common_codex_path():
-    """尝试从常见安装位置和正在运行的进程寻找 Codex 主程序。"""
-    running_path = find_running_codex_path()
-    if running_path:
-        return running_path
+def find_windowsapps_codex_path():
+    """自动查找微软商店版 Codex 主程序路径。"""
+    package_path = find_windowsapps_codex_path_by_package()
+    if package_path:
+        return package_path
+    return find_windowsapps_codex_path_by_scan()
 
-    local_app_data = Path(os.environ.get("LOCALAPPDATA", ""))
-    program_files = [
-        Path(os.environ.get("ProgramFiles", "")),
-        Path(os.environ.get("ProgramFiles(x86)", "")),
+
+def find_windowsapps_codex_path_by_package():
+    """优先通过系统应用包信息查找微软商店版 Codex。"""
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        (
+            "Get-AppxPackage | "
+            "Where-Object { "
+            "$_.Name -like '*Codex*' -or "
+            "$_.PackageFullName -like '*Codex*' -or "
+            "$_.InstallLocation -like '*Codex*' "
+            "} | "
+            "Sort-Object Version -Descending | "
+            "Select-Object -ExpandProperty InstallLocation"
+        ),
     ]
-    candidates = [
-        local_app_data / "Programs" / "Codex" / "Codex.exe",
-        local_app_data / "Programs" / "OpenAI Codex" / "Codex.exe",
-        local_app_data / "Codex" / "Codex.exe",
-    ]
-    for root in program_files:
-        candidates.extend(
-            [
-                root / "Codex" / "Codex.exe",
-                root / "OpenAI Codex" / "Codex.exe",
-            ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=8,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate)
+    except Exception:
+        return ""
+
+    for line in result.stdout.splitlines():
+        install_dir = Path(line.strip())
+        codex_path = install_dir / "Codex.exe"
+        if is_windowsapps_codex_path(codex_path):
+            return str(codex_path)
     return ""
+
+
+def find_windowsapps_codex_path_by_scan():
+    """在 WindowsApps 目录里兜底扫描 Codex.exe。"""
+    windows_apps_dir = get_windowsapps_dir()
+    if not windows_apps_dir.exists():
+        return ""
+
+    candidates = []
+    try:
+        children = list(windows_apps_dir.iterdir())
+    except Exception:
+        return ""
+
+    for child in children:
+        if not child.is_dir():
+            continue
+        lowered_name = child.name.lower()
+        if "codex" not in lowered_name and "openai" not in lowered_name:
+            continue
+        direct_codex_path = child / "Codex.exe"
+        if direct_codex_path.exists():
+            candidates.append(direct_codex_path)
+            continue
+        try:
+            for root, _, files in os.walk(child):
+                if "Codex.exe" in files:
+                    candidates.append(Path(root) / "Codex.exe")
+                    break
+        except Exception:
+            continue
+
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda path: get_source_signature(path).get("modified_ns", 0), reverse=True)
+    return str(candidates[0])
+
+
+def get_windowsapps_dir():
+    """获取系统微软商店应用安装目录。"""
+    program_files = os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles") or r"C:\Program Files"
+    return Path(program_files) / "WindowsApps"
+
+
+def is_windowsapps_codex_path(path):
+    """判断路径是否为微软商店应用目录里的 Codex.exe。"""
+    path = Path(path)
+    return path.exists() and path.name.lower() == "codex.exe" and "windowsapps" in normalize_path_for_match(path)
 
 
 def find_running_codex_path():
@@ -167,19 +232,103 @@ def find_running_codex_path():
     return ""
 
 
-def get_portable_codex_path(source_codex_path, profile_dir):
-    """为每个账号准备独立 Codex 程序副本，减少程序运行状态共享。"""
+def get_source_signature(codex_path):
+    """读取源程序关键特征，用于判断账号副本是否需要更新。"""
+    codex_path = Path(codex_path)
+    try:
+        stat = codex_path.stat()
+    except OSError:
+        return {}
+    return {
+        "source_path": str(codex_path),
+        "source_dir": str(codex_path.parent),
+        "file_version": get_file_version(codex_path),
+        "size": stat.st_size,
+        "modified_ns": stat.st_mtime_ns,
+    }
+
+
+def get_file_version(path):
+    """读取可执行文件版本号；读取失败时返回空文本。"""
+    escaped_path = str(path).replace("'", "''")
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        f"(Get-Item -LiteralPath '{escaped_path}').VersionInfo.FileVersion",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        return ""
+    return result.stdout.strip()
+
+
+def read_source_signature(target_app_dir):
+    """读取账号程序副本记录的源程序版本信息。"""
+    version_path = target_app_dir / SOURCE_VERSION_FILE_NAME
+    if not version_path.exists():
+        return {}
+    try:
+        return json.loads(version_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def write_source_signature(target_app_dir, signature):
+    """写入账号程序副本对应的源程序版本信息。"""
+    version_path = target_app_dir / SOURCE_VERSION_FILE_NAME
+    version_path.write_text(json.dumps(signature, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def portable_app_needs_update(source_codex_path, target_app_dir):
+    """判断账号程序副本是否缺失或落后于微软商店版。"""
+    target_codex_path = target_app_dir / "Codex.exe"
+    if not target_codex_path.exists():
+        return True
+    current_signature = get_source_signature(source_codex_path)
+    saved_signature = read_source_signature(target_app_dir)
+    if not saved_signature:
+        return True
+    return any(
+        saved_signature.get(key) != current_signature.get(key)
+        for key in ("source_path", "file_version", "size", "modified_ns")
+    )
+
+
+def prepare_portable_codex_path(source_codex_path, profile_dir, allow_update=True):
+    """为账号准备独立 Codex 程序副本，并在源程序更新时同步。"""
     source_app_dir = Path(source_codex_path).parent
     target_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
     target_codex_path = target_app_dir / "Codex.exe"
     if paths_equal(source_app_dir, target_app_dir):
         return str(Path(source_codex_path))
-    if target_codex_path.exists():
+    if target_codex_path.exists() and not portable_app_needs_update(source_codex_path, target_app_dir):
+        return str(target_codex_path)
+    if target_codex_path.exists() and not allow_update:
         return str(target_codex_path)
 
-    target_app_dir.mkdir(parents=True, exist_ok=True)
+    if target_app_dir.exists():
+        shutil.rmtree(target_app_dir)
+    profile_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source_app_dir, target_app_dir, dirs_exist_ok=True)
+    write_source_signature(target_app_dir, get_source_signature(source_codex_path))
     return str(target_codex_path)
+
+
+def ensure_profile_env_file(codex_home_dir):
+    """确保账号 CodexHome 里有默认 .env；已有账号专属配置时不覆盖。"""
+    target_env_path = codex_home_dir / ".env"
+    if target_env_path.exists() or not DEFAULT_CODEX_ENV_PATH.exists():
+        return
+    codex_home_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(DEFAULT_CODEX_ENV_PATH, target_env_path)
 
 
 class Launcher(tk.Tk):
@@ -190,8 +339,12 @@ class Launcher(tk.Tk):
         self.resizable(False, False)
         self.set_window_icon()
         self.config_data = load_config()
-        if not self.config_data.get("codex_path"):
-            self.config_data["codex_path"] = find_common_codex_path()
+        self.path_var = tk.StringVar(value=self.config_data.get("codex_path", ""))
+        self.version_var = tk.StringVar(value="未识别")
+        detected_codex_path = find_windowsapps_codex_path()
+        if detected_codex_path:
+            self.config_data["codex_path"] = detected_codex_path
+            self.path_var.set(detected_codex_path)
         self.migrate_original_profile_marker()
         self.build_ui()
 
@@ -220,7 +373,7 @@ class Launcher(tk.Tk):
             save_config(self.config_data)
 
     def build_ui(self):
-        """构建主界面，提供路径选择、账号启动和账号新增。"""
+        """构建主界面，提供自动识别、账号启动和账号新增。"""
         container = tk.Frame(self, padx=18, pady=16)
         container.pack(fill="both", expand=True)
 
@@ -236,11 +389,23 @@ class Launcher(tk.Tk):
 
         path_row = tk.Frame(container)
         path_row.pack(fill="x")
-        tk.Label(path_row, text="Codex 程序：", font=("Microsoft YaHei UI", 9)).pack(side="left")
-        self.path_var = tk.StringVar(value=self.config_data.get("codex_path", ""))
+        tk.Label(path_row, text="商店版地址：", font=("Microsoft YaHei UI", 9)).pack(side="left")
         path_entry = tk.Entry(path_row, textvariable=self.path_var)
+        path_entry.configure(state="readonly", readonlybackground="white")
         path_entry.pack(side="left", fill="x", expand=True, padx=(6, 8))
-        tk.Button(path_row, text="选择", command=self.choose_codex_path, width=8).pack(side="right")
+        tk.Button(path_row, text="重新识别", command=self.choose_codex_path, width=10).pack(side="right")
+
+        version_row = tk.Frame(container)
+        version_row.pack(fill="x", pady=(8, 0))
+        tk.Label(version_row, text="商店版版本：", font=("Microsoft YaHei UI", 9)).pack(side="left")
+        tk.Label(
+            version_row,
+            textvariable=self.version_var,
+            anchor="w",
+            font=("Microsoft YaHei UI", 9),
+            fg="#444444",
+        ).pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self.refresh_store_info()
 
         profile_title = tk.Label(container, text="选择要启动的账号：", font=("Microsoft YaHei UI", 10, "bold"))
         profile_title.pack(anchor="w", pady=(18, 8))
@@ -257,13 +422,13 @@ class Launcher(tk.Tk):
         )
         tk.Button(action_row, text="刷新状态", command=self.render_profiles, width=12).pack(side="left", padx=(8, 0))
         tk.Button(action_row, text="打开配置目录", command=self.open_config_dir, width=14).pack(side="left", padx=(8, 0))
-        tk.Button(action_row, text="退出", command=self.destroy, width=10).pack(side="right")
 
     def render_profiles(self):
         """刷新账号按钮列表。"""
         for child in self.profile_frame.winfo_children():
             child.destroy()
         profiles = self.config_data.get("profiles", [])
+        self.ensure_all_profile_env_files()
         if not profiles:
             empty_tip = tk.Label(
                 self.profile_frame,
@@ -287,9 +452,6 @@ class Launcher(tk.Tk):
                 side="right", padx=(0, 8)
             )
             tk.Button(row, text="删除", command=lambda n=name: self.delete_profile(n), width=8).pack(side="right")
-            tk.Button(row, text="清除登录", command=lambda n=name: self.clear_profile_login(n), width=9).pack(
-                side="right", padx=(0, 8)
-            )
             tk.Button(row, text="改名", command=lambda n=name: self.rename_profile(n), width=8).pack(
                 side="right", padx=(0, 8)
             )
@@ -305,6 +467,11 @@ class Launcher(tk.Tk):
     def get_user_data_dir(self, profile_name):
         """获取 Codex Web 容器的独立用户数据目录。"""
         return self.get_profile_dir(profile_name) / "AppData" / "Roaming" / "Codex" / "web" / "Codex"
+
+    def ensure_all_profile_env_files(self):
+        """为所有已登记账号补齐默认 .env。"""
+        for profile_name in self.config_data.get("profiles", []):
+            ensure_profile_env_file(self.get_profile_dir(profile_name) / "CodexHome")
 
     def find_profile_directory_owner(self, profile_name, exclude_name=None):
         """查找是否已有其他账号使用同一个安全目录名。"""
@@ -357,16 +524,46 @@ class Launcher(tk.Tk):
         ]
         return any(target in running_commands for target in match_targets)
 
+    def refresh_store_info(self, codex_path=None):
+        """刷新界面展示的微软商店版地址和版本号。"""
+        codex_path = codex_path or self.config_data.get("codex_path", "")
+        self.path_var.set(codex_path)
+        if not codex_path or not Path(codex_path).exists():
+            self.version_var.set("未识别")
+            return
+        version = get_file_version(codex_path)
+        self.version_var.set(version or "无法读取")
+
     def choose_codex_path(self):
-        """让用户选择 Codex 主程序路径，并写入配置。"""
-        selected = filedialog.askopenfilename(
-            title="选择 Codex.exe",
-            filetypes=[("可执行文件", "*.exe"), ("所有文件", "*.*")],
-        )
-        if selected:
-            self.config_data["codex_path"] = selected
-            self.path_var.set(selected)
+        """重新自动识别微软商店版 Codex 主程序路径。"""
+        selected = find_windowsapps_codex_path()
+        if not selected:
+            self.refresh_store_info()
+            messagebox.showwarning(
+                "未找到程序",
+                "没有自动找到微软商店版 Codex。\n请确认已从微软商店安装，并以管理员身份运行启动器。",
+                parent=self,
+            )
+            return ""
+        self.config_data["codex_path"] = selected
+        self.refresh_store_info(selected)
+        save_config(self.config_data)
+        return selected
+
+    def get_store_codex_path(self):
+        """获取最新微软商店版 Codex 主程序路径。"""
+        latest_codex_path = find_windowsapps_codex_path()
+        if latest_codex_path:
+            self.config_data["codex_path"] = latest_codex_path
+            self.refresh_store_info(latest_codex_path)
             save_config(self.config_data)
+            return latest_codex_path
+
+        codex_path = self.config_data.get("codex_path", "")
+        if is_windowsapps_codex_path(codex_path):
+            self.refresh_store_info(codex_path)
+            return codex_path
+        return self.choose_codex_path()
 
     def add_profile(self):
         """新增一个账号入口。"""
@@ -375,6 +572,25 @@ class Launcher(tk.Tk):
             return
         name = self.validate_new_profile_name(name)
         if not name:
+            return
+        codex_path = self.get_store_codex_path()
+        if not codex_path:
+            return
+        profile_dir = self.get_profile_dir(name)
+        ensure_profile_env_file(profile_dir / "CodexHome")
+        try:
+            prepare_portable_codex_path(codex_path, profile_dir)
+        except Exception as exc:
+            try:
+                if profile_dir.exists():
+                    shutil.rmtree(profile_dir)
+            except Exception:
+                pass
+            messagebox.showerror(
+                "新增失败",
+                f"无法复制微软商店版 Codex：\n{exc}\n\n请确认已以管理员身份运行启动器。",
+                parent=self,
+            )
             return
         profiles = self.config_data.setdefault("profiles", [])
         profiles.append(name)
@@ -454,6 +670,7 @@ class Launcher(tk.Tk):
         if source_codex_home.exists():
             self.copy_directory(source_codex_home, codex_home_dir, skip_login_data=True)
             copied_any = True
+        ensure_profile_env_file(codex_home_dir)
 
         if not copied_any:
             try:
@@ -462,6 +679,29 @@ class Launcher(tk.Tk):
             except Exception:
                 pass
             messagebox.showwarning("未找到原本账号", "没有找到可导入的 Codex 默认数据目录。")
+            return
+
+        codex_path = self.get_store_codex_path()
+        if not codex_path:
+            try:
+                if profile_dir.exists():
+                    shutil.rmtree(profile_dir)
+            except Exception:
+                pass
+            return
+        try:
+            prepare_portable_codex_path(codex_path, profile_dir)
+        except Exception as exc:
+            try:
+                if profile_dir.exists():
+                    shutil.rmtree(profile_dir)
+            except Exception:
+                pass
+            messagebox.showerror(
+                "导入失败",
+                f"无法复制微软商店版 Codex：\n{exc}\n\n请确认已以管理员身份运行启动器。",
+                parent=self,
+            )
             return
 
         if profile_name not in profiles:
@@ -515,67 +755,6 @@ class Launcher(tk.Tk):
         self.render_profiles()
         messagebox.showinfo("已删除", f"已删除：{profile_name}", parent=self)
 
-    def clear_profile_login(self, profile_name):
-        """清除指定账号的登录态和网页会话缓存。"""
-        running_commands = read_running_codex_commands()
-        if self.is_profile_running(profile_name, running_commands):
-            messagebox.showwarning(
-                "账号正在运行",
-                "请先关闭该账号对应的 Codex 窗口，再清除登录信息。",
-                parent=self,
-            )
-            return
-
-        confirmed = messagebox.askyesno(
-            "确认清除登录",
-            f"确定清除“{profile_name}”的登录信息吗？\n\n清除后该账号下次启动需要重新登录。",
-            parent=self,
-        )
-        if not confirmed:
-            return
-
-        profile_dir = self.get_profile_dir(profile_name)
-        targets = [
-            profile_dir / "CodexHome" / "auth.json",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "Cookies",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "Cookies-journal",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "Login Data",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "Login Data-journal",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "Local Storage",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "Session Storage",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "Network",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex" / "Default" / "Cookies",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex" / "Default" / "Cookies-journal",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex" / "Default" / "Login Data",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex" / "Default" / "Login Data-journal",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex" / "Default" / "Local Storage",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex" / "Default" / "Session Storage",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex" / "Default" / "IndexedDB",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex" / "Default" / "Network",
-            profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex" / "Default" / "WebStorage",
-        ]
-
-        failed = []
-        for target in targets:
-            if not target.exists():
-                continue
-            try:
-                if target.is_dir():
-                    shutil.rmtree(target)
-                else:
-                    target.unlink()
-            except Exception:
-                failed.append(str(target))
-
-        if failed:
-            messagebox.showwarning(
-                "部分清理失败",
-                "部分登录文件可能仍被占用，请关闭对应 Codex 后重试。",
-                parent=self,
-            )
-        else:
-            messagebox.showinfo("已清除", f"已清除“{profile_name}”的登录信息。", parent=self)
-
     def copy_directory(self, source, target, skip_login_data=False):
         """合并复制目录；可跳过登录相关文件，避免账号之间共享登录态。"""
         for root, dirs, files in os.walk(source):
@@ -604,16 +783,9 @@ class Launcher(tk.Tk):
 
     def launch_profile(self, profile_name):
         """按账号隔离环境变量后启动 Codex 桌面端。"""
-        codex_path = self.path_var.get().strip('" ')
-        if not codex_path or not Path(codex_path).exists():
-            messagebox.showwarning("需要选择程序", "请先选择 Codex.exe 的实际路径。")
-            self.choose_codex_path()
-            codex_path = self.path_var.get().strip('" ')
-            if not codex_path or not Path(codex_path).exists():
-                return
-
-        self.config_data["codex_path"] = codex_path
-        save_config(self.config_data)
+        codex_path = self.get_store_codex_path()
+        if not codex_path:
+            return
 
         profile_root = Path(self.config_data.get("profile_root") or DEFAULT_PROFILE_ROOT)
         profile_dir = profile_root / sanitize_profile_name(profile_name)
@@ -622,8 +794,19 @@ class Launcher(tk.Tk):
         codex_home_dir = profile_dir / "CodexHome"
         user_data_dir = self.get_user_data_dir(profile_name)
 
+        target_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
+        running_commands = read_running_codex_commands()
+        if self.is_profile_running(profile_name, running_commands) and portable_app_needs_update(codex_path, target_app_dir):
+            messagebox.showwarning(
+                "需要关闭账号",
+                "微软商店版 Codex 已更新，但该账号正在运行。\n请先关闭该账号窗口，再重新启动以同步新版程序。",
+                parent=self,
+            )
+            return
+
         for directory in (appdata_dir, localappdata_dir, codex_home_dir, user_data_dir):
             directory.mkdir(parents=True, exist_ok=True)
+        ensure_profile_env_file(codex_home_dir)
 
         env = os.environ.copy()
         env["APPDATA"] = str(appdata_dir)
@@ -632,7 +815,7 @@ class Launcher(tk.Tk):
         env["CODEX_MULTI_PROFILE"] = profile_name
 
         try:
-            portable_codex_path = get_portable_codex_path(codex_path, profile_dir)
+            portable_codex_path = prepare_portable_codex_path(codex_path, profile_dir)
             subprocess.Popen(
                 [
                     portable_codex_path,

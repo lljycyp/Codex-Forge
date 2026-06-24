@@ -13,13 +13,5 @@ uv run pyinstaller `
   --name CodexMultiLauncher `
   src\codex_multi_launcher\app.py
 
-$OutputPath = ".\CodexMultiLauncher.exe"
-$FallbackPath = ".\CodexMultiLauncher.new.exe"
-
-try {
-  Copy-Item .\dist\CodexMultiLauncher.exe $OutputPath -Force
-  Write-Host "Built $OutputPath"
-} catch {
-  Copy-Item .\dist\CodexMultiLauncher.exe $FallbackPath -Force
-  Write-Warning "Could not overwrite $OutputPath. It may be running. Built $FallbackPath instead."
-}
+$OutputPath = ".\dist\CodexMultiLauncher.exe"
+Write-Host "Built $OutputPath"

@@ -60,16 +60,10 @@ uv run python -m py_compile .\src\codex_multi_launcher\app.py
 .\scripts\build.ps1
 ```
 
-打包完成后会生成并覆盖：
+打包完成后会生成：
 
 ```text
-CodexMultiLauncher.exe
-```
-
-如果旧 exe 正在运行导致无法覆盖，会生成：
-
-```text
-CodexMultiLauncher.new.exe
+dist\CodexMultiLauncher.exe
 ```
 
 ## 清理构建产物
@@ -85,4 +79,4 @@ CodexMultiLauncher.new.exe
 
 ## 说明
 
-根目录不需要保存 `CodexPortableApp`。启动器会根据用户选择的 `Codex.exe`，在每个账号目录下创建独立的 `CodexPortableApp` 副本。
+根目录不需要保存 `CodexPortableApp`。启动器会自动识别微软商店版 Codex，并在每个账号目录下创建独立的 `CodexPortableApp` 副本。

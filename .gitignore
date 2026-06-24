@@ -14,6 +14,7 @@ build/
 dist/
 *.spec
 *.new.exe
+*.exe
 
 # Optional local Codex app copies
 CodexPortableApp/
