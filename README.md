@@ -61,8 +61,10 @@ uv run python -m py_compile .\src\codex_multi_launcher\app.py
 ## 打包 exe
 
 ```powershell
-.\scripts\build.ps1
+.\scripts\build_pyd.ps1
 ```
+
+打包会先把主逻辑临时编译成 `pyd` 扩展模块，再生成 exe，并在打包结束后清理临时产物，避免影响本地源码开发。
 
 打包完成后会生成：
 

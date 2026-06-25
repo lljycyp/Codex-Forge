@@ -11,6 +11,7 @@ codex-multi-launcher = "codex_multi_launcher.app:main"
 
 [dependency-groups]
 dev = [
+    "cython>=3.2.6",
     "pyinstaller>=6.14.0",
 ]
 
@@ -18,5 +19,4 @@ dev = [
 package = true
 
 [tool.pyinstaller]
-entry = "src/codex_multi_launcher/app.py"
-
+entry = "src/codex_multi_launcher/main.py"

@@ -11,5 +11,6 @@ Get-ChildItem .\src -Directory -Recurse -Filter __pycache__ -ErrorAction Silentl
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 Get-ChildItem .\src -Directory -Recurse -Filter *.egg-info -ErrorAction SilentlyContinue |
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+uv run clear_pyd.py
 
 Write-Host "Cleaned build artifacts."
