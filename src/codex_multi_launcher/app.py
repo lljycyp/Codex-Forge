@@ -1,6 +1,8 @@
 import json
 import os
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tkinter as tk
@@ -14,10 +16,21 @@ CONFIG_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "CodexMult
 CONFIG_PATH = CONFIG_DIR / "config.json"
 CONFIG_LAST_GOOD_PATH = CONFIG_DIR / "config.json.last-good.json"
 CONFIG_PREVIOUS_GOOD_PATH = CONFIG_DIR / "config.json.prev-good.json"
+DEFAULT_SESSION_SYNC_ROOT = CONFIG_DIR / "SharedSessions"
 DEFAULT_PROFILE_ROOT = Path.home() / "Documents" / "CodexProfiles"
 DEFAULT_CODEX_ENV_PATH = Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".codex" / ".env"
 PORTABLE_APP_DIR_NAME = "CodexPortableApp"
 SOURCE_VERSION_FILE_NAME = ".source_version.json"
+MEMORY_SYNC_DB_NAME = "memories_1.sqlite"
+MEMORY_SYNC_SIDECAR_NAMES = ("memories_1.sqlite-wal", "memories_1.sqlite-shm")
+MEMORY_SYNC_TABLE_NAMES = ("jobs", "stage1_outputs")
+SESSION_SYNC_DIR_NAMES = ("sessions", "attachments", "ambient-suggestions")
+SESSION_SYNC_FILE_NAMES = ("session_index.jsonl",)
+SESSION_SYNC_STATE_DB_NAME = "state_5.sqlite"
+SESSION_SYNC_STATE_SIDECAR_NAMES = ("state_5.sqlite-wal", "state_5.sqlite-shm")
+SESSION_SYNC_STATE_TABLE_NAMES = ("threads", "thread_dynamic_tools", "thread_spawn_edges")
+PROJECT_CONFIG_SECTION_RE = re.compile(r"^\[projects\.(?P<quote>['\"])(?P<path>.+?)(?P=quote)\]\s*$")
+TOML_SECTION_RE = re.compile(r"^\[.+\]\s*$")
 LOGIN_SENSITIVE_FILE_NAMES = {
     "auth.json",
     "Cookies",
@@ -41,13 +54,13 @@ def load_config():
         return default_config()
 
     try:
-        return read_config_file(CONFIG_PATH)
+        return normalize_config(read_config_file(CONFIG_PATH))
     except Exception:
         backup_corrupted_config()
 
     for backup_path in (CONFIG_LAST_GOOD_PATH, CONFIG_PREVIOUS_GOOD_PATH):
         try:
-            config = read_config_file(backup_path)
+            config = normalize_config(read_config_file(backup_path))
         except Exception:
             continue
         write_config_file(CONFIG_PATH, config)
@@ -63,7 +76,18 @@ def default_config():
         "profile_root": str(DEFAULT_PROFILE_ROOT),
         "profiles": [],
         "imported_original_profile": "",
+        "session_sync_enabled": False,
+        "session_sync_root": str(DEFAULT_SESSION_SYNC_ROOT),
+        "memory_sync_enabled": False,
     }
+
+
+def normalize_config(config):
+    """补齐旧版本配置缺失的字段。"""
+    defaults = default_config()
+    for key, value in defaults.items():
+        config.setdefault(key, value)
+    return config
 
 
 def save_config(config):
@@ -127,6 +151,22 @@ def paths_equal(left, right):
 def normalize_path_for_match(path):
     """把路径转换为便于在进程命令行中匹配的文本。"""
     return str(path).replace("/", "\\").rstrip("\\").lower()
+
+
+def normalize_project_config_path(path):
+    """归一化 config.toml 中的项目路径键。"""
+    normalized = str(path).replace("/", "\\").rstrip("\\")
+    if normalized.startswith("\\\\?\\"):
+        normalized = normalized[4:]
+    return normalized.lower()
+
+
+def normalize_cap_sid_project_path(path):
+    """归一化 cap_sid 中的项目路径键。"""
+    normalized = str(path).replace("\\", "/").rstrip("/")
+    if normalized.startswith("//?/"):
+        normalized = normalized[4:]
+    return normalized.lower()
 
 
 def read_running_codex_commands():
@@ -401,12 +441,15 @@ class Launcher(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("760x430")
+        self.geometry("760x500")
         self.resizable(False, False)
         self.set_window_icon()
         self.config_data = load_config()
         self.path_var = tk.StringVar(value=self.config_data.get("codex_path", ""))
         self.version_var = tk.StringVar(value="未识别")
+        self.session_sync_var = tk.BooleanVar(value=bool(self.config_data.get("session_sync_enabled", False)))
+        self.session_sync_root_var = tk.StringVar(value=self.config_data.get("session_sync_root", str(DEFAULT_SESSION_SYNC_ROOT)))
+        self.memory_sync_var = tk.BooleanVar(value=bool(self.config_data.get("memory_sync_enabled", False)))
         detected_codex_path = find_windowsapps_codex_path()
         if detected_codex_path:
             self.config_data["codex_path"] = detected_codex_path
@@ -473,6 +516,37 @@ class Launcher(tk.Tk):
         ).pack(side="left", fill="x", expand=True, padx=(6, 0))
         self.refresh_store_info()
 
+        sync_row = tk.Frame(container)
+        sync_row.pack(fill="x", pady=(10, 0))
+        tk.Checkbutton(
+            sync_row,
+            text="实验性同步会话",
+            variable=self.session_sync_var,
+            command=self.toggle_session_sync,
+            font=("Microsoft YaHei UI", 9),
+        ).pack(side="left")
+        sync_entry = tk.Entry(sync_row, textvariable=self.session_sync_root_var)
+        sync_entry.configure(state="readonly", readonlybackground="white")
+        sync_entry.pack(side="left", fill="x", expand=True, padx=(8, 8))
+        tk.Button(sync_row, text="打开同步目录", command=self.open_session_sync_dir, width=14).pack(side="right")
+
+        memory_row = tk.Frame(container)
+        memory_row.pack(fill="x", pady=(6, 0))
+        tk.Checkbutton(
+            memory_row,
+            text="实验性同步记忆",
+            variable=self.memory_sync_var,
+            command=self.toggle_memory_sync,
+            font=("Microsoft YaHei UI", 9),
+        ).pack(side="left")
+        tk.Label(
+            memory_row,
+            text="启动账号前合并 memories_1.sqlite，不实时共享数据库。",
+            anchor="w",
+            font=("Microsoft YaHei UI", 9),
+            fg="#666666",
+        ).pack(side="left", fill="x", expand=True, padx=(8, 0))
+
         profile_title = tk.Label(container, text="选择要启动的账号：", font=("Microsoft YaHei UI", 10, "bold"))
         profile_title.pack(anchor="w", pady=(18, 8))
 
@@ -533,6 +607,42 @@ class Launcher(tk.Tk):
     def get_user_data_dir(self, profile_name):
         """获取 Codex Web 容器的独立用户数据目录。"""
         return self.get_profile_dir(profile_name) / "AppData" / "Roaming" / "Codex" / "web" / "Codex"
+
+    def get_session_sync_root(self):
+        """获取共享会话目录。"""
+        configured_root = self.config_data.get("session_sync_root") or str(DEFAULT_SESSION_SYNC_ROOT)
+        return Path(configured_root)
+
+    def toggle_session_sync(self):
+        """保存会话同步开关。"""
+        enabled = bool(self.session_sync_var.get())
+        self.config_data["session_sync_enabled"] = enabled
+        self.config_data["session_sync_root"] = str(self.get_session_sync_root())
+        save_config(self.config_data)
+        if enabled:
+            messagebox.showinfo(
+                "已开启实验性同步",
+                "后续启动的账号会共享会话列表和附件。\n登录信息、配置、记忆和插件仍保持隔离。",
+                parent=self,
+            )
+
+    def toggle_memory_sync(self):
+        """保存记忆同步开关。"""
+        enabled = bool(self.memory_sync_var.get())
+        self.config_data["memory_sync_enabled"] = enabled
+        save_config(self.config_data)
+        if enabled:
+            messagebox.showinfo(
+                "已开启实验性记忆同步",
+                "后续启动账号前会合并 Codex 记忆数据库。\n该功能不会共享登录信息、插件或完整配置。",
+                parent=self,
+            )
+
+    def open_session_sync_dir(self):
+        """打开共享会话目录。"""
+        sync_root = self.get_session_sync_root()
+        sync_root.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(sync_root))
 
     def ensure_all_profile_env_files(self):
         """为所有已登记账号补齐默认 .env。"""
@@ -885,6 +995,550 @@ class Launcher(tk.Tk):
                     # 少量缓存文件可能被占用，跳过不影响账号导入主流程。
                     continue
 
+    def prepare_session_sync(self, codex_home_dir):
+        """把账号 CodexHome 中的会话白名单路径挂到共享目录。"""
+        if not self.config_data.get("session_sync_enabled", False):
+            return
+
+        sync_root = self.get_session_sync_root()
+        sync_root.mkdir(parents=True, exist_ok=True)
+        for directory_name in SESSION_SYNC_DIR_NAMES:
+            self.prepare_shared_directory(codex_home_dir / directory_name, sync_root / directory_name)
+        for file_name in SESSION_SYNC_FILE_NAMES:
+            self.prepare_shared_file(codex_home_dir / file_name, sync_root / file_name)
+        self.prepare_shared_state_database(codex_home_dir, sync_root)
+        self.prepare_project_config_sync(codex_home_dir)
+        self.prepare_project_cap_sid_sync(codex_home_dir)
+
+    def prepare_memory_sync(self, codex_home_dir):
+        """合并 Codex 记忆数据库，并写回本地真实文件。"""
+        if not self.config_data.get("memory_sync_enabled", False):
+            return
+
+        sync_root = self.get_session_sync_root()
+        sync_root.mkdir(parents=True, exist_ok=True)
+        shared_path = sync_root / MEMORY_SYNC_DB_NAME
+
+        if shared_path.exists() and not self.is_sqlite_database_healthy(shared_path):
+            self.quarantine_sqlite_database_files(sync_root, MEMORY_SYNC_DB_NAME, MEMORY_SYNC_SIDECAR_NAMES, "corrupt-before-memory-sync")
+
+        local_candidates = self.find_healthy_memory_databases(codex_home_dir)
+        for local_candidate in local_candidates:
+            if shared_path.exists():
+                self.merge_sqlite_tables(local_candidate, shared_path, MEMORY_SYNC_TABLE_NAMES)
+            else:
+                self.copy_sqlite_database(local_candidate, shared_path)
+
+        if shared_path.exists() and not self.is_sqlite_database_healthy(shared_path):
+            self.quarantine_sqlite_database_files(sync_root, MEMORY_SYNC_DB_NAME, MEMORY_SYNC_SIDECAR_NAMES, "corrupt-before-memory-sync")
+
+        if not shared_path.exists():
+            return
+
+        self.checkpoint_sqlite_database(shared_path)
+        self.replace_local_sqlite_database(codex_home_dir, shared_path, MEMORY_SYNC_DB_NAME, MEMORY_SYNC_SIDECAR_NAMES)
+        sqlite_dir = codex_home_dir / "sqlite"
+        if sqlite_dir.exists():
+            self.replace_local_sqlite_database(sqlite_dir, shared_path, MEMORY_SYNC_DB_NAME, MEMORY_SYNC_SIDECAR_NAMES)
+
+    def find_healthy_memory_databases(self, codex_home_dir):
+        """查找可用于合并的健康记忆数据库。"""
+        candidates = [
+            codex_home_dir / MEMORY_SYNC_DB_NAME,
+            codex_home_dir / "sqlite" / MEMORY_SYNC_DB_NAME,
+        ]
+        candidates.extend(sorted(codex_home_dir.glob(f"{MEMORY_SYNC_DB_NAME}.local-before-memory-sync*")))
+        healthy = []
+        seen = set()
+        for candidate in candidates:
+            if candidate in seen or candidate.is_symlink():
+                continue
+            seen.add(candidate)
+            if candidate.is_file() and self.is_sqlite_database_healthy(candidate):
+                healthy.append(candidate)
+        return healthy
+
+    def prepare_shared_directory(self, local_path, shared_path):
+        """合并已有本地目录后，用 junction 指向共享目录。"""
+        shared_path.mkdir(parents=True, exist_ok=True)
+        if self.is_linked_to_shared_path(local_path, shared_path):
+            return
+
+        if local_path.exists():
+            if local_path.is_dir():
+                self.copy_directory(local_path, shared_path)
+            backup_path = self.next_sync_backup_path(local_path)
+            local_path.rename(backup_path)
+
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        self.create_directory_junction(local_path, shared_path)
+
+    def prepare_shared_file(self, local_path, shared_path):
+        """合并已有本地文件后，用符号链接指向共享文件。"""
+        shared_path.parent.mkdir(parents=True, exist_ok=True)
+        if local_path.exists() and local_path.is_file():
+            if shared_path.exists():
+                self.merge_text_lines(local_path, shared_path)
+            else:
+                shutil.copy2(local_path, shared_path)
+        if not shared_path.exists():
+            shared_path.write_text("", encoding="utf-8")
+        if self.is_linked_to_shared_path(local_path, shared_path):
+            return
+
+        if local_path.exists():
+            backup_path = self.next_sync_backup_path(local_path)
+            local_path.rename(backup_path)
+
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        self.create_file_symlink(local_path, shared_path)
+
+    def merge_text_lines(self, source_path, target_path):
+        """把本地文本行合并进共享文件，保留已有顺序并去重。"""
+        try:
+            existing_lines = target_path.read_text(encoding="utf-8").splitlines()
+            source_lines = source_path.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            return
+        seen = set(existing_lines)
+        merged_lines = list(existing_lines)
+        for line in source_lines:
+            if line in seen:
+                continue
+            merged_lines.append(line)
+            seen.add(line)
+        target_path.write_text("\n".join(merged_lines) + ("\n" if merged_lines else ""), encoding="utf-8")
+
+    def prepare_project_config_sync(self, codex_home_dir):
+        """把所有账号 config.toml 中的项目白名单合并到当前账号。"""
+        target_config_path = codex_home_dir / "config.toml"
+        project_sections = self.collect_project_config_sections()
+        if not project_sections:
+            return
+
+        current_text = ""
+        if target_config_path.exists():
+            current_text = target_config_path.read_text(encoding="utf-8")
+
+        existing_keys = self.extract_project_config_keys(current_text)
+        missing_sections = [
+            section_text
+            for project_key, section_text in project_sections.items()
+            if project_key not in existing_keys
+        ]
+        updated_text = current_text
+        if missing_sections:
+            separator = "\n\n" if current_text and not current_text.endswith("\n\n") else ""
+            updated_text = current_text + separator + "\n\n".join(missing_sections) + "\n"
+        updated_text = self.ensure_desktop_project_list_enabled(updated_text)
+
+        if updated_text == current_text:
+            return
+
+        if target_config_path.exists():
+            self.backup_file_once(target_config_path, "local-before-project-sync")
+        target_config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.write_text_atomic(target_config_path, updated_text)
+
+    def ensure_desktop_project_list_enabled(self, text):
+        """同步会话时打开项目侧栏依赖的桌面项目建议开关。"""
+        lines = text.splitlines()
+        desktop_index = self.find_toml_section_index(lines, "desktop")
+        if desktop_index is None:
+            return text.rstrip() + "\n\n[desktop]\nambient-suggestions-enabled = true\n"
+
+        section_end = self.find_toml_section_end(lines, desktop_index + 1)
+        for index in range(desktop_index + 1, section_end):
+            if lines[index].strip().startswith("ambient-suggestions-enabled"):
+                lines[index] = "ambient-suggestions-enabled = true"
+                return "\n".join(lines).rstrip() + "\n"
+
+        lines.insert(section_end, "ambient-suggestions-enabled = true")
+        return "\n".join(lines).rstrip() + "\n"
+
+    def find_toml_section_index(self, lines, section_name):
+        """查找指定 TOML 顶层 section。"""
+        section_header = f"[{section_name}]"
+        for index, line in enumerate(lines):
+            if line.strip() == section_header:
+                return index
+        return None
+
+    def find_toml_section_end(self, lines, start_index):
+        """查找 TOML section 结束位置。"""
+        index = start_index
+        while index < len(lines):
+            if TOML_SECTION_RE.match(lines[index].strip()):
+                return index
+            index += 1
+        return len(lines)
+
+    def collect_project_config_sections(self):
+        """从所有账号配置收集项目段。"""
+        sections = {}
+        for config_path in self.iter_profile_config_paths():
+            if not config_path.exists():
+                continue
+            try:
+                text = config_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for project_key, section_text in self.extract_project_config_sections(text).items():
+                sections.setdefault(project_key, section_text)
+        return sections
+
+    def iter_profile_config_paths(self):
+        """遍历所有账号的 config.toml。"""
+        for profile_name in self.config_data.get("profiles", []):
+            yield self.get_profile_dir(profile_name) / "CodexHome" / "config.toml"
+
+    def extract_project_config_sections(self, text):
+        """提取 TOML 中 [projects.'...'] 段。"""
+        lines = text.splitlines()
+        sections = {}
+        index = 0
+        while index < len(lines):
+            header_match = PROJECT_CONFIG_SECTION_RE.match(lines[index].strip())
+            if not header_match:
+                index += 1
+                continue
+
+            start_index = index
+            index += 1
+            while index < len(lines) and not TOML_SECTION_RE.match(lines[index].strip()):
+                index += 1
+
+            project_key = normalize_project_config_path(header_match.group("path"))
+            section_text = "\n".join(lines[start_index:index]).strip()
+            if section_text:
+                sections.setdefault(project_key, section_text)
+        return sections
+
+    def extract_project_config_keys(self, text):
+        """提取 TOML 中已有项目路径键。"""
+        return set(self.extract_project_config_sections(text).keys())
+
+    def backup_file_once(self, path, suffix):
+        """为文件创建一次性备份。"""
+        backup_path = path.with_name(f"{path.name}.{suffix}")
+        if backup_path.exists():
+            return
+        shutil.copy2(path, backup_path)
+
+    def write_text_atomic(self, path, text):
+        """原子写入文本文件。"""
+        temp_path = path.with_name(f".{path.name}.tmp")
+        temp_path.write_text(text, encoding="utf-8")
+        os.replace(temp_path, path)
+
+    def prepare_project_cap_sid_sync(self, codex_home_dir):
+        """只合并 cap_sid 中的 workspace_by_cwd 项目注册表。"""
+        merged_workspace_by_cwd = self.collect_workspace_by_cwd_entries()
+        if not merged_workspace_by_cwd:
+            return
+
+        target_path = codex_home_dir / "cap_sid"
+        target_data = self.read_cap_sid_file(target_path)
+        if not target_data:
+            target_data = {
+                "workspace": "",
+                "readonly": "",
+                "workspace_by_cwd": {},
+                "writable_root_by_path": {},
+            }
+
+        target_workspace_by_cwd = target_data.setdefault("workspace_by_cwd", {})
+        changed = False
+        for project_path, sid in merged_workspace_by_cwd.items():
+            if project_path in target_workspace_by_cwd:
+                continue
+            target_workspace_by_cwd[project_path] = sid
+            changed = True
+
+        if not changed:
+            return
+
+        if target_path.exists():
+            self.backup_file_once(target_path, "local-before-project-sync")
+        self.write_json_atomic(target_path, target_data)
+
+    def collect_workspace_by_cwd_entries(self):
+        """从所有账号 cap_sid 收集 workspace_by_cwd。"""
+        entries = {}
+        for cap_sid_path in self.iter_profile_cap_sid_paths():
+            data = self.read_cap_sid_file(cap_sid_path)
+            workspace_by_cwd = data.get("workspace_by_cwd", {}) if data else {}
+            if not isinstance(workspace_by_cwd, dict):
+                continue
+            for project_path, sid in workspace_by_cwd.items():
+                if not isinstance(project_path, str) or not isinstance(sid, str):
+                    continue
+                entries.setdefault(normalize_cap_sid_project_path(project_path), sid)
+        return entries
+
+    def iter_profile_cap_sid_paths(self):
+        """遍历所有账号的 cap_sid。"""
+        for profile_name in self.config_data.get("profiles", []):
+            yield self.get_profile_dir(profile_name) / "CodexHome" / "cap_sid"
+
+    def read_cap_sid_file(self, path):
+        """读取 cap_sid JSON；不存在或损坏时返回空字典。"""
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def write_json_atomic(self, path, data):
+        """原子写入 JSON 文件。"""
+        temp_path = path.with_name(f".{path.name}.tmp")
+        temp_path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        os.replace(temp_path, path)
+
+    def prepare_shared_state_database(self, codex_home_dir, sync_root):
+        """合并桌面端会话侧栏状态库，并写回本地真实文件。"""
+        local_path = codex_home_dir / SESSION_SYNC_STATE_DB_NAME
+        shared_path = sync_root / SESSION_SYNC_STATE_DB_NAME
+
+        if shared_path.exists() and not self.is_sqlite_database_healthy(shared_path):
+            self.quarantine_state_database_files(sync_root, "corrupt-before-sync")
+
+        local_candidate = self.find_healthy_state_database(codex_home_dir)
+        if local_candidate:
+            if shared_path.exists():
+                self.merge_state_database(local_candidate, shared_path)
+            else:
+                self.copy_sqlite_database(local_candidate, shared_path)
+        elif local_path.exists() or local_path.is_symlink():
+            self.quarantine_state_database_files(codex_home_dir, "corrupt-before-sync")
+
+        if shared_path.exists() and not self.is_sqlite_database_healthy(shared_path):
+            self.quarantine_state_database_files(sync_root, "corrupt-before-sync")
+
+        if not shared_path.exists():
+            self.remove_local_state_database_files(codex_home_dir)
+            return
+
+        self.checkpoint_sqlite_database(shared_path)
+        self.replace_local_state_database(codex_home_dir, shared_path)
+
+    def find_healthy_state_database(self, codex_home_dir):
+        """查找可用于恢复共享状态库的健康本地状态库。"""
+        candidates = [codex_home_dir / SESSION_SYNC_STATE_DB_NAME]
+        candidates.extend(sorted(codex_home_dir.glob(f"{SESSION_SYNC_STATE_DB_NAME}.local-before-sync*")))
+        candidates.extend(sorted(codex_home_dir.glob(f"{SESSION_SYNC_STATE_DB_NAME}.corrupt-before-sync*")))
+        for candidate in candidates:
+            if candidate.is_symlink():
+                continue
+            if candidate.is_file() and self.is_sqlite_database_healthy(candidate):
+                return candidate
+        return None
+
+    def is_sqlite_database_healthy(self, database_path):
+        """检查 SQLite 文件是否可读且完整。"""
+        if not database_path.exists():
+            return False
+        try:
+            connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+            try:
+                result = connection.execute("PRAGMA integrity_check").fetchone()
+                return result is not None and result[0] == "ok"
+            finally:
+                connection.close()
+        except sqlite3.DatabaseError:
+            return False
+        except OSError:
+            return False
+
+    def quarantine_state_database_files(self, directory, suffix):
+        """隔离损坏或旧版链接产生的状态库文件。"""
+        self.quarantine_sqlite_database_files(
+            directory,
+            SESSION_SYNC_STATE_DB_NAME,
+            SESSION_SYNC_STATE_SIDECAR_NAMES,
+            suffix,
+        )
+
+    def quarantine_sqlite_database_files(self, directory, database_name, sidecar_names, suffix):
+        """隔离损坏或旧版链接产生的 SQLite 文件。"""
+        for file_name in (database_name, *sidecar_names):
+            path = directory / file_name
+            if not path.exists() and not path.is_symlink():
+                continue
+            quarantine_path = self.next_named_backup_path(path, suffix)
+            path.rename(quarantine_path)
+
+    def next_named_backup_path(self, path, suffix):
+        """生成指定后缀的备份路径。"""
+        candidate = path.with_name(f"{path.name}.{suffix}")
+        index = 1
+        while candidate.exists() or candidate.is_symlink():
+            candidate = path.with_name(f"{path.name}.{suffix}.{index}")
+            index += 1
+        return candidate
+
+    def merge_state_database(self, source_path, target_path):
+        """把本地会话索引表合并进共享状态库。"""
+        self.merge_sqlite_tables(source_path, target_path, SESSION_SYNC_STATE_TABLE_NAMES)
+
+    def merge_sqlite_tables(self, source_path, target_path, table_names):
+        """把指定 SQLite 表按主键忽略冲突地合并进目标库。"""
+        source_connection = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+        target_connection = sqlite3.connect(target_path)
+        try:
+            for table_name in table_names:
+                self.merge_sqlite_table(source_connection, target_connection, table_name)
+            target_connection.commit()
+        finally:
+            source_connection.close()
+            target_connection.close()
+
+    def checkpoint_sqlite_database(self, database_path):
+        """尽量把 WAL 内容刷回主库，便于复制成独立本地库。"""
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            connection.close()
+
+    def copy_sqlite_database(self, source_path, target_path):
+        """使用 SQLite backup API 复制一致快照，避免遗漏 WAL 内容。"""
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = target_path.with_name(f".{target_path.name}.sync-tmp")
+        if temp_path.exists():
+            temp_path.unlink()
+        source_connection = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+        target_connection = sqlite3.connect(temp_path)
+        try:
+            source_connection.backup(target_connection)
+            target_connection.commit()
+        finally:
+            source_connection.close()
+            target_connection.close()
+        os.replace(temp_path, target_path)
+
+    def merge_sqlite_table(self, source_connection, target_connection, table_name):
+        """按主键忽略冲突地合并一个 SQLite 表。"""
+        if not self.sqlite_table_exists(source_connection, table_name):
+            return
+        if not self.sqlite_table_exists(target_connection, table_name):
+            return
+        column_names = [
+            row[1]
+            for row in source_connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        ]
+        if not column_names:
+            return
+        quoted_columns = ", ".join(f'"{column_name}"' for column_name in column_names)
+        placeholders = ", ".join("?" for _ in column_names)
+        select_sql = f"SELECT {quoted_columns} FROM {table_name}"
+        insert_sql = f"INSERT OR IGNORE INTO {table_name} ({quoted_columns}) VALUES ({placeholders})"
+        rows = source_connection.execute(select_sql).fetchall()
+        target_connection.executemany(insert_sql, rows)
+
+    def sqlite_table_exists(self, connection, table_name):
+        """检查 SQLite 表是否存在。"""
+        row = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def backup_state_database_files(self, codex_home_dir):
+        """备份本地状态库和 SQLite sidecar 文件。"""
+        for file_name in (SESSION_SYNC_STATE_DB_NAME, *SESSION_SYNC_STATE_SIDECAR_NAMES):
+            path = codex_home_dir / file_name
+            if not path.exists() or path.is_symlink():
+                continue
+            backup_path = self.next_sync_backup_path(path)
+            path.rename(backup_path)
+
+    def replace_local_state_database(self, codex_home_dir, shared_path):
+        """用共享索引生成本地真实 SQLite 文件，避免运行时跨进程共享 SQLite。"""
+        self.replace_local_sqlite_database(
+            codex_home_dir,
+            shared_path,
+            SESSION_SYNC_STATE_DB_NAME,
+            SESSION_SYNC_STATE_SIDECAR_NAMES,
+        )
+
+    def replace_local_sqlite_database(self, directory, shared_path, database_name, sidecar_names):
+        """用共享库生成本地真实 SQLite 文件，避免运行时跨进程共享 SQLite。"""
+        directory.mkdir(parents=True, exist_ok=True)
+        local_path = directory / database_name
+        temp_path = local_path.with_name(f".{local_path.name}.sync-tmp")
+        self.remove_local_sqlite_database_files(directory, database_name, sidecar_names)
+        shutil.copy2(shared_path, temp_path)
+        os.replace(temp_path, local_path)
+
+    def remove_local_state_database_files(self, codex_home_dir):
+        """清理旧的状态库链接和 WAL/SHM sidecar。"""
+        self.remove_local_sqlite_database_files(
+            codex_home_dir,
+            SESSION_SYNC_STATE_DB_NAME,
+            SESSION_SYNC_STATE_SIDECAR_NAMES,
+        )
+
+    def remove_local_sqlite_database_files(self, directory, database_name, sidecar_names):
+        """清理旧的 SQLite 库链接和 WAL/SHM sidecar。"""
+        for file_name in (database_name, *sidecar_names):
+            path = directory / file_name
+            if not path.exists() and not path.is_symlink():
+                continue
+            path.unlink()
+
+    def remove_state_sidecar_links(self, codex_home_dir):
+        """清理旧版创建的 SQLite WAL/SHM sidecar 链接。"""
+        for file_name in SESSION_SYNC_STATE_SIDECAR_NAMES:
+            local_path = codex_home_dir / file_name
+            if local_path.is_symlink():
+                local_path.unlink()
+
+    def is_linked_to_shared_path(self, local_path, shared_path):
+        """判断本地路径是否已经指向共享路径。"""
+        if not local_path.exists() and not local_path.is_symlink():
+            return False
+        try:
+            return paths_equal(local_path.resolve(), shared_path)
+        except OSError:
+            return False
+
+    def next_sync_backup_path(self, path):
+        """生成不会覆盖已有数据的同步前备份路径。"""
+        base_name = f"{path.name}.local-before-sync"
+        candidate = path.with_name(base_name)
+        index = 1
+        while candidate.exists():
+            candidate = path.with_name(f"{base_name}.{index}")
+            index += 1
+        return candidate
+
+    def create_directory_junction(self, link_path, target_path):
+        """创建目录 junction，失败时抛出更清楚的错误。"""
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link_path), str(target_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "无法创建目录 junction")
+
+    def create_file_symlink(self, link_path, target_path):
+        """创建文件符号链接，失败时抛出更清楚的错误。"""
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", str(link_path), str(target_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "无法创建文件符号链接")
+
     def open_config_dir(self):
         """打开启动器配置目录，方便用户查看生成的配置文件。"""
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -929,6 +1583,10 @@ class Launcher(tk.Tk):
         lines.append(f"- 默认 .env：{DEFAULT_CODEX_ENV_PATH}")
         lines.append(f"- 默认 .env 存在：{'是' if DEFAULT_CODEX_ENV_PATH.exists() else '否'}")
         lines.append(f"- 已登记账号数：{len(profiles)}")
+        lines.append(f"- 实验性会话同步：{'已开启' if self.config_data.get('session_sync_enabled', False) else '未开启'}")
+        lines.append(f"- 实验性记忆同步：{'已开启' if self.config_data.get('memory_sync_enabled', False) else '未开启'}")
+        lines.append(f"- 会话同步目录：{self.get_session_sync_root()}")
+        lines.append(f"- 会话同步目录存在：{'是' if self.get_session_sync_root().exists() else '否'}")
 
         lines.append("")
         lines.append("账号状态")
@@ -948,6 +1606,8 @@ class Launcher(tk.Tk):
             lines.append(f"  程序副本存在：{'是' if target_codex_path.exists() else '否'}")
             lines.append(f"  CodexHome：{codex_home_dir}")
             lines.append(f"  CodexHome 存在：{'是' if codex_home_dir.exists() else '否'}")
+            lines.append(f"  项目注册数：{self.count_registered_project_workspaces(codex_home_dir)}")
+            lines.append(f"  记忆数：{self.count_memory_records(codex_home_dir)}")
             if health["errors"]:
                 lines.append(f"  异常：{'；'.join(health['errors'])}")
             if health["warnings"]:
@@ -956,6 +1616,29 @@ class Launcher(tk.Tk):
                 lines.append("  检查结果：未发现明显问题")
 
         return "\n".join(lines)
+
+    def count_registered_project_workspaces(self, codex_home_dir):
+        """统计 cap_sid 中已注册的项目工作区数量。"""
+        data = self.read_cap_sid_file(codex_home_dir / "cap_sid")
+        workspace_by_cwd = data.get("workspace_by_cwd", {}) if data else {}
+        return len(workspace_by_cwd) if isinstance(workspace_by_cwd, dict) else 0
+
+    def count_memory_records(self, codex_home_dir):
+        """统计记忆数据库中的阶段输出数量。"""
+        database_path = codex_home_dir / MEMORY_SYNC_DB_NAME
+        if not database_path.exists() or not self.is_sqlite_database_healthy(database_path):
+            return "不可读或不存在"
+        try:
+            connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+            try:
+                if not self.sqlite_table_exists(connection, "stage1_outputs"):
+                    return 0
+                row = connection.execute("SELECT COUNT(*) FROM stage1_outputs").fetchone()
+                return row[0] if row else 0
+            finally:
+                connection.close()
+        except sqlite3.DatabaseError:
+            return "不可读"
 
     def launch_profile(self, profile_name):
         """按账号隔离环境变量后启动 Codex 桌面端。"""
@@ -992,6 +1675,8 @@ class Launcher(tk.Tk):
 
         try:
             portable_codex_path = prepare_portable_codex_path(codex_path, profile_dir)
+            self.prepare_session_sync(codex_home_dir)
+            self.prepare_memory_sync(codex_home_dir)
             subprocess.Popen(
                 [
                     portable_codex_path,
