@@ -8,13 +8,21 @@ __pycache__/
 
 # uv / virtualenv
 .venv/
+python/.venv/
 
 # Build output
 build/
 dist/
+out/
+release/
 *.spec
 *.new.exe
 *.exe
+
+# Node / Electron
+node_modules/
+yarn-error.log
+npm-debug.log*
 
 codex-tools-2.0.5
 

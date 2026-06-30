@@ -6,11 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
-[project.scripts]
-codex-multi-launcher = "codex_multi_launcher.app:main"
-
 [dependency-groups]
 dev = [
+    "basedpyright>=1.39.9",
     "cython>=3.2.6",
     "pyinstaller>=6.14.0",
 ]
@@ -18,5 +16,23 @@ dev = [
 [tool.uv]
 package = true
 
+[tool.setuptools]
+package-dir = {"" = "python"}
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+where = ["python"]
+
 [tool.pyinstaller]
-entry = "src/codex_multi_launcher/main.py"
+entry = "python/main.py"
+
+[tool.basedpyright]
+include = ["python"]
+exclude = [
+    "python/.venv",
+    "python/__pycache__",
+    "python/**/*.egg-info",
+]
+typeCheckingMode = "basic"
+extraPaths = ["python"]
+reportMissingTypeStubs = false

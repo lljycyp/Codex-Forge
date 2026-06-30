@@ -1,0 +1,19 @@
+appId: com.codex.multi.launcher
+productName: CodexMultiLauncher
+directories:
+  output: release
+files:
+  - out/**
+extraResources:
+  - from: resources
+    to: .
+    filter:
+      - "**/*"
+win:
+  target:
+    - nsis
+  icon: assets/app.ico
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

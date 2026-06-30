@@ -1,4 +1,4 @@
-from codex_multi_launcher.app import main
+from bridge.cli import main
 
 
 if __name__ == "__main__":
