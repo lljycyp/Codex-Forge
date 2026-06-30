@@ -3,11 +3,12 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, simpledialog
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 APP_NAME = "Codex 多账号启动器"
@@ -426,6 +427,54 @@ def check_directory_writable(path):
         return False
 
 
+def get_directory_size(path):
+    """统计目录文件总大小；遇到不可读文件时跳过。"""
+    total = 0
+    for root, dirs, files in os.walk(path):
+        root_path = Path(root)
+        dirs[:] = [
+            directory_name
+            for directory_name in dirs
+            if not is_reparse_point(root_path / directory_name)
+        ]
+        for file_name in files:
+            file_path = root_path / file_name
+            if is_reparse_point(file_path):
+                continue
+            try:
+                total += file_path.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def format_size(size):
+    """把字节数格式化为更适合提示用户的大小。"""
+    if size >= 1024 * 1024 * 1024:
+        return f"{size / (1024 * 1024 * 1024):.2f} GB"
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    return f"{size / 1024:.1f} KB"
+
+
+def remove_readonly_path(func, path, _exc_info):
+    """移除只读文件时先补写权限，再重试删除。"""
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    except Exception:
+        raise
+
+
+def is_reparse_point(path):
+    """判断路径是否是 Windows reparse point，例如 junction。"""
+    try:
+        attributes = os.lstat(path).st_file_attributes
+    except (AttributeError, OSError):
+        return False
+    return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def format_health_status(health):
     """把账号健康检查结果转换成界面短状态。"""
     if health["running"]:
@@ -441,12 +490,15 @@ class Launcher(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("760x500")
+        self.geometry("760x540")
         self.resizable(False, False)
         self.set_window_icon()
         self.config_data = load_config()
         self.path_var = tk.StringVar(value=self.config_data.get("codex_path", ""))
         self.version_var = tk.StringVar(value="未识别")
+        self.profile_root_var = tk.StringVar(
+            value=self.config_data.get("profile_root", str(DEFAULT_PROFILE_ROOT))
+        )
         self.session_sync_var = tk.BooleanVar(value=bool(self.config_data.get("session_sync_enabled", False)))
         self.session_sync_root_var = tk.StringVar(value=self.config_data.get("session_sync_root", str(DEFAULT_SESSION_SYNC_ROOT)))
         self.memory_sync_var = tk.BooleanVar(value=bool(self.config_data.get("memory_sync_enabled", False)))
@@ -515,6 +567,17 @@ class Launcher(tk.Tk):
             fg="#444444",
         ).pack(side="left", fill="x", expand=True, padx=(6, 0))
         self.refresh_store_info()
+
+        profile_root_row = tk.Frame(container)
+        profile_root_row.pack(fill="x", pady=(10, 0))
+        tk.Label(profile_root_row, text="账号存放位置：", font=("Microsoft YaHei UI", 9)).pack(side="left")
+        profile_root_entry = tk.Entry(profile_root_row, textvariable=self.profile_root_var)
+        profile_root_entry.configure(state="readonly", readonlybackground="white")
+        profile_root_entry.pack(side="left", fill="x", expand=True, padx=(6, 8))
+        tk.Button(profile_root_row, text="更改位置", command=self.choose_profile_root, width=10).pack(side="right")
+        tk.Button(profile_root_row, text="打开目录", command=self.open_profile_root_dir, width=10).pack(
+            side="right", padx=(0, 8)
+        )
 
         sync_row = tk.Frame(container)
         sync_row.pack(fill="x", pady=(10, 0))
@@ -603,6 +666,293 @@ class Launcher(tk.Tk):
         """获取账号对应的独立数据目录。"""
         profile_root = Path(self.config_data.get("profile_root") or DEFAULT_PROFILE_ROOT)
         return profile_root / sanitize_profile_name(profile_name)
+
+    def refresh_profile_root_info(self):
+        """刷新账号根目录展示。"""
+        self.profile_root_var.set(self.config_data.get("profile_root") or str(DEFAULT_PROFILE_ROOT))
+
+    def open_profile_root_dir(self):
+        """打开账号根目录。"""
+        profile_root = Path(self.config_data.get("profile_root") or DEFAULT_PROFILE_ROOT)
+        profile_root.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(profile_root))
+
+    def choose_profile_root(self):
+        """选择 CodexProfiles 的新存放位置，并迁移整个账号根目录。"""
+        current_root = Path(self.config_data.get("profile_root") or DEFAULT_PROFILE_ROOT)
+        selected = filedialog.askdirectory(
+            title="选择 CodexProfiles 的存放位置",
+            initialdir=str(current_root.parent if current_root.exists() else DEFAULT_PROFILE_ROOT.parent),
+            parent=self,
+        )
+        if not selected:
+            return
+        selected_parent = Path(selected)
+        if selected_parent.name.lower() == DEFAULT_PROFILE_ROOT.name.lower():
+            target_root = selected_parent
+        else:
+            target_root = selected_parent / DEFAULT_PROFILE_ROOT.name
+        self.migrate_profile_root(target_root)
+
+    def cleanup_profile_root_before_move(self, profile_root):
+        """迁移前清理可丢弃的 Codex 临时目录，避免临时缓存阻塞跨盘移动。"""
+        if not profile_root.exists():
+            return
+        for profile_dir in profile_root.iterdir():
+            temp_dir = profile_dir / "CodexHome" / ".tmp"
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, onerror=remove_readonly_path)
+
+    def create_migration_progress_window(self):
+        """创建账号目录迁移进度窗口。"""
+        window = tk.Toplevel(self)
+        window.title("正在迁移")
+        window.geometry("520x150")
+        window.resizable(False, False)
+        window.transient(self)
+        window.grab_set()
+        window.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        container = tk.Frame(window, padx=16, pady=14)
+        container.pack(fill="both", expand=True)
+
+        title_var = tk.StringVar(value="正在准备迁移...")
+        detail_var = tk.StringVar(value="")
+        progress_var = tk.DoubleVar(value=0)
+
+        tk.Label(container, textvariable=title_var, anchor="w", font=("Microsoft YaHei UI", 10, "bold")).pack(
+            fill="x"
+        )
+        ttk.Progressbar(container, variable=progress_var, maximum=100).pack(fill="x", pady=(12, 8))
+        tk.Label(
+            container,
+            textvariable=detail_var,
+            anchor="w",
+            font=("Microsoft YaHei UI", 9),
+            fg="#555555",
+        ).pack(fill="x")
+
+        self.update_idletasks()
+        return window, title_var, detail_var, progress_var
+
+    def update_migration_progress(self, window, title_var, detail_var, progress_var, copied_size, total_size, path):
+        """更新迁移进度窗口。"""
+        percent = 100 if total_size <= 0 else min(100, copied_size * 100 / total_size)
+        progress_var.set(percent)
+        title_var.set(f"正在迁移 CodexProfiles... {percent:.1f}%")
+        detail_var.set(f"{format_size(copied_size)} / {format_size(total_size)}  {path}")
+        window.update()
+
+    def copy_file_with_progress(self, source_file, target_file, report_progress):
+        """复制单个文件，并按块汇报进度。"""
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        with source_file.open("rb") as source_stream, target_file.open("wb") as target_stream:
+            while True:
+                chunk = source_stream.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                target_stream.write(chunk)
+                report_progress(len(chunk), source_file)
+        shutil.copystat(source_file, target_file)
+
+    def copy_directory_with_progress(self, source_dir, target_dir, report_progress):
+        """复制目录内容，跳过 junction，避免把共享目录重复复制进账号根目录。"""
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for root, dirs, files in os.walk(source_dir):
+            root_path = Path(root)
+            relative_root = root_path.relative_to(source_dir)
+            target_root = target_dir / relative_root
+            target_root.mkdir(parents=True, exist_ok=True)
+
+            kept_dirs = []
+            for directory_name in dirs:
+                source_child = root_path / directory_name
+                if is_reparse_point(source_child):
+                    continue
+                kept_dirs.append(directory_name)
+                (target_root / directory_name).mkdir(parents=True, exist_ok=True)
+            dirs[:] = kept_dirs
+
+            for file_name in files:
+                source_file = root_path / file_name
+                if is_reparse_point(source_file):
+                    continue
+                target_file = target_root / file_name
+                self.copy_file_with_progress(source_file, target_file, report_progress)
+            try:
+                shutil.copystat(root_path, target_root)
+            except OSError:
+                pass
+
+    def move_profile_root_with_progress(self, old_root, new_root, total_size):
+        """带进度复制账号根目录，成功后删除旧目录。"""
+        progress_window, title_var, detail_var, progress_var = self.create_migration_progress_window()
+        copied_size = 0
+
+        def report_progress(delta, path):
+            nonlocal copied_size
+            copied_size += delta
+            self.update_migration_progress(
+                progress_window,
+                title_var,
+                detail_var,
+                progress_var,
+                copied_size,
+                total_size,
+                path.name,
+            )
+
+        try:
+            self.copy_directory_with_progress(old_root, new_root, report_progress)
+            title_var.set("正在删除旧目录...")
+            detail_var.set(str(old_root))
+            progress_window.update()
+            shutil.rmtree(old_root, onerror=remove_readonly_path)
+        finally:
+            progress_window.grab_release()
+            progress_window.destroy()
+
+    def migrate_profile_root(self, new_root):
+        """把整个 CodexProfiles 根目录迁移到新位置。"""
+        old_root = Path(self.config_data.get("profile_root") or DEFAULT_PROFILE_ROOT)
+        try:
+            old_root_resolved = old_root.resolve()
+            new_root_parent_resolved = new_root.parent.resolve()
+            new_root_resolved = new_root_parent_resolved / new_root.name
+        except OSError as exc:
+            messagebox.showerror("位置不可用", f"无法解析账号目录：\n{exc}", parent=self)
+            return
+
+        if old_root_resolved == new_root_resolved:
+            self.config_data["profile_root"] = str(new_root_resolved)
+            self.refresh_profile_root_info()
+            save_config(self.config_data)
+            return
+        if old_root_resolved in new_root_resolved.parents:
+            messagebox.showwarning("位置不可用", "新位置不能放在当前账号目录内部。", parent=self)
+            return
+        if new_root_resolved in old_root_resolved.parents:
+            messagebox.showwarning("位置不可用", "新位置不能是当前账号目录的上级目录。", parent=self)
+            return
+
+        try:
+            new_root_parent_resolved.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror("创建失败", f"无法创建新位置：\n{exc}", parent=self)
+            return
+        if not check_directory_writable(new_root_parent_resolved):
+            messagebox.showwarning("目录不可写", "新位置不可写，请换一个位置。", parent=self)
+            return
+        if new_root_resolved.exists():
+            try:
+                has_existing_content = any(new_root_resolved.iterdir())
+            except OSError:
+                has_existing_content = True
+            if has_existing_content:
+                if not old_root_resolved.exists():
+                    messagebox.showwarning(
+                        "目录冲突",
+                        f"目标位置已存在 CodexProfiles 且不为空：\n{new_root_resolved}\n\n请先处理该目录后再迁移。",
+                        parent=self,
+                    )
+                    return
+                replace_existing = messagebox.askyesno(
+                    "目标目录已存在",
+                    (
+                        f"目标位置已存在 CodexProfiles：\n{new_root_resolved}\n\n"
+                        "如果这是上次迁移失败留下的残留，可以删除它后重新迁移。\n"
+                        "是否删除目标目录并继续？"
+                    ),
+                    parent=self,
+                )
+                if not replace_existing:
+                    return
+                try:
+                    shutil.rmtree(new_root_resolved, onerror=remove_readonly_path)
+                except Exception as exc:
+                    messagebox.showerror(
+                        "清理失败",
+                        f"无法删除目标残留目录：\n{exc}\n\n请手动处理后再重试。",
+                        parent=self,
+                    )
+                    return
+            try:
+                if new_root_resolved.exists():
+                    new_root_resolved.rmdir()
+            except OSError as exc:
+                messagebox.showerror("目录不可用", f"无法使用目标目录：\n{exc}", parent=self)
+                return
+
+        if not old_root_resolved.exists():
+            confirmed = messagebox.askyesno(
+                "确认更改账号存放位置",
+                (
+                    f"当前 CodexProfiles 不存在：\n{old_root_resolved}\n\n"
+                    f"是否创建并切换到：\n{new_root_resolved}"
+                ),
+                parent=self,
+            )
+            if not confirmed:
+                return
+            try:
+                new_root_resolved.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                messagebox.showerror("创建失败", f"无法创建 CodexProfiles：\n{exc}", parent=self)
+                return
+            self.config_data["profile_root"] = str(new_root_resolved)
+            save_config(self.config_data)
+            self.refresh_profile_root_info()
+            self.render_profiles()
+            return
+
+        profiles = self.config_data.get("profiles", [])
+        running_commands = read_running_codex_commands()
+        running_profiles = [name for name in profiles if self.is_profile_running(name, running_commands)]
+        if running_profiles:
+            messagebox.showwarning(
+                "请先关闭账号",
+                "以下账号正在运行，请先关闭对应 Codex 窗口后再迁移：\n" + "\n".join(running_profiles),
+                parent=self,
+            )
+            return
+
+        try:
+            self.cleanup_profile_root_before_move(old_root_resolved)
+        except Exception as exc:
+            messagebox.showerror(
+                "清理失败",
+                f"迁移前清理临时目录失败：\n{exc}\n\n请确认 Codex 已关闭后再重试。",
+                parent=self,
+            )
+            return
+
+        total_size = get_directory_size(old_root_resolved)
+        confirmed = messagebox.askyesno(
+            "确认更改账号存放位置",
+            (
+                f"将整个 CodexProfiles 移动到：\n{new_root_resolved}\n\n"
+                f"本次将移动约 {format_size(total_size)}。\n\n迁移期间请不要启动 Codex。是否继续？"
+            ),
+            parent=self,
+        )
+        if not confirmed:
+            return
+
+        try:
+            self.move_profile_root_with_progress(old_root_resolved, new_root_resolved, total_size)
+        except Exception as exc:
+            messagebox.showerror(
+                "迁移失败",
+                f"迁移过程中出错，配置未更新：\n{exc}\n\n请确认目录占用或权限后再重试。",
+                parent=self,
+            )
+            return
+
+        self.config_data["profile_root"] = str(new_root_resolved)
+        save_config(self.config_data)
+        self.refresh_profile_root_info()
+        self.render_profiles()
+        messagebox.showinfo("迁移完成", f"账号存放位置已改为：\n{new_root_resolved}", parent=self)
 
     def get_user_data_dir(self, profile_name):
         """获取 Codex Web 容器的独立用户数据目录。"""
