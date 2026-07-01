@@ -11,19 +11,19 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       locale={zhCN}
       theme={{
         token: {
-          colorPrimary: "#166534",
+          colorPrimary: "#0d9488",
           borderRadius: 8,
-          fontFamily: "Microsoft YaHei UI, Segoe UI, sans-serif"
+          fontFamily: "Microsoft YaHei UI, Segoe UI, sans-serif",
         },
         components: {
           Button: {
             controlHeight: 36,
-            paddingContentHorizontal: 14
-          }
-        }
+            paddingContentHorizontal: 14,
+          },
+        },
       }}
     >
       <App />
     </ConfigProvider>
-  </React.StrictMode>
+  </React.StrictMode>,
 );

@@ -32,6 +32,7 @@ from core.path_utils import (
     sanitize_profile_name,
 )
 from core.profile_service import ensure_profile_env_file
+from core.sync_service import prepare_memory_sync, prepare_session_sync
 from core.usage_service import (
     get_cached_profile_usage,
     refresh_all_profile_usage as refresh_all_profile_usage_cache,
@@ -65,6 +66,7 @@ def invoke(command, payload=None):
         "refresh_all_profile_usage": refresh_all_profile_usage,
         "refresh_profile_usage": refresh_profile_usage,
         "rename_profile": rename_profile,
+        "open_session_sync_dir": open_session_sync_dir,
         "set_codex_path": set_codex_path,
         "set_memory_sync": set_memory_sync,
         "set_profile_root": set_profile_root,
@@ -87,6 +89,7 @@ def get_app_state(_payload=None):
     codex_path = config.get("codex_path", "")
     profiles = config.get("profiles", [])
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
+    session_sync_root = Path(config.get("session_sync_root") or DEFAULT_SESSION_SYNC_ROOT)
     running_commands = read_running_codex_commands()
     return {
         "codexPath": codex_path,
@@ -97,7 +100,9 @@ def get_app_state(_payload=None):
         "profileCount": len(profiles),
         "runningCount": sum(1 for profile_name in profiles if _is_profile_running(config, profile_name, running_commands)),
         "sessionSyncEnabled": bool(config.get("session_sync_enabled", False)),
+        "sessionSyncRoot": str(session_sync_root),
         "memorySyncEnabled": bool(config.get("memory_sync_enabled", False)),
+        "memorySyncDatabase": str(session_sync_root / MEMORY_SYNC_DB_NAME),
     }
 
 
@@ -198,6 +203,8 @@ def launch_profile(payload):
     env["CODEX_MULTI_PROFILE"] = name
 
     portable_codex_path = prepare_portable_codex_path(codex_path, profile_dir)
+    prepare_session_sync(config, codex_home_dir)
+    prepare_memory_sync(config, codex_home_dir)
     subprocess.Popen(
         [portable_codex_path, f"--user-data-dir={user_data_dir}"],
         cwd=str(Path(portable_codex_path).parent),
@@ -334,6 +341,15 @@ def set_memory_sync(payload):
     return {"memorySyncEnabled": config["memory_sync_enabled"]}
 
 
+def open_session_sync_dir(_payload=None):
+    """创建并打开同步共享目录。"""
+    config = load_config()
+    sync_root = Path(config.get("session_sync_root") or DEFAULT_SESSION_SYNC_ROOT)
+    sync_root.mkdir(parents=True, exist_ok=True)
+    os.startfile(str(sync_root))
+    return {"sessionSyncRoot": str(sync_root)}
+
+
 def open_path(payload):
     """打开白名单命令传入的本地路径。"""
     path = Path(payload.get("path", ""))
@@ -348,6 +364,7 @@ def get_diagnostics(_payload=None):
     config = load_config()
     profiles = config.get("profiles", [])
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
+    session_sync_root = Path(config.get("session_sync_root") or DEFAULT_SESSION_SYNC_ROOT)
     codex_path = config.get("codex_path", "")
     running_commands = read_running_codex_commands()
     profile_items = []
@@ -382,7 +399,9 @@ def get_diagnostics(_payload=None):
             "defaultEnvExists": DEFAULT_CODEX_ENV_PATH.exists(),
             "profileCount": len(profiles),
             "sessionSyncEnabled": bool(config.get("session_sync_enabled", False)),
+            "sessionSyncRoot": str(session_sync_root),
             "memorySyncEnabled": bool(config.get("memory_sync_enabled", False)),
+            "memorySyncDatabase": str(session_sync_root / MEMORY_SYNC_DB_NAME),
         },
         "profiles": profile_items,
     }

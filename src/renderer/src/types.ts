@@ -13,7 +13,9 @@ export type AppState = {
   profileCount: number;
   runningCount: number;
   sessionSyncEnabled: boolean;
+  sessionSyncRoot: string;
   memorySyncEnabled: boolean;
+  memorySyncDatabase: string;
 };
 
 export type ViewKey = "dashboard" | "profiles" | "settings" | "diagnostics";
@@ -23,7 +25,17 @@ export type ViewMeta = {
   description: string;
 };
 
-export type RunCommand = (command: string, payload?: unknown, successText?: string) => Promise<void>;
+export type RunCommandOptions = {
+  blocking?: boolean;
+  refreshAfter?: boolean;
+};
+
+export type RunCommand = (
+  command: string,
+  payload?: unknown,
+  successText?: string,
+  options?: RunCommandOptions,
+) => Promise<void>;
 
 export type ProfileSummary = {
   name: string;

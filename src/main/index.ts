@@ -1,15 +1,35 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, ipcMain, shell } from "electron";
 import { join } from "node:path";
 import { registerIpcHandlers } from "./ipc";
 
+let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+let isQuitting = false;
+
+function getAppIconPath(): string {
+  return join(__dirname, "../../assets/app.ico");
+}
+
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createMainWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
 function createMainWindow(): void {
-  const window = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1180,
     height: 760,
     minWidth: 980,
     minHeight: 640,
     title: "Codex 多账号启动器",
-    icon: join(__dirname, "../../assets/app.ico"),
+    icon: getAppIconPath(),
     frame: false,
     titleBarStyle: "hidden",
     titleBarOverlay: false,
@@ -21,26 +41,73 @@ function createMainWindow(): void {
     }
   });
 
+  mainWindow.on("close", (event) => {
+    if (isQuitting) {
+      return;
+    }
+    event.preventDefault();
+    mainWindow?.hide();
+  });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+
   if (process.env.ELECTRON_RENDERER_URL) {
-    window.loadURL(process.env.ELECTRON_RENDERER_URL);
+    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
-    window.loadFile(join(__dirname, "../renderer/index.html"));
+    mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   }
+}
+
+function createTray(): void {
+  if (tray) {
+    return;
+  }
+  tray = new Tray(getAppIconPath());
+  tray.setToolTip("Codex 多账号启动器");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: "打开主窗口",
+        click: showMainWindow
+      },
+      {
+        label: "退出",
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        }
+      }
+    ])
+  );
+  tray.on("click", showMainWindow);
+  tray.on("double-click", showMainWindow);
 }
 
 app.whenReady().then(() => {
   registerIpcHandlers();
   createMainWindow();
+  createTray();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
+      return;
     }
+    showMainWindow();
   });
 });
 
+app.on("before-quit", () => {
+  isQuitting = true;
+});
+
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
+  if (process.platform === "darwin") {
+    return;
+  }
+  if (isQuitting) {
     app.quit();
   }
 });

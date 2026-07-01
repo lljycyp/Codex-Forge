@@ -4,6 +4,7 @@ directories:
   output: release
 files:
   - out/**
+  - assets/**
 extraResources:
   - from: resources
     to: .

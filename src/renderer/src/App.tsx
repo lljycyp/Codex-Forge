@@ -21,7 +21,9 @@ const emptyState: AppState = {
   profileCount: 0,
   runningCount: 0,
   sessionSyncEnabled: false,
-  memorySyncEnabled: false
+  sessionSyncRoot: "",
+  memorySyncEnabled: false,
+  memorySyncDatabase: ""
 };
 
 const refreshDelayCommands = new Set(["launch_profile", "stop_profile"]);
@@ -31,12 +33,24 @@ export default function App() {
   const [appState, setAppState] = useState<AppState>(emptyState);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsData | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [refreshingView, setRefreshingView] = useState<ViewKey | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [commandingView, setCommandingView] = useState<ViewKey | null>(null);
   const [taskText, setTaskText] = useState("就绪");
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const activeViewRef = useRef<ViewKey>("dashboard");
+  const refreshTokenRef = useRef(0);
+  const commandTokenRef = useRef(0);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  useEffect(() => {
+    activeViewRef.current = activeView;
+  }, [activeView]);
+
+  const refresh = useCallback(async (view?: ViewKey | null) => {
+    const refreshToken = view ? ++refreshTokenRef.current : refreshTokenRef.current;
+    if (view) {
+      setRefreshingView(view);
+    }
     try {
       const [stateData, profileData] = await Promise.all([
         invokeLauncher<AppState>("get_app_state"),
@@ -48,16 +62,18 @@ export default function App() {
     } catch (error) {
       message.error(error instanceof Error ? error.message : "刷新失败");
     } finally {
-      setLoading(false);
+      if (view && refreshTokenRef.current === refreshToken) {
+        setRefreshingView(null);
+      }
     }
   }, []);
 
   useEffect(() => {
-    refresh();
+    refresh(null);
   }, [refresh]);
 
   const loadDiagnostics = useCallback(async () => {
-    setLoading(true);
+    setDiagnosticsLoading(true);
     try {
       const data = await invokeLauncher<DiagnosticsData>("get_diagnostics");
       setDiagnostics(data);
@@ -65,13 +81,19 @@ export default function App() {
     } catch (error) {
       message.error(error instanceof Error ? error.message : "诊断失败");
     } finally {
-      setLoading(false);
+      setDiagnosticsLoading(false);
     }
   }, []);
 
   const runCommand = useCallback<RunCommand>(
-    async (command, payload, successText = "操作完成") => {
-      setLoading(true);
+    async (command, payload, successText = "操作完成", options) => {
+      const commandToken = ++commandTokenRef.current;
+      const sourceView = activeViewRef.current;
+      const shouldBlockView = options?.blocking !== false;
+      const shouldRefreshAfter = options?.refreshAfter !== false;
+      if (shouldBlockView) {
+        setCommandingView(sourceView);
+      }
       setTaskText("正在执行...");
       try {
         await invokeLauncher(command, payload);
@@ -80,13 +102,17 @@ export default function App() {
         }
         message.success(successText);
         setTaskText(successText);
-        await refresh();
+        if (shouldRefreshAfter) {
+          await refresh(null);
+        }
       } catch (error) {
         const text = error instanceof Error ? error.message : "操作失败";
         setTaskText(text);
         message.error(text);
       } finally {
-        setLoading(false);
+        if (shouldBlockView && commandTokenRef.current === commandToken) {
+          setCommandingView(null);
+        }
       }
     },
     [refresh]
@@ -114,19 +140,16 @@ export default function App() {
   const changeView = useCallback(
     (view: ViewKey) => {
       setActiveView(view);
-      if (view === "diagnostics") {
-        loadDiagnostics();
-      }
     },
-    [loadDiagnostics]
+    []
   );
 
   const refreshButton = (
     <Button
       className="shrink-0 rounded-card border-shell-line font-bold text-[#344054] hover:!border-brand-600 hover:!text-brand-600"
       icon={<RefreshCw size={16} />}
-      loading={loading}
-      onClick={refresh}
+      loading={refreshingView === activeView}
+      onClick={() => refresh(activeView)}
     >
       刷新
     </Button>
@@ -139,7 +162,7 @@ export default function App() {
       menuItems={menuItems}
       taskText={taskText}
       onChangeView={changeView}
-      topbarAction={refreshButton}
+      topbarAction={activeView === "dashboard" ? refreshButton : null}
     >
       <Content
         ref={contentRef}
@@ -153,13 +176,13 @@ export default function App() {
           <Dashboard appState={appState} profiles={profiles} runCommand={runCommand} />
         ) : null}
         {activeView === "profiles" ? (
-          <Profiles profiles={profiles} runCommand={runCommand} loading={loading} />
+          <Profiles profiles={profiles} runCommand={runCommand} loading={commandingView === "profiles"} />
         ) : null}
         {activeView === "settings" ? (
           <SettingsPage appState={appState} runCommand={runCommand} />
         ) : null}
         {activeView === "diagnostics" ? (
-          <Diagnostics diagnostics={diagnostics} loadDiagnostics={loadDiagnostics} loading={loading} />
+          <Diagnostics diagnostics={diagnostics} loadDiagnostics={loadDiagnostics} loading={diagnosticsLoading} />
         ) : null}
       </Content>
     </AppLayout>

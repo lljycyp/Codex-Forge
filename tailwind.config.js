@@ -10,8 +10,8 @@ module.exports = {
         brand: {
           50: "#eefcf8",
           100: "#d6f5ed",
-          600: "#0f766e",
-          700: "#166534"
+          600: "#0d9488",
+          700: "#0d9488"
         },
         shell: {
           surface: "#f7f9fc",
