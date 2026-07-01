@@ -9,6 +9,15 @@ type ProfilesProps = {
   loading: boolean;
 };
 
+const profileRowBaseClass =
+  "flex items-center gap-4 border-b border-[#ecf1f6] px-[22px] py-4 transition-colors last:border-b-0 hover:bg-slate-50 max-[960px]:items-start";
+
+const profilePillBaseClass =
+  "inline-flex h-[22px] items-center rounded-full px-2 text-xs font-semibold leading-none";
+
+const iconActionButtonClass =
+  "h-[34px] w-[34px] p-0 text-slate-500 hover:!bg-brand-50 hover:!text-brand-600";
+
 export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ProfileSummary | null>(null);
@@ -47,13 +56,13 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
   };
 
   return (
-    <div className="profiles-page">
-      <div className="profiles-toolbar">
-        <div className="profiles-summary">
-          <span className="profiles-count">{profiles.length}</span>
+    <div className="overflow-hidden rounded-panel border border-shell-line bg-white shadow-[0_10px_28px_rgba(15,23,42,0.045)]">
+      <div className="flex items-center justify-between gap-4 border-b border-[#ecf1f6] bg-white px-[22px] py-[18px] max-[960px]:items-start max-[960px]:flex-col">
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-[28px] font-extrabold leading-none text-gray-900">{profiles.length}</span>
           <Typography.Text type="secondary">个账号</Typography.Text>
         </div>
-        <div className="profiles-toolbar-actions">
+        <div className="flex flex-wrap items-center justify-end gap-2.5 max-[960px]:w-full max-[960px]:justify-start">
           <Button icon={<RefreshCw size={16} />} onClick={() => runCommand("refresh_all_profile_usage", {}, "额度已刷新")}>
             刷新额度
           </Button>
@@ -63,33 +72,52 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
         </div>
       </div>
 
-      <div className={`profiles-list${loading ? " is-loading" : ""}`}>
+      <div className={loading ? "relative pointer-events-none opacity-70" : "relative"}>
         {loading && profiles.length === 0 ? (
-          <div className="profiles-state">
+          <div className="flex min-h-[220px] items-center justify-center px-6 py-8">
             <Spin />
           </div>
         ) : profiles.length ? (
           profiles.map((profile) => (
-            <div key={profile.name} className={`profile-row${profile.running ? " is-running" : ""}`}>
-              <div className="profile-row-accent" aria-hidden />
-              <div className="profile-row-body">
-                <div className="profile-row-head">
-                  <span className="profile-row-name">{profile.name}</span>
-                  <span className={`profile-pill${profile.running ? " is-active" : ""}`}>
+            <div key={profile.name} className={profile.running ? `${profileRowBaseClass} bg-green-50` : profileRowBaseClass}>
+              <div
+                className={profile.running ? "self-stretch rounded-full bg-green-600 basis-[3px] shrink-0" : "self-stretch rounded-full bg-shell-line basis-[3px] shrink-0"}
+                aria-hidden
+              />
+              <div className="min-w-0 flex-auto">
+                <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                  <span className="text-[15px] font-bold leading-snug text-gray-900">{profile.name}</span>
+                  <span
+                    className={
+                      profile.running
+                        ? `${profilePillBaseClass} bg-green-100 text-green-700`
+                        : `${profilePillBaseClass} bg-slate-100 text-slate-500`
+                    }
+                  >
                     {profile.running ? "运行中" : "就绪"}
                   </span>
-                  <span className={`profile-pill is-copy${profile.portableCodexExists ? " is-ready" : " is-pending"}`}>
+                  <span
+                    className={
+                      profile.portableCodexExists
+                        ? `${profilePillBaseClass} bg-green-100 text-green-700`
+                        : `${profilePillBaseClass} bg-amber-100 text-amber-700`
+                    }
+                  >
                     {profile.portableCodexExists ? "副本已准备" : "副本未准备"}
                   </span>
                 </div>
                 <Tooltip title={profile.profileDir} placement="topLeft">
-                  <div className="profile-row-path">{profile.profileDir}</div>
+                  <div className="truncate font-mono text-[12.5px] leading-normal text-shell-muted">{profile.profileDir}</div>
                 </Tooltip>
-                <div className="profile-usage">
-                  <span className="profile-usage-plan">{formatPlanType(profile.usage?.planType)}</span>
+                <div className="mt-2.5 grid max-w-[520px] grid-cols-[minmax(70px,auto)_minmax(108px,0.22fr)_minmax(108px,0.22fr)] items-center gap-2 max-[960px]:max-w-none max-[960px]:grid-cols-1">
+                  <span className="inline-flex h-6 min-w-[66px] items-center justify-center whitespace-nowrap rounded-[7px] bg-blue-50 px-2 text-xs font-bold text-blue-700 max-[960px]:justify-self-start">
+                    {formatPlanType(profile.usage?.planType)}
+                  </span>
                   {profile.usage?.error ? (
                     <Tooltip title={profile.usage.error}>
-                      <span className="profile-usage-error">{profile.usage.error}</span>
+                      <span className="col-span-2 min-w-0 truncate text-xs text-[#b42318] max-[960px]:col-auto">
+                        {profile.usage.error}
+                      </span>
                     </Tooltip>
                   ) : (
                     <>
@@ -99,7 +127,7 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
                   )}
                 </div>
               </div>
-              <div className="profile-row-actions">
+              <div className="flex shrink-0 items-center gap-1 max-[960px]:items-end max-[960px]:flex-col">
                 {(() => {
                   const isPending = pendingProfileName === profile.name;
                   const isDisabled = loading && !isPending;
@@ -117,33 +145,46 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
                     </Button>
                   );
                 })()}
-                <div className="profile-icon-actions">
+                <div className="ml-0.5 flex items-center border-l border-[#ecf1f6] pl-1.5 max-[960px]:ml-0 max-[960px]:border-l-0 max-[960px]:pl-0">
                   <Tooltip title="刷新额度">
                     <Button
                       type="text"
+                      className={iconActionButtonClass}
                       icon={<RefreshCw size={16} />}
                       onClick={() => runCommand("refresh_profile_usage", { name: profile.name }, "额度已刷新")}
                     />
                   </Tooltip>
                   <Tooltip title="改名">
-                    <Button type="text" icon={<UserPen size={16} />} onClick={() => setRenameTarget(profile)} />
+                    <Button
+                      type="text"
+                      className={iconActionButtonClass}
+                      icon={<UserPen size={16} />}
+                      onClick={() => setRenameTarget(profile)}
+                    />
                   </Tooltip>
                   <Tooltip title="打开目录">
                     <Button
                       type="text"
+                      className={iconActionButtonClass}
                       icon={<FolderOpen size={16} />}
                       onClick={() => runCommand("open_path", { path: profile.profileDir }, "已打开目录")}
                     />
                   </Tooltip>
                   <Tooltip title="删除">
-                    <Button type="text" danger icon={<Trash2 size={16} />} onClick={() => confirmDelete(profile)} />
+                    <Button
+                      type="text"
+                      danger
+                      className={`${iconActionButtonClass} hover:!bg-red-50 hover:!text-red-600`}
+                      icon={<Trash2 size={16} />}
+                      onClick={() => confirmDelete(profile)}
+                    />
                   </Tooltip>
                 </div>
               </div>
             </div>
           ))
         ) : (
-          <div className="profiles-state">
+          <div className="flex min-h-[220px] items-center justify-center px-6 py-8">
             <Empty description="暂无账号">
               <Button type="primary" icon={<Plus size={16} />} onClick={() => setCreateOpen(true)}>
                 新增第一个账号
@@ -199,13 +240,16 @@ function UsageMeter({ label, window }: { label: string; window: ProfileUsageWind
 
   return (
     <Tooltip title={`已用 ${usedText}，剩余 ${remainingText}，重置时间 ${resetText}`}>
-      <span className="profile-usage-meter">
-        <span className="profile-usage-meter-head">
+      <span className="grid min-w-0 gap-[5px]">
+        <span className="flex items-center justify-between gap-2 text-[11.5px] leading-none text-shell-muted">
           <span>{label}</span>
-          <strong>{remainingText}</strong>
+          <strong className="text-xs text-gray-900">{remainingText}</strong>
         </span>
-        <span className="profile-usage-bar" aria-hidden>
-          <span style={{ width: `${clampPercent(window?.usedPercent)}%` }} />
+        <span className="block h-1.5 overflow-hidden rounded-full bg-gray-200" aria-hidden>
+          <span
+            className="block h-full rounded-[inherit] bg-[linear-gradient(90deg,#16a34a,#f59e0b)]"
+            style={{ width: `${clampPercent(window?.usedPercent)}%` }}
+          />
         </span>
       </span>
     </Tooltip>

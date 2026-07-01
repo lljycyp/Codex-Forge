@@ -42,8 +42,8 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
   };
 
   return (
-    <Card title="设置">
-      <Form form={form} layout="vertical" className="settings-form">
+    <Card title="设置" className="shadow-none">
+      <Form form={form} layout="vertical" className="max-w-[760px]">
         <Form.Item label="Codex 程序路径" name="codexPath">
           <Input />
         </Form.Item>
@@ -59,7 +59,7 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
             重新识别
           </Button>
         </Space>
-        <Form.Item label="账号根目录" name="profileRoot" className="top-gap">
+        <Form.Item label="账号根目录" name="profileRoot" className="mt-[22px]">
           <Input />
         </Form.Item>
         <Space>
@@ -74,14 +74,14 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
             使用当前路径
           </Button>
         </Space>
-        <div className="switch-row">
+        <div className="mt-[18px] flex h-[42px] max-w-[420px] items-center justify-between">
           <span>实验性会话同步</span>
           <Switch
             checked={appState.sessionSyncEnabled}
             onChange={(enabled) => runCommand("set_session_sync", { enabled }, "已保存会话同步设置")}
           />
         </div>
-        <div className="switch-row">
+        <div className="mt-[18px] flex h-[42px] max-w-[420px] items-center justify-between">
           <span>实验性记忆同步</span>
           <Switch
             checked={appState.memorySyncEnabled}

@@ -122,7 +122,12 @@ export default function App() {
   );
 
   const refreshButton = (
-    <Button className="topbar-action" icon={<RefreshCw size={16} />} loading={loading} onClick={refresh}>
+    <Button
+      className="shrink-0 rounded-card border-shell-line font-bold text-[#344054] hover:!border-brand-600 hover:!text-brand-600"
+      icon={<RefreshCw size={16} />}
+      loading={loading}
+      onClick={refresh}
+    >
       刷新
     </Button>
   );
@@ -136,8 +141,11 @@ export default function App() {
       onChangeView={changeView}
       topbarAction={refreshButton}
     >
-      <Content ref={contentRef} className="content">
-        <div className="mobile-heading">
+      <Content
+        ref={contentRef}
+        className="m-0 min-h-0 flex-auto overflow-auto rounded-none border-0 bg-white px-[30px] py-[22px] shadow-none"
+      >
+        <div className="mb-4 hidden max-[960px]:block [&_h3]:!mb-1 [&_h3]:!leading-tight">
           <Typography.Title level={3}>{currentView.title}</Typography.Title>
           <Typography.Text type="secondary">{currentView.description}</Typography.Text>
         </div>

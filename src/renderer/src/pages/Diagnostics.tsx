@@ -11,14 +11,14 @@ type DiagnosticsProps = {
 
 export function Diagnostics({ diagnostics, loadDiagnostics, loading }: DiagnosticsProps) {
   return (
-    <Space direction="vertical" className="full" size={16}>
+    <Space direction="vertical" className="w-full" size={16}>
       <Alert message="诊断结果来自 Python 核心逻辑，可用于检查配置、路径、程序副本和账号目录。" type="info" showIcon />
       <Button icon={<RefreshCw size={16} />} loading={loading} onClick={loadDiagnostics}>
         重新诊断
       </Button>
       {diagnostics ? (
         <>
-          <Card title="基础信息">
+          <Card title="基础信息" className="shadow-none">
             <Descriptions column={2} size="small">
               {Object.entries(diagnostics.basic).map(([key, value]) => (
                 <Descriptions.Item key={key} label={diagnosticBasicLabels[key] ?? key}>
@@ -27,7 +27,7 @@ export function Diagnostics({ diagnostics, loadDiagnostics, loading }: Diagnosti
               ))}
             </Descriptions>
           </Card>
-          <Card title="账号状态">
+          <Card title="账号状态" className="shadow-none">
             <List
               dataSource={diagnostics.profiles}
               locale={{ emptyText: "暂无账号" }}

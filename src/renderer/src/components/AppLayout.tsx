@@ -5,6 +5,12 @@ import type { ViewKey, ViewMeta } from "../types";
 
 const { Header, Sider } = Layout;
 
+const windowButtonClass =
+  "flex h-12 w-[46px] items-center justify-center border-0 bg-transparent text-[#263647] transition-colors duration-200 hover:bg-white/30 hover:text-slate-900";
+
+const navButtonBaseClass =
+  "flex h-11 w-full items-center gap-2.5 rounded-[9px] border border-transparent bg-transparent px-2.5 text-left text-sm font-bold text-white/90 hover:border-white/20 hover:bg-white/20 hover:text-white hover:[&_svg]:text-white [&_svg]:h-[17px] [&_svg]:w-[17px] [&_svg]:shrink-0 [&_svg]:text-white/75";
+
 type MenuItem = {
   key: ViewKey;
   label: string;
@@ -31,45 +37,50 @@ export function AppLayout({
   onChangeView,
 }: AppLayoutProps) {
   return (
-    <Layout className="app-shell">
-      <div className="titlebar">
-        <div className="titlebar-brand">
-          <div className="titlebar-logo">C</div>
-          <div className="titlebar-copy">
-            <span className="titlebar-name">Codex 多账号启动器</span>
-            <span className="titlebar-desc">账号隔离、启动与诊断工作台</span>
+    <Layout className="grid h-screen grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-[#e8f4f4] bg-shell-gradient">
+      <div className="grid h-12 grid-cols-[auto_minmax(0,1fr)_auto] items-center border-b-0 bg-transparent [-webkit-app-region:drag]">
+        <div className="flex min-w-0 items-center gap-2.5 pl-[18px]">
+          <div className="grid h-8 w-8 place-items-center rounded-card bg-brand-gradient text-[15px] font-black text-white shadow-[0_10px_24px_rgba(15,118,110,0.24)]">
+            C
+          </div>
+          <div className="flex min-w-0 items-baseline gap-2.5 whitespace-nowrap">
+            <span className="text-sm font-extrabold text-white">Codex 多账号启动器</span>
+            <span className="text-xs text-white/80">账号隔离、启动与诊断工作台</span>
           </div>
         </div>
-        <div className="titlebar-drag" />
-        <div className="window-controls">
+        <div className="h-full" />
+        <div className="grid h-12 grid-cols-3 [-webkit-app-region:no-drag]">
           <button
-            className="window-control"
+            className={windowButtonClass}
             title="最小化"
             onClick={() => window.launcherApi.minimizeWindow()}
           >
-            <Minus />
+            <Minus size={14} strokeWidth={2} />
           </button>
           <button
-            className="window-control"
+            className={windowButtonClass}
             title="最大化"
             onClick={() => window.launcherApi.toggleMaximizeWindow()}
           >
-            <Square />
+            <Square size={14} strokeWidth={2} />
           </button>
           <button
-            className="window-control close"
+            className={`${windowButtonClass} hover:bg-[#ff4d4f] hover:text-white`}
             title="关闭"
             onClick={() => window.launcherApi.closeWindow()}
           >
-            <X />
+            <X size={14} strokeWidth={2} />
           </button>
         </div>
       </div>
-      <Layout className="app-body">
-        <Sider width={236} className="side">
-          <nav className="nav">
-            <div className="nav-section">
-              <div className="nav-section-title">工作区</div>
+      <Layout className="h-full min-h-0 overflow-hidden bg-transparent">
+        <Sider
+          width={236}
+          className="h-full !min-w-[236px] !max-w-[236px] !basis-[236px] overflow-hidden border-r-0 !bg-transparent px-3.5 pb-3.5 pt-3 max-[960px]:!min-w-[210px] max-[960px]:!max-w-[210px] max-[960px]:!basis-[210px] [&_.ant-layout-sider-children]:grid [&_.ant-layout-sider-children]:h-full [&_.ant-layout-sider-children]:min-h-0 [&_.ant-layout-sider-children]:grid-rows-[1fr_auto] [&_.ant-layout-sider-children]:gap-4"
+        >
+          <nav className="grid min-h-0 content-start gap-[22px] pt-1">
+            <div className="grid gap-1.5">
+              <div className="mx-2.5 mb-1.5 text-xs font-extrabold text-white/70">工作区</div>
               {menuItems.slice(0, 2).map((item) => (
                 <NavButton
                   key={item.key}
@@ -79,8 +90,8 @@ export function AppLayout({
                 />
               ))}
             </div>
-            <div className="nav-section">
-              <div className="nav-section-title">维护</div>
+            <div className="grid gap-1.5">
+              <div className="mx-2.5 mb-1.5 text-xs font-extrabold text-white/70">维护</div>
               {menuItems.slice(2).map((item) => (
                 <NavButton
                   key={item.key}
@@ -92,8 +103,8 @@ export function AppLayout({
             </div>
           </nav>
         </Sider>
-        <Layout className="main-layout">
-          <Header className="topbar">
+        <Layout className="relative mb-3.5 mr-3.5 h-[calc(100%-14px)] min-w-0 overflow-hidden rounded-panel bg-shell-surface shadow-panel">
+          <Header className="flex h-[88px] flex-none items-center justify-between gap-4 overflow-visible border-b border-[#e4ebf3] !bg-white px-[30px] pb-4 pt-5 leading-normal [&>*]:[-webkit-app-region:no-drag]">
             <PageHeading currentView={currentView} />
             {topbarAction}
           </Header>
@@ -115,7 +126,11 @@ function NavButton({
 }) {
   return (
     <button
-      className={active ? "nav-item active" : "nav-item"}
+      className={
+        active
+          ? `${navButtonBaseClass} border-white/20 bg-white/20 text-white [&_svg]:text-white`
+          : navButtonBaseClass
+      }
       onClick={() => onChangeView(item.key)}
     >
       {item.icon}
@@ -126,7 +141,7 @@ function NavButton({
 
 function PageHeading({ currentView }: { currentView: ViewMeta }) {
   return (
-    <div className="page-heading">
+    <div className="flex min-w-0 flex-col justify-center gap-0.5 max-[960px]:hidden [&_h2]:!mb-1 [&_h2]:!text-2xl [&_h2]:!font-extrabold [&_h2]:!leading-tight [&_h2]:!tracking-normal">
       <Typography.Title level={2}>{currentView.title}</Typography.Title>
       <Typography.Text type="secondary">
         {currentView.description}
