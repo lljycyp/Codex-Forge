@@ -9,6 +9,7 @@ CONFIG_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "CodexMult
 CONFIG_PATH = CONFIG_DIR / "config.json"
 CONFIG_LAST_GOOD_PATH = CONFIG_DIR / "config.json.last-good.json"
 CONFIG_PREVIOUS_GOOD_PATH = CONFIG_DIR / "config.json.prev-good.json"
+USAGE_CACHE_PATH = CONFIG_DIR / "usage_cache.json"
 DEFAULT_SESSION_SYNC_ROOT = CONFIG_DIR / "SharedSessions"
 DEFAULT_PROFILE_ROOT = Path.home() / "Documents" / "CodexProfiles"
 DEFAULT_CODEX_ENV_PATH = Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".codex" / ".env"

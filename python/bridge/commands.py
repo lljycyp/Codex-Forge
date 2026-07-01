@@ -10,6 +10,7 @@ from core.codex_source import (
     portable_app_needs_update,
     prepare_portable_codex_path,
     read_running_codex_commands,
+    read_running_codex_processes,
 )
 from core.config_store import load_config, save_config
 from core.constants import (
@@ -31,6 +32,13 @@ from core.path_utils import (
     sanitize_profile_name,
 )
 from core.profile_service import ensure_profile_env_file
+from core.usage_service import (
+    get_cached_profile_usage,
+    refresh_all_profile_usage as refresh_all_profile_usage_cache,
+    refresh_profile_usage as refresh_profile_usage_cache,
+    remove_cached_usage,
+    rename_cached_usage,
+)
 
 
 def ok(data=None):
@@ -54,12 +62,15 @@ def invoke(command, payload=None):
         "launch_profile": launch_profile,
         "list_profiles": list_profiles,
         "refresh_codex_source": refresh_codex_source,
+        "refresh_all_profile_usage": refresh_all_profile_usage,
+        "refresh_profile_usage": refresh_profile_usage,
         "rename_profile": rename_profile,
         "set_codex_path": set_codex_path,
         "set_memory_sync": set_memory_sync,
         "set_profile_root": set_profile_root,
         "set_session_sync": set_session_sync,
         "open_path": open_path,
+        "stop_profile": stop_profile,
     }
     handler = commands.get(command)
     if not handler:
@@ -133,6 +144,7 @@ def rename_profile(payload):
     profiles[profiles.index(old_name)] = new_name
     if config.get("imported_original_profile") == old_name:
         config["imported_original_profile"] = new_name
+    rename_cached_usage(old_name, new_name)
     save_config(config)
     return _build_profile_summary(config, new_name, read_running_codex_commands())
 
@@ -153,6 +165,7 @@ def delete_profile(payload):
     profiles.remove(name)
     if config.get("imported_original_profile") == name:
         config["imported_original_profile"] = ""
+    remove_cached_usage(name)
     save_config(config)
     return {"name": name}
 
@@ -194,6 +207,31 @@ def launch_profile(payload):
     return {"name": name}
 
 
+def stop_profile(payload):
+    """关闭指定账号对应的 Codex 进程。"""
+    name = payload.get("name", "")
+    config = load_config()
+    if name not in config.get("profiles", []):
+        raise ValueError("账号不存在")
+    match_targets = _get_profile_running_match_targets(config, name)
+    matched_pids = [
+        process["pid"]
+        for process in read_running_codex_processes()
+        if any(target in normalize_path_for_match(process["command_line"]) for target in match_targets)
+    ]
+    if not matched_pids:
+        return {"name": name, "stopped": 0}
+    for pid in matched_pids:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    return {"name": name, "stopped": len(matched_pids)}
+
+
 def set_codex_path(payload):
     """保存用户选择的 Codex 程序路径。"""
     codex_path = payload.get("codexPath", "")
@@ -214,6 +252,26 @@ def refresh_codex_source(_payload=None):
     config["codex_path"] = codex_path
     save_config(config)
     return {"codexPath": codex_path, "codexVersion": get_file_version(codex_path)}
+
+
+def refresh_profile_usage(payload):
+    """刷新单个账号的额度快照。"""
+    name = payload.get("name", "")
+    config = load_config()
+    if name not in config.get("profiles", []):
+        raise ValueError("账号不存在")
+    usage = refresh_profile_usage_cache(name, _get_profile_dir(config, name))
+    return {"name": name, "usage": usage}
+
+
+def refresh_all_profile_usage(_payload=None):
+    """刷新全部账号的额度快照。"""
+    config = load_config()
+    profile_dirs = {
+        profile_name: str(_get_profile_dir(config, profile_name))
+        for profile_name in config.get("profiles", [])
+    }
+    return {"profiles": refresh_all_profile_usage_cache(profile_dirs)}
 
 
 def set_profile_root(payload):
@@ -344,6 +402,7 @@ def _build_profile_summary(config, profile_name, running_commands):
         "codexHomeExists": codex_home_dir.exists(),
         "portableCodexPath": str(target_codex_path),
         "portableCodexExists": target_codex_path.exists(),
+        "usage": get_cached_profile_usage(profile_name),
     }
 
 
@@ -397,13 +456,17 @@ def _get_user_data_dir(config, profile_name):
 
 def _is_profile_running(config, profile_name, running_commands):
     """用旧逻辑里的环境目录特征判断账号是否运行。"""
+    return any(target in running_commands for target in _get_profile_running_match_targets(config, profile_name))
+
+
+def _get_profile_running_match_targets(config, profile_name):
+    """构造用于识别账号运行进程的命令行路径特征。"""
     profile_dir = _get_profile_dir(config, profile_name)
     user_data_dir = profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex"
-    match_targets = [
+    return [
         normalize_path_for_match(profile_dir),
         normalize_path_for_match(user_data_dir),
     ]
-    return any(target in running_commands for target in match_targets)
 
 
 def _validate_profile_name(config, profile_name, exclude_name=None):

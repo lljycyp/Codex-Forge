@@ -13,13 +13,20 @@ from core.path_utils import normalize_path_for_match, paths_equal
 
 def read_running_codex_commands():
     """读取当前所有 Codex 相关进程的命令行。"""
+    return normalize_path_for_match(
+        "\n".join(process["command_line"] for process in read_running_codex_processes())
+    )
+
+
+def read_running_codex_processes():
+    """读取当前所有 Codex 相关进程的 PID 和命令行。"""
     command = [
         "wmic",
         "process",
         "where",
         "(name='Codex.exe' or name='codex.exe')",
         "get",
-        "CommandLine",
+        "CommandLine,ProcessId",
         "/value",
     ]
     try:
@@ -31,8 +38,29 @@ def read_running_codex_commands():
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
     except Exception:
-        return ""
-    return normalize_path_for_match(result.stdout)
+        return []
+    processes = []
+    current = {}
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        key, separator, value = line.partition("=")
+        if separator != "=":
+            continue
+        if key == "CommandLine":
+            if current.get("command_line") and current.get("pid"):
+                processes.append(current)
+                current = {}
+            current["command_line"] = value.strip()
+        elif key == "ProcessId":
+            try:
+                current["pid"] = int(value.strip())
+            except ValueError:
+                pass
+    if current.get("command_line") and current.get("pid"):
+        processes.append(current)
+    return processes
 
 
 def find_windowsapps_codex_path():

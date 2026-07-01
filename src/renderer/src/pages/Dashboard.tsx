@@ -1,5 +1,6 @@
 import { Button, Empty, Tag, Tooltip } from "antd";
-import { FolderOpen, MoreHorizontal, Play } from "lucide-react";
+import { Play, Square } from "lucide-react";
+import { useState } from "react";
 import { Metric } from "../components/Metric";
 import type { AppState, ProfileSummary, RunCommand } from "../types";
 
@@ -10,8 +11,12 @@ type DashboardProps = {
 };
 
 export function Dashboard({ appState, profiles, runCommand }: DashboardProps) {
+  const [selectedProfileName, setSelectedProfileName] = useState<string | null>(null);
   const readyProfiles = profiles.slice(0, 5);
-  const activeProfile = profiles.find((profile) => profile.running) ?? profiles[0];
+  const activeProfile =
+    profiles.find((profile) => profile.name === selectedProfileName) ??
+    profiles.find((profile) => profile.running) ??
+    profiles[0];
 
   return (
     <div className="dashboard-page">
@@ -44,17 +49,16 @@ export function Dashboard({ appState, profiles, runCommand }: DashboardProps) {
               readyProfiles.map((profile) => (
                 <button
                   key={profile.name}
+                  type="button"
                   className={profile.name === activeProfile?.name ? "account-card active" : "account-card"}
+                  onClick={() => setSelectedProfileName(profile.name)}
                 >
                   <span className="account-avatar">{profile.name.slice(0, 1)}</span>
                   <span className="account-card-body">
                     <span className="account-card-head">
-                      <span>{profile.name}</span>
+                      <span className="account-card-name">{profile.name}</span>
                       <Tag color={profile.running ? "green" : "default"}>{profile.running ? "运行中" : "就绪"}</Tag>
                     </span>
-                    <Tooltip title={profile.profileDir} placement="topLeft">
-                      <span className="account-card-path">{profile.profileDir}</span>
-                    </Tooltip>
                   </span>
                 </button>
               ))
@@ -79,23 +83,19 @@ export function Dashboard({ appState, profiles, runCommand }: DashboardProps) {
             <div className="detail-actions">
               <Button
                 type="primary"
-                icon={<Play size={15} />}
-                disabled={!activeProfile}
-                onClick={() => activeProfile && runCommand("launch_profile", { name: activeProfile.name }, "已启动账号")}
-              >
-                启动
-              </Button>
-              <Button
-                icon={<FolderOpen size={15} />}
+                danger={activeProfile?.running}
+                icon={activeProfile?.running ? <Square size={15} /> : <Play size={15} />}
                 disabled={!activeProfile}
                 onClick={() =>
-                  activeProfile && runCommand("open_path", { path: activeProfile.profileDir }, "已打开目录")
+                  activeProfile &&
+                  runCommand(
+                    activeProfile.running ? "stop_profile" : "launch_profile",
+                    { name: activeProfile.name },
+                    activeProfile.running ? "已停止账号" : "已启动账号"
+                  )
                 }
               >
-                打开目录
-              </Button>
-              <Button icon={<MoreHorizontal size={15} />} disabled={!activeProfile}>
-                更多
+                {activeProfile?.running ? "停止" : "启动"}
               </Button>
             </div>
           </div>

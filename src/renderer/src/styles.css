@@ -488,6 +488,7 @@ button {
   width: 100%;
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
   gap: 10px;
   padding: 11px;
   border: 1px solid transparent;
@@ -495,6 +496,12 @@ button {
   background: #f8fafc;
   color: #111827;
   text-align: left;
+  min-height: 60px;
+}
+
+.account-card:hover {
+  border-color: rgba(15, 118, 110, 0.2);
+  background: #f2f7f6;
 }
 
 .account-card.active {
@@ -532,7 +539,18 @@ button {
   font-weight: 800;
 }
 
-.account-card-path,
+.account-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-card-head .ant-tag {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
+}
+
 .table-path {
   display: block;
   margin-top: 4px;
@@ -671,6 +689,14 @@ button {
   gap: 6px;
 }
 
+.profiles-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .profiles-count {
   font-size: 28px;
   font-weight: 800;
@@ -771,6 +797,76 @@ button {
   background: #fef3c7;
 }
 
+.profile-usage {
+  display: grid;
+  grid-template-columns: minmax(70px, auto) minmax(108px, 0.22fr) minmax(108px, 0.22fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  max-width: 520px;
+}
+
+.profile-usage-plan {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 66px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.profile-usage-error {
+  grid-column: span 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #b42318;
+  font-size: 12px;
+}
+
+.profile-usage-meter {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.profile-usage-meter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #667085;
+  font-size: 11.5px;
+  line-height: 1;
+}
+
+.profile-usage-meter-head strong {
+  color: #111827;
+  font-size: 12px;
+}
+
+.profile-usage-bar {
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5e7eb;
+}
+
+.profile-usage-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #16a34a, #f59e0b);
+}
+
 .profile-row-path {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -861,5 +957,43 @@ button {
 
   .taskbar span:last-child {
     display: none;
+  }
+
+  .profiles-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .profiles-toolbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .profile-row {
+    align-items: flex-start;
+  }
+
+  .profile-row-actions {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
+  .profile-icon-actions {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
+  }
+
+  .profile-usage {
+    grid-template-columns: 1fr;
+    max-width: none;
+  }
+
+  .profile-usage-plan {
+    justify-self: flex-start;
+  }
+
+  .profile-usage-error {
+    grid-column: auto;
   }
 }

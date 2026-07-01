@@ -28,7 +28,7 @@ export function AppLayout({
   taskText,
   topbarAction,
   children,
-  onChangeView
+  onChangeView,
 }: AppLayoutProps) {
   return (
     <Layout className="app-shell">
@@ -42,13 +42,25 @@ export function AppLayout({
         </div>
         <div className="titlebar-drag" />
         <div className="window-controls">
-          <button className="window-control" title="最小化" onClick={() => window.launcherApi.minimizeWindow()}>
+          <button
+            className="window-control"
+            title="最小化"
+            onClick={() => window.launcherApi.minimizeWindow()}
+          >
             <Minus />
           </button>
-          <button className="window-control" title="最大化" onClick={() => window.launcherApi.toggleMaximizeWindow()}>
+          <button
+            className="window-control"
+            title="最大化"
+            onClick={() => window.launcherApi.toggleMaximizeWindow()}
+          >
             <Square />
           </button>
-          <button className="window-control close" title="关闭" onClick={() => window.launcherApi.closeWindow()}>
+          <button
+            className="window-control close"
+            title="关闭"
+            onClick={() => window.launcherApi.closeWindow()}
+          >
             <X />
           </button>
         </div>
@@ -79,13 +91,6 @@ export function AppLayout({
               ))}
             </div>
           </nav>
-          <div className="side-status-card">
-            <div className="side-status-head">
-              <span>任务状态</span>
-              <span>实时</span>
-            </div>
-            <div className="side-status-text">{taskText}</div>
-          </div>
         </Sider>
         <Layout className="main-layout">
           <Header className="topbar">
@@ -93,10 +98,6 @@ export function AppLayout({
             {topbarAction}
           </Header>
           {children}
-          <div className="taskbar">
-            <span>任务状态：{taskText}</span>
-            <span>Codex 多账号启动器</span>
-          </div>
         </Layout>
       </Layout>
     </Layout>
@@ -106,14 +107,17 @@ export function AppLayout({
 function NavButton({
   item,
   active,
-  onChangeView
+  onChangeView,
 }: {
   item: MenuItem;
   active: boolean;
   onChangeView: (view: ViewKey) => void;
 }) {
   return (
-    <button className={active ? "nav-item active" : "nav-item"} onClick={() => onChangeView(item.key)}>
+    <button
+      className={active ? "nav-item active" : "nav-item"}
+      onClick={() => onChangeView(item.key)}
+    >
       {item.icon}
       <span>{item.label}</span>
     </button>
@@ -124,7 +128,9 @@ function PageHeading({ currentView }: { currentView: ViewMeta }) {
   return (
     <div className="page-heading">
       <Typography.Title level={2}>{currentView.title}</Typography.Title>
-      <Typography.Text type="secondary">{currentView.description}</Typography.Text>
+      <Typography.Text type="secondary">
+        {currentView.description}
+      </Typography.Text>
     </div>
   );
 }

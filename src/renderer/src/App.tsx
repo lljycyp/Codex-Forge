@@ -24,6 +24,8 @@ const emptyState: AppState = {
   memorySyncEnabled: false
 };
 
+const refreshDelayCommands = new Set(["launch_profile", "stop_profile"]);
+
 export default function App() {
   const [activeView, setActiveView] = useState<ViewKey>("dashboard");
   const [appState, setAppState] = useState<AppState>(emptyState);
@@ -73,6 +75,9 @@ export default function App() {
       setTaskText("正在执行...");
       try {
         await invokeLauncher(command, payload);
+        if (refreshDelayCommands.has(command)) {
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
         message.success(successText);
         setTaskText(successText);
         await refresh();

@@ -34,6 +34,22 @@ export type ProfileSummary = {
   codexHomeExists: boolean;
   portableCodexPath: string;
   portableCodexExists: boolean;
+  usage: ProfileUsage | null;
+};
+
+export type ProfileUsageWindow = {
+  usedPercent: number;
+  remainingPercent: number;
+  windowSeconds: number;
+  resetAt: number | null;
+};
+
+export type ProfileUsage = {
+  fetchedAt: number;
+  planType: string | null;
+  fiveHour: ProfileUsageWindow | null;
+  oneWeek: ProfileUsageWindow | null;
+  error: string | null;
 };
 
 export type DiagnosticsData = {

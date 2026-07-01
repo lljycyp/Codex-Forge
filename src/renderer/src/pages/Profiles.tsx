@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button, Empty, Form, Input, Modal, Spin, Tooltip, Typography } from "antd";
-import { FolderOpen, Play, Plus, Trash2, UserPen } from "lucide-react";
-import type { ProfileSummary, RunCommand } from "../types";
+import { FolderOpen, Play, Plus, RefreshCw, Square, Trash2, UserPen } from "lucide-react";
+import type { ProfileSummary, ProfileUsageWindow, RunCommand } from "../types";
 
 type ProfilesProps = {
   profiles: ProfileSummary[];
@@ -12,6 +12,7 @@ type ProfilesProps = {
 export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ProfileSummary | null>(null);
+  const [pendingProfileName, setPendingProfileName] = useState<string | null>(null);
   const [createForm] = Form.useForm();
   const [renameForm] = Form.useForm();
 
@@ -32,6 +33,19 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
     });
   };
 
+  const toggleProfileRunning = async (profile: ProfileSummary) => {
+    setPendingProfileName(profile.name);
+    try {
+      await runCommand(
+        profile.running ? "stop_profile" : "launch_profile",
+        { name: profile.name },
+        profile.running ? "已停止账号" : "已启动账号"
+      );
+    } finally {
+      setPendingProfileName(null);
+    }
+  };
+
   return (
     <div className="profiles-page">
       <div className="profiles-toolbar">
@@ -39,9 +53,14 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
           <span className="profiles-count">{profiles.length}</span>
           <Typography.Text type="secondary">个账号</Typography.Text>
         </div>
-        <Button type="primary" icon={<Plus size={16} />} onClick={() => setCreateOpen(true)}>
-          新增账号
-        </Button>
+        <div className="profiles-toolbar-actions">
+          <Button icon={<RefreshCw size={16} />} onClick={() => runCommand("refresh_all_profile_usage", {}, "额度已刷新")}>
+            刷新额度
+          </Button>
+          <Button type="primary" icon={<Plus size={16} />} onClick={() => setCreateOpen(true)}>
+            新增账号
+          </Button>
+        </div>
       </div>
 
       <div className={`profiles-list${loading ? " is-loading" : ""}`}>
@@ -66,16 +85,46 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
                 <Tooltip title={profile.profileDir} placement="topLeft">
                   <div className="profile-row-path">{profile.profileDir}</div>
                 </Tooltip>
+                <div className="profile-usage">
+                  <span className="profile-usage-plan">{formatPlanType(profile.usage?.planType)}</span>
+                  {profile.usage?.error ? (
+                    <Tooltip title={profile.usage.error}>
+                      <span className="profile-usage-error">{profile.usage.error}</span>
+                    </Tooltip>
+                  ) : (
+                    <>
+                      <UsageMeter label="五小时" window={profile.usage?.fiveHour ?? null} />
+                      <UsageMeter label="一周" window={profile.usage?.oneWeek ?? null} />
+                    </>
+                  )}
+                </div>
               </div>
               <div className="profile-row-actions">
-                <Button
-                  type="primary"
-                  icon={<Play size={15} />}
-                  onClick={() => runCommand("launch_profile", { name: profile.name }, "已启动账号")}
-                >
-                  启动
-                </Button>
+                {(() => {
+                  const isPending = pendingProfileName === profile.name;
+                  const isDisabled = loading && !isPending;
+
+                  return (
+                    <Button
+                      type="primary"
+                      danger={profile.running}
+                      icon={profile.running ? <Square size={15} /> : <Play size={15} />}
+                      loading={isPending}
+                      disabled={isDisabled}
+                      onClick={() => toggleProfileRunning(profile)}
+                    >
+                      {isPending ? (profile.running ? "停止中" : "启动中") : profile.running ? "停止" : "启动"}
+                    </Button>
+                  );
+                })()}
                 <div className="profile-icon-actions">
+                  <Tooltip title="刷新额度">
+                    <Button
+                      type="text"
+                      icon={<RefreshCw size={16} />}
+                      onClick={() => runCommand("refresh_profile_usage", { name: profile.name }, "额度已刷新")}
+                    />
+                  </Tooltip>
                   <Tooltip title="改名">
                     <Button type="text" icon={<UserPen size={16} />} onClick={() => setRenameTarget(profile)} />
                   </Tooltip>
@@ -141,4 +190,56 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
       </Modal>
     </div>
   );
+}
+
+function UsageMeter({ label, window }: { label: string; window: ProfileUsageWindow | null }) {
+  const usedText = formatPercent(window?.usedPercent);
+  const remainingText = formatPercent(window?.remainingPercent);
+  const resetText = formatResetAt(window?.resetAt);
+
+  return (
+    <Tooltip title={`已用 ${usedText}，剩余 ${remainingText}，重置时间 ${resetText}`}>
+      <span className="profile-usage-meter">
+        <span className="profile-usage-meter-head">
+          <span>{label}</span>
+          <strong>{remainingText}</strong>
+        </span>
+        <span className="profile-usage-bar" aria-hidden>
+          <span style={{ width: `${clampPercent(window?.usedPercent)}%` }} />
+        </span>
+      </span>
+    </Tooltip>
+  );
+}
+
+function formatPlanType(planType: string | null | undefined) {
+  const normalized = planType?.trim().toLowerCase();
+  if (normalized === "free") return "免费版";
+  if (normalized === "plus") return "增强版";
+  if (normalized === "pro") return "专业版";
+  if (normalized === "team") return "团队版";
+  if (normalized === "enterprise") return "企业版";
+  if (normalized === "business") return "商业版";
+  return "套餐未识别";
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "--";
+  }
+  return `${clampPercent(value).toFixed(0)}%`;
+}
+
+function clampPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
+function formatResetAt(value: number | null | undefined) {
+  if (!value) {
+    return "未返回";
+  }
+  return new Date(value * 1000).toLocaleString("zh-CN");
 }
