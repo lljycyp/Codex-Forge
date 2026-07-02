@@ -1,38 +1,26 @@
-﻿import os
+import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from core.codex_source import (
     find_running_codex_path,
     find_windowsapps_codex_path,
-    get_file_version,
-    portable_app_needs_update,
-    prepare_portable_codex_path,
     read_running_codex_commands,
     read_running_codex_processes,
 )
 from core.config_store import load_config, save_config
-from core.constants import (
-    CONFIG_LAST_GOOD_PATH,
-    CONFIG_PATH,
-    CONFIG_PREVIOUS_GOOD_PATH,
-    DEFAULT_CODEX_ENV_PATH,
-    DEFAULT_PROFILE_ROOT,
-    DEFAULT_SESSION_SYNC_ROOT,
-    MEMORY_SYNC_DB_NAME,
-    PORTABLE_APP_DIR_NAME,
+from core.constants import CONFIG_LAST_GOOD_PATH, CONFIG_PATH, CONFIG_PREVIOUS_GOOD_PATH, DEFAULT_PROFILE_ROOT
+from core.path_utils import check_directory_writable, format_health_status, is_reparse_point, normalize_path_for_match, remove_readonly_path, sanitize_profile_name
+from core.profile_service import (
+    apply_profile,
+    get_active_auth_path,
+    get_active_codex_dir,
+    get_active_config_path,
+    get_profile_status,
+    import_active_profile,
 )
-from core.path_utils import (
-    check_directory_writable,
-    format_health_status,
-    is_reparse_point,
-    normalize_path_for_match,
-    remove_readonly_path,
-    sanitize_profile_name,
-)
-from core.profile_service import ensure_profile_env_file
-from core.sync_service import prepare_memory_sync, prepare_session_sync
 from core.usage_service import (
     get_cached_profile_usage,
     refresh_all_profile_usage as refresh_all_profile_usage_cache,
@@ -62,15 +50,11 @@ def invoke(command, payload=None):
         "get_diagnostics": get_diagnostics,
         "launch_profile": launch_profile,
         "list_profiles": list_profiles,
-        "refresh_codex_source": refresh_codex_source,
         "refresh_all_profile_usage": refresh_all_profile_usage,
+        "refresh_codex_source": refresh_codex_source,
         "refresh_profile_usage": refresh_profile_usage,
         "rename_profile": rename_profile,
-        "open_session_sync_dir": open_session_sync_dir,
-        "set_codex_path": set_codex_path,
-        "set_memory_sync": set_memory_sync,
         "set_profile_root": set_profile_root,
-        "set_session_sync": set_session_sync,
         "open_path": open_path,
         "stop_profile": stop_profile,
     }
@@ -84,30 +68,27 @@ def invoke(command, payload=None):
 
 
 def get_app_state(_payload=None):
-    """读取新界面首页需要的基础状态。"""
+    """读取首页需要的账号切换状态。"""
     config = load_config()
-    codex_path = config.get("codex_path", "")
     profiles = config.get("profiles", [])
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
-    session_sync_root = Path(config.get("session_sync_root") or DEFAULT_SESSION_SYNC_ROOT)
-    running_commands = read_running_codex_commands()
+    running_count = _running_codex_count()
     return {
-        "codexPath": codex_path,
-        "codexExists": bool(codex_path and Path(codex_path).exists()),
-        "codexVersion": get_file_version(codex_path) if codex_path and Path(codex_path).exists() else "",
+        "codexCommandAvailable": _is_codex_command_available(),
+        "activeAuthPath": str(get_active_auth_path()),
+        "activeAuthExists": get_active_auth_path().exists(),
+        "activeConfigPath": str(get_active_config_path()),
+        "activeConfigExists": get_active_config_path().exists(),
+        "activeProfile": config.get("active_profile", ""),
         "profileRoot": str(profile_root),
         "profileRootExists": profile_root.exists(),
         "profileCount": len(profiles),
-        "runningCount": sum(1 for profile_name in profiles if _is_profile_running(config, profile_name, running_commands)),
-        "sessionSyncEnabled": bool(config.get("session_sync_enabled", False)),
-        "sessionSyncRoot": str(session_sync_root),
-        "memorySyncEnabled": bool(config.get("memory_sync_enabled", False)),
-        "memorySyncDatabase": str(session_sync_root / MEMORY_SYNC_DB_NAME),
+        "runningCount": running_count,
     }
 
 
 def list_profiles(_payload=None):
-    """读取账号列表和每个账号的关键路径状态。"""
+    """读取账号列表和每个账号资料状态。"""
     config = load_config()
     running_commands = read_running_codex_commands()
     return {
@@ -119,116 +100,96 @@ def list_profiles(_payload=None):
 
 
 def create_profile(payload):
-    """新增账号并准备独立程序副本。"""
-    name = _validate_profile_name(load_config(), payload.get("name", ""))
+    """新增账号，把当前默认 Codex 账号资料保存到账号目录。"""
     config = load_config()
+    name = _validate_profile_name(config, payload.get("name", ""))
     profile_dir = _get_profile_dir(config, name)
-    codex_path = _require_codex_path(config)
-    ensure_profile_env_file(profile_dir / "CodexHome")
-    prepare_portable_codex_path(codex_path, profile_dir)
+    import_active_profile(profile_dir)
     profiles = config.setdefault("profiles", [])
     profiles.append(name)
+    config["active_profile"] = name
     save_config(config)
     return _build_profile_summary(config, name, read_running_codex_commands())
 
 
 def rename_profile(payload):
-    """修改账号名称，并同步移动对应目录。"""
+    """修改账号名称，并移动对应资料目录。"""
     old_name = payload.get("oldName", "")
     config = load_config()
     if old_name not in config.get("profiles", []):
         raise ValueError("账号不存在")
     new_name = _validate_profile_name(config, payload.get("newName", ""), exclude_name=old_name)
+    if _running_codex_count() > 0:
+        raise RuntimeError("Codex 正在运行，请先关闭后再改名")
     old_dir = _get_profile_dir(config, old_name)
     new_dir = _get_profile_dir(config, new_name)
     if old_dir.exists() and old_dir != new_dir:
         if new_dir.exists():
-            raise FileExistsError(new_dir)
+            raise FileExistsError("目标账号资料目录已存在，请换一个账号名称")
         old_dir.rename(new_dir)
     profiles = config.setdefault("profiles", [])
     profiles[profiles.index(old_name)] = new_name
-    if config.get("imported_original_profile") == old_name:
-        config["imported_original_profile"] = new_name
+    if config.get("active_profile") == old_name:
+        config["active_profile"] = new_name
     rename_cached_usage(old_name, new_name)
     save_config(config)
     return _build_profile_summary(config, new_name, read_running_codex_commands())
 
 
 def delete_profile(payload):
-    """删除账号配置和账号目录。"""
+    """删除账号配置和账号资料目录。"""
     name = payload.get("name", "")
     config = load_config()
     profiles = config.setdefault("profiles", [])
     if name not in profiles:
         raise ValueError("账号不存在")
-    running_commands = read_running_codex_commands()
-    if _is_profile_running(config, name, running_commands):
-        raise RuntimeError("该账号正在运行，请先关闭对应 Codex 窗口")
+    if config.get("active_profile") == name and _running_codex_count() > 0:
+        raise RuntimeError("该账号可能正在使用中，请先关闭 Codex")
     profile_dir = _get_profile_dir(config, name)
     if profile_dir.exists():
-        shutil.rmtree(profile_dir)
+        shutil.rmtree(profile_dir, onerror=remove_readonly_path)
     profiles.remove(name)
-    if config.get("imported_original_profile") == name:
-        config["imported_original_profile"] = ""
+    if config.get("active_profile") == name:
+        config["active_profile"] = ""
     remove_cached_usage(name)
     save_config(config)
     return {"name": name}
 
 
 def launch_profile(payload):
-    """按账号隔离环境变量后启动 Codex 桌面端。"""
+    """切换到指定账号资料，并启动默认安装的 Codex。"""
     name = payload.get("name", "")
+    stop_running_first = bool(payload.get("stopRunningFirst"))
     config = load_config()
     if name not in config.get("profiles", []):
         raise ValueError("账号不存在")
-    codex_path = _require_codex_path(config)
+    if _running_codex_count() > 0:
+        if not stop_running_first:
+            raise RuntimeError("检测到 Codex 正在运行，请先关闭后再切换账号")
+        _stop_running_codex_processes()
+        time.sleep(0.5)
+
     profile_dir = _get_profile_dir(config, name)
-    appdata_dir = profile_dir / "AppData" / "Roaming"
-    localappdata_dir = profile_dir / "AppData" / "Local"
-    codex_home_dir = profile_dir / "CodexHome"
-    user_data_dir = _get_user_data_dir(config, name)
-    target_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
-    running_commands = read_running_codex_commands()
-    if _is_profile_running(config, name, running_commands) and portable_app_needs_update(codex_path, target_app_dir):
-        raise RuntimeError("微软商店版 Codex 已更新，请先关闭该账号窗口后再启动")
-
-    for directory in (appdata_dir, localappdata_dir, codex_home_dir, user_data_dir):
-        directory.mkdir(parents=True, exist_ok=True)
-    ensure_profile_env_file(codex_home_dir)
-
-    env = os.environ.copy()
-    env["APPDATA"] = str(appdata_dir)
-    env["LOCALAPPDATA"] = str(localappdata_dir)
-    env["CODEX_HOME"] = str(codex_home_dir)
-    env["CODEX_MULTI_PROFILE"] = name
-
-    portable_codex_path = prepare_portable_codex_path(codex_path, profile_dir)
-    prepare_session_sync(config, codex_home_dir)
-    prepare_memory_sync(config, codex_home_dir)
-    subprocess.Popen(
-        [portable_codex_path, f"--user-data-dir={user_data_dir}"],
-        cwd=str(Path(portable_codex_path).parent),
-        env=env,
-        close_fds=True,
-    )
-    return {"name": name}
+    apply_profile(profile_dir)
+    config["active_profile"] = name
+    save_config(config)
+    _launch_default_codex()
+    return {"name": name, "activeAuthPath": str(get_active_auth_path()), "activeConfigPath": str(get_active_config_path())}
 
 
-def stop_profile(payload):
-    """关闭指定账号对应的 Codex 进程。"""
-    name = payload.get("name", "")
-    config = load_config()
-    if name not in config.get("profiles", []):
-        raise ValueError("账号不存在")
-    match_targets = _get_profile_running_match_targets(config, name)
-    matched_pids = [
-        process["pid"]
-        for process in read_running_codex_processes()
-        if any(target in normalize_path_for_match(process["command_line"]) for target in match_targets)
-    ]
-    if not matched_pids:
-        return {"name": name, "stopped": 0}
-    for pid in matched_pids:
+def stop_profile(_payload):
+    """关闭当前运行的 Codex 进程。"""
+    return _stop_running_codex_processes()
+
+
+def _stop_running_codex_processes():
+    """关闭当前运行的 Codex 进程，并返回实际发起关闭的数量。"""
+    processes = read_running_codex_processes()
+    stopped = 0
+    for process in processes:
+        pid = process.get("pid")
+        if not pid:
+            continue
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
@@ -236,29 +197,18 @@ def stop_profile(payload):
             timeout=10,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-    return {"name": name, "stopped": len(matched_pids)}
-
-
-def set_codex_path(payload):
-    """保存用户选择的 Codex 程序路径。"""
-    codex_path = payload.get("codexPath", "")
-    if codex_path and not Path(codex_path).exists():
-        raise FileNotFoundError(codex_path)
-    config = load_config()
-    config["codex_path"] = codex_path
-    save_config(config)
-    return {"codexPath": codex_path}
+        stopped += 1
+    return {"stopped": stopped}
 
 
 def refresh_codex_source(_payload=None):
-    """重新识别微软商店版 Codex 路径并保存。"""
-    codex_path = find_windowsapps_codex_path() or find_running_codex_path()
-    if not codex_path:
-        raise FileNotFoundError("未找到微软商店版 Codex")
+    """刷新可启动的 Codex 程序来源，兼容无命令行别名的安装方式。"""
     config = load_config()
-    config["codex_path"] = codex_path
-    save_config(config)
-    return {"codexPath": codex_path, "codexVersion": get_file_version(codex_path)}
+    launch_spec = _resolve_codex_launch_spec(config)
+    return {
+        "codexCommandAvailable": True,
+        "codexLaunchPath": launch_spec["display"],
+    }
 
 
 def refresh_profile_usage(payload):
@@ -282,7 +232,7 @@ def refresh_all_profile_usage(_payload=None):
 
 
 def set_profile_root(payload):
-    """迁移整个账号根目录并保存新位置。"""
+    """迁移整个账号资料根目录并保存新位置。"""
     new_root = Path(payload.get("profileRoot", ""))
     if not new_root:
         raise ValueError("账号根目录不能为空")
@@ -310,7 +260,6 @@ def set_profile_root(payload):
         raise FileExistsError("目标账号根目录已存在且不为空")
 
     if old_root_resolved.exists():
-        _cleanup_profile_root_before_move(old_root_resolved)
         _copy_directory(old_root_resolved, new_root_resolved)
         shutil.rmtree(old_root_resolved, onerror=remove_readonly_path)
     else:
@@ -319,35 +268,6 @@ def set_profile_root(payload):
     config["profile_root"] = str(new_root_resolved)
     save_config(config)
     return {"profileRoot": str(new_root_resolved), "migrated": True}
-
-
-def set_session_sync(payload):
-    """保存会话同步开关。"""
-    config = load_config()
-    config["session_sync_enabled"] = bool(payload.get("enabled", False))
-    config["session_sync_root"] = payload.get("sessionSyncRoot") or str(DEFAULT_SESSION_SYNC_ROOT)
-    save_config(config)
-    return {
-        "sessionSyncEnabled": config["session_sync_enabled"],
-        "sessionSyncRoot": config["session_sync_root"],
-    }
-
-
-def set_memory_sync(payload):
-    """保存记忆同步开关。"""
-    config = load_config()
-    config["memory_sync_enabled"] = bool(payload.get("enabled", False))
-    save_config(config)
-    return {"memorySyncEnabled": config["memory_sync_enabled"]}
-
-
-def open_session_sync_dir(_payload=None):
-    """创建并打开同步共享目录。"""
-    config = load_config()
-    sync_root = Path(config.get("session_sync_root") or DEFAULT_SESSION_SYNC_ROOT)
-    sync_root.mkdir(parents=True, exist_ok=True)
-    os.startfile(str(sync_root))
-    return {"sessionSyncRoot": str(sync_root)}
 
 
 def open_path(payload):
@@ -364,13 +284,11 @@ def get_diagnostics(_payload=None):
     config = load_config()
     profiles = config.get("profiles", [])
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
-    session_sync_root = Path(config.get("session_sync_root") or DEFAULT_SESSION_SYNC_ROOT)
-    codex_path = config.get("codex_path", "")
     running_commands = read_running_codex_commands()
     profile_items = []
     for profile_name in profiles:
         summary = _build_profile_summary(config, profile_name, running_commands)
-        health = _get_profile_health(config, profile_name, running_commands)
+        health = _get_profile_health(config, profile_name)
         status_text, _ = format_health_status(health)
         disk_usage_bytes = _get_directory_size(_get_profile_dir(config, profile_name))
         summary.update(
@@ -378,7 +296,6 @@ def get_diagnostics(_payload=None):
                 "statusText": status_text,
                 "errors": health["errors"],
                 "warnings": health["warnings"],
-                "memoryDatabase": str(_get_profile_dir(config, profile_name) / "CodexHome" / MEMORY_SYNC_DB_NAME),
                 "diskUsageBytes": disk_usage_bytes,
                 "diskUsageText": _format_bytes(disk_usage_bytes),
             }
@@ -392,47 +309,266 @@ def get_diagnostics(_payload=None):
             "previousGoodBackupExists": CONFIG_PREVIOUS_GOOD_PATH.exists(),
             "profileRoot": str(profile_root),
             "profileRootWritable": check_directory_writable(profile_root),
-            "codexPath": codex_path or "未设置",
-            "codexExists": bool(codex_path and Path(codex_path).exists()),
-            "codexVersion": get_file_version(codex_path) if codex_path and Path(codex_path).exists() else "未识别",
-            "defaultEnvPath": str(DEFAULT_CODEX_ENV_PATH),
-            "defaultEnvExists": DEFAULT_CODEX_ENV_PATH.exists(),
+            "activeAuthPath": str(get_active_auth_path()),
+            "activeAuthExists": get_active_auth_path().exists(),
+            "activeConfigPath": str(get_active_config_path()),
+            "activeConfigExists": get_active_config_path().exists(),
+            "codexCommandAvailable": _is_codex_command_available(),
+            "runningCodexCount": _running_codex_count(),
+            "activeProfile": config.get("active_profile", ""),
             "profileCount": len(profiles),
-            "sessionSyncEnabled": bool(config.get("session_sync_enabled", False)),
-            "sessionSyncRoot": str(session_sync_root),
-            "memorySyncEnabled": bool(config.get("memory_sync_enabled", False)),
-            "memorySyncDatabase": str(session_sync_root / MEMORY_SYNC_DB_NAME),
         },
         "profiles": profile_items,
     }
 
 
 def _build_profile_summary(config, profile_name, running_commands):
-    """构造账号列表项，不在桥接层执行启动或迁移副作用。"""
+    """构造账号列表项，不执行启动或迁移副作用。"""
     profile_dir = _get_profile_dir(config, profile_name)
-    target_codex_path = profile_dir / PORTABLE_APP_DIR_NAME / "Codex.exe"
-    codex_home_dir = profile_dir / "CodexHome"
+    status = get_profile_status(profile_dir)
+    active_profile = config.get("active_profile", "")
     return {
         "name": profile_name,
-        "running": _is_profile_running(config, profile_name, running_commands),
+        "running": profile_name == active_profile and bool(running_commands),
+        "active": profile_name == active_profile,
         "profileDir": str(profile_dir),
         "profileDirExists": profile_dir.exists(),
-        "codexHome": str(codex_home_dir),
-        "codexHomeExists": codex_home_dir.exists(),
-        "portableCodexPath": str(target_codex_path),
-        "portableCodexExists": target_codex_path.exists(),
+        "authPath": status["authPath"],
+        "authExists": status["authExists"],
+        "configPath": status["configPath"],
+        "configExists": status["configExists"],
         "usage": get_cached_profile_usage(profile_name),
     }
 
 
 def _get_profile_dir(config, profile_name):
-    """按现有规则计算账号目录，保持历史配置兼容。"""
+    """按现有规则计算账号资料目录，保持历史配置兼容。"""
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
     return profile_root / sanitize_profile_name(profile_name)
 
 
+def _validate_profile_name(config, profile_name, exclude_name=None):
+    """校验账号名称和对应目录是否可用。"""
+    profile_name = str(profile_name or "").strip()
+    if not profile_name:
+        raise ValueError("账号名称不能为空")
+    profiles = config.setdefault("profiles", [])
+    if profile_name in profiles and profile_name != exclude_name:
+        raise ValueError("已存在同名账号")
+    profile_dir = _get_profile_dir(config, profile_name)
+    for existing_name in profiles:
+        if exclude_name is not None and existing_name == exclude_name:
+            continue
+        if _get_profile_dir(config, existing_name).resolve() == profile_dir.resolve():
+            raise ValueError(f"该名称对应的数据目录已被“{existing_name}”使用")
+    if exclude_name is None and profile_dir.exists():
+        raise FileExistsError("该名称对应的账号资料目录已存在")
+    return profile_name
+
+
+def _get_profile_health(config, profile_name):
+    """检查账号资料完整性。"""
+    profile_dir = _get_profile_dir(config, profile_name)
+    status = get_profile_status(profile_dir)
+    return {
+        "running": profile_name == config.get("active_profile", "") and _running_codex_count() > 0,
+        "errors": status["errors"],
+        "warnings": status["warnings"],
+    }
+
+
+def _running_codex_count():
+    """统计当前运行中的 Codex 相关进程数量。"""
+    return len(read_running_codex_processes())
+
+
+def _is_codex_command_available():
+    """检查当前环境是否能找到可启动的 Codex 程序。"""
+    try:
+        _resolve_codex_launch_spec(load_config())
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_codex_launch_spec(config):
+    """参考 Codex Tools：优先桌面程序，其次商店应用标识，最后命令行。"""
+    configured_path = str(config.get("codex_path") or "").strip()
+    configured_app_path = _resolve_configured_codex_app_path(configured_path)
+    if configured_app_path:
+        return _build_app_launch_spec(configured_app_path)
+
+    detected_path = find_windowsapps_codex_path() or find_running_codex_path()
+    if detected_path:
+        config["codex_path"] = detected_path
+        save_config(config)
+        return _build_app_launch_spec(detected_path)
+
+    store_app_id = _find_windows_store_codex_app_id()
+    if store_app_id:
+        return {
+            "kind": "store",
+            "command": ["explorer.exe", f"shell:AppsFolder\\{store_app_id}"],
+            "display": store_app_id,
+        }
+
+    cli_path = _find_codex_cli_path(configured_path)
+    if cli_path:
+        return {
+            "kind": "cli",
+            "command": [str(cli_path), "app"],
+            "display": str(cli_path),
+            "path_for_env": cli_path,
+        }
+
+    raise FileNotFoundError("未找到 Codex 程序，请在设置中重新识别或确认 Codex 已安装")
+
+
+def _resolve_configured_codex_app_path(configured_path):
+    """把用户保存的文件或目录解析为可启动的 Codex 桌面程序。"""
+    if not configured_path:
+        return None
+    path = Path(configured_path)
+    if path.is_file() and path.name.lower() in ("codex.exe", "codex desktop.exe"):
+        return path
+    if not path.is_dir():
+        return None
+    for candidate_dir in (path, path / "current", path / "app", path / "Application"):
+        for file_name in ("Codex.exe", "Codex Desktop.exe"):
+            candidate = candidate_dir / file_name
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def _build_app_launch_spec(codex_path):
+    """把桌面程序路径转换为启动说明，微软商店版改走应用标识。"""
+    path = Path(codex_path)
+    if _is_windows_store_codex_path(path):
+        store_app_id = _find_windows_store_codex_app_id()
+        if store_app_id:
+            return {
+                "kind": "store",
+                "command": ["explorer.exe", f"shell:AppsFolder\\{store_app_id}"],
+                "display": str(path),
+            }
+    return {
+        "kind": "app",
+        "command": [str(path)],
+        "display": str(path),
+        "cwd": str(path.parent),
+    }
+
+
+def _is_windows_store_codex_path(path):
+    """判断路径是否指向微软商店版 Codex 安装目录。"""
+    normalized = normalize_path_for_match(path)
+    return "\\windowsapps\\openai.codex_" in normalized or "/windowsapps/openai.codex_" in normalized
+
+
+def _find_windows_store_codex_app_id():
+    """读取微软商店版 Codex 的应用启动标识。"""
+    if os.name != "nt":
+        return ""
+    script = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$pattern = '^OpenAI\.Codex_[^!]+![^!]+$'
+$matches = @()
+$matches += Get-StartApps | Where-Object { $_.AppID -match $pattern } | Select-Object -ExpandProperty AppID
+$pkg = Get-AppxPackage -Name 'OpenAI.Codex' | Select-Object -First 1
+if ($null -ne $pkg) {
+  $manifest = $pkg | Get-AppxPackageManifest
+  foreach ($app in @($manifest.Package.Applications.Application)) {
+    if ($null -ne $app -and $app.Id) {
+      $matches += ('{0}!{1}' -f $pkg.PackageFamilyName, $app.Id)
+    }
+  }
+}
+$matches | Where-Object { $_ -match $pattern } | Sort-Object @{Expression = { $_ -notmatch '!App$' }}, @{Expression = { $_ }} | Select-Object -First 1
+"""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return next((line.strip() for line in result.stdout.splitlines() if line.strip()), "")
+
+
+def _find_codex_cli_path(configured_path=""):
+    """查找 codex 命令行入口，补充桌面进程常见缺失的路径。"""
+    candidates = []
+    configured = Path(configured_path) if configured_path else None
+    if configured and configured.is_file() and configured.name.lower() in ("codex", "codex.exe", "codex.cmd"):
+        candidates.append(configured)
+    if configured and configured.is_dir():
+        for candidate_dir in (configured, configured / "bin", configured / "resources", configured / "resources" / "bin"):
+            _append_codex_cli_candidates(candidates, candidate_dir)
+
+    found = shutil.which("codex")
+    if found:
+        candidates.append(Path(found))
+
+    for env_name in ("LOCALAPPDATA", "USERPROFILE"):
+        base = os.environ.get(env_name)
+        if not base:
+            continue
+        base_path = Path(base)
+        search_dirs = [
+            base_path / "Microsoft" / "WindowsApps",
+            base_path / "AppData" / "Local" / "Microsoft" / "WindowsApps",
+            base_path / "AppData" / "Local" / "Microsoft" / "WinGet" / "Links",
+        ]
+        for search_dir in search_dirs:
+            _append_codex_cli_candidates(candidates, search_dir)
+
+    seen = set()
+    for candidate in candidates:
+        normalized = normalize_path_for_match(candidate)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _append_codex_cli_candidates(candidates, directory):
+    """追加目录下可能存在的 codex 命令行文件。"""
+    for file_name in ("codex.exe", "codex.cmd", "codex"):
+        candidates.append(Path(directory) / file_name)
+
+
+def _launch_default_codex():
+    """启动默认安装的 Codex 桌面端。"""
+    config = load_config()
+    launch_spec = _resolve_codex_launch_spec(config)
+    command = launch_spec["command"]
+    env = os.environ.copy()
+    path_for_env = launch_spec.get("path_for_env")
+    if path_for_env:
+        parent = str(Path(path_for_env).parent)
+        env["PATH"] = parent + os.pathsep + env.get("PATH", "")
+    try:
+        subprocess.Popen(
+            command,
+            cwd=launch_spec.get("cwd"),
+            env=env,
+            close_fds=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except FileNotFoundError as exc:
+        raise FileNotFoundError("未找到 Codex 程序，请在设置中重新识别或确认 Codex 已安装") from exc
+
+
 def _get_directory_size(directory):
-    """统计账号目录实际占用的文件字节数，跳过链接目录避免循环扫描。"""
+    """统计账号资料目录实际占用的文件字节数，跳过链接目录避免循环扫描。"""
     if not directory.exists():
         return 0
     total_size = 0
@@ -468,100 +604,8 @@ def _format_bytes(size):
         value /= 1024
 
 
-def _get_user_data_dir(config, profile_name):
-    """计算 Codex 网页容器的独立用户数据目录。"""
-    return _get_profile_dir(config, profile_name) / "AppData" / "Roaming" / "Codex" / "web" / "Codex"
-
-
-def _is_profile_running(config, profile_name, running_commands):
-    """用旧逻辑里的环境目录特征判断账号是否运行。"""
-    return any(target in running_commands for target in _get_profile_running_match_targets(config, profile_name))
-
-
-def _get_profile_running_match_targets(config, profile_name):
-    """构造用于识别账号运行进程的命令行路径特征。"""
-    profile_dir = _get_profile_dir(config, profile_name)
-    user_data_dir = profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex"
-    return [
-        normalize_path_for_match(profile_dir),
-        normalize_path_for_match(user_data_dir),
-    ]
-
-
-def _validate_profile_name(config, profile_name, exclude_name=None):
-    """校验账号名称和对应目录是否可用。"""
-    profile_name = str(profile_name or "").strip()
-    if not profile_name:
-        raise ValueError("账号名称不能为空")
-    profiles = config.setdefault("profiles", [])
-    if profile_name in profiles and profile_name != exclude_name:
-        raise ValueError("已存在同名账号")
-    profile_dir = _get_profile_dir(config, profile_name)
-    for existing_name in profiles:
-        if exclude_name is not None and existing_name == exclude_name:
-            continue
-        if _get_profile_dir(config, existing_name).resolve() == profile_dir.resolve():
-            raise ValueError(f"该名称对应的数据目录已被“{existing_name}”使用")
-    if exclude_name is None and profile_dir.exists():
-        raise FileExistsError("该名称对应的数据目录已存在")
-    return profile_name
-
-
-def _require_codex_path(config):
-    """读取可用 Codex 路径，缺失时自动识别一次。"""
-    codex_path = config.get("codex_path", "")
-    if codex_path and Path(codex_path).exists():
-        return codex_path
-    codex_path = find_windowsapps_codex_path() or find_running_codex_path()
-    if not codex_path:
-        raise FileNotFoundError("未找到微软商店版 Codex")
-    config["codex_path"] = codex_path
-    save_config(config)
-    return codex_path
-
-
-def _get_profile_health(config, profile_name, running_commands):
-    """检查账号目录、程序副本、配置目录和版本状态。"""
-    codex_path = config.get("codex_path", "")
-    profile_dir = _get_profile_dir(config, profile_name)
-    codex_home_dir = profile_dir / "CodexHome"
-    target_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
-    target_codex_path = target_app_dir / "Codex.exe"
-    errors = []
-    warnings = []
-    if not profile_dir.exists():
-        errors.append("账号目录不存在")
-    elif not check_directory_writable(profile_dir):
-        errors.append("账号目录不可写")
-    if DEFAULT_CODEX_ENV_PATH.exists() and not (codex_home_dir / ".env").exists():
-        warnings.append(".env 尚未同步")
-    if codex_path and Path(codex_path).exists() and target_codex_path.exists():
-        try:
-            if portable_app_needs_update(codex_path, target_app_dir):
-                warnings.append("程序副本需同步新版")
-        except Exception:
-            warnings.append("程序副本版本状态无法读取")
-    if not target_codex_path.exists():
-        warnings.append("程序副本不存在")
-    return {
-        "running": _is_profile_running(config, profile_name, running_commands),
-        "errors": errors,
-        "warnings": warnings,
-    }
-
-
-def _cleanup_profile_root_before_move(profile_root):
-    """迁移前清理可丢弃临时目录，降低跨盘复制失败概率。"""
-    if not profile_root.exists():
-        return
-    for profile_dir in profile_root.iterdir():
-        temp_dir = profile_dir / "CodexHome" / ".tmp"
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir, onerror=remove_readonly_path)
-
-
 def _copy_directory(source_dir, target_dir):
-    """复制账号根目录，跳过 junction 等特殊目录。"""
+    """复制账号资料根目录，跳过 junction 等特殊目录。"""
     target_dir.mkdir(parents=True, exist_ok=True)
     for root, dirs, files in os.walk(source_dir):
         root_path = Path(root)
@@ -585,4 +629,3 @@ def _copy_directory(source_dir, target_dir):
             shutil.copystat(root_path, target_root)
         except OSError:
             pass
-

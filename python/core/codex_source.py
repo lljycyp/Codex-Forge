@@ -1,4 +1,3 @@
-﻿import json
 import os
 import shutil
 import subprocess
@@ -7,8 +6,7 @@ import ctypes
 import ctypes.wintypes
 from pathlib import Path
 
-from core.constants import PORTABLE_APP_DIR_NAME, SOURCE_VERSION_FILE_NAME
-from core.path_utils import normalize_path_for_match, paths_equal
+from core.path_utils import normalize_path_for_match
 
 
 def read_running_codex_commands():
@@ -228,56 +226,3 @@ def read_windows_file_version(path):
             info.dwFileVersionLS & 0xFFFF,
         )
     )
-
-
-def read_source_signature(target_app_dir):
-    """读取账号程序副本记录的源程序版本信息。"""
-    version_path = target_app_dir / SOURCE_VERSION_FILE_NAME
-    if not version_path.exists():
-        return {}
-    try:
-        return json.loads(version_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def write_source_signature(target_app_dir, signature):
-    """写入账号程序副本对应的源程序版本信息。"""
-    version_path = target_app_dir / SOURCE_VERSION_FILE_NAME
-    version_path.write_text(json.dumps(signature, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def portable_app_needs_update(source_codex_path, target_app_dir):
-    """判断账号程序副本是否缺失或落后于微软商店版。"""
-    target_codex_path = target_app_dir / "Codex.exe"
-    if not target_codex_path.exists():
-        return True
-    current_signature = get_source_signature(source_codex_path)
-    saved_signature = read_source_signature(target_app_dir)
-    if not saved_signature:
-        return True
-    return any(
-        saved_signature.get(key) != current_signature.get(key)
-        for key in ("source_path", "file_version", "size", "modified_ns")
-    )
-
-
-def prepare_portable_codex_path(source_codex_path, profile_dir, allow_update=True):
-    """为账号准备独立 Codex 程序副本，并在源程序更新时同步。"""
-    source_app_dir = Path(source_codex_path).parent
-    target_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
-    target_codex_path = target_app_dir / "Codex.exe"
-    if paths_equal(source_app_dir, target_app_dir):
-        return str(Path(source_codex_path))
-    if target_codex_path.exists() and not portable_app_needs_update(source_codex_path, target_app_dir):
-        return str(target_codex_path)
-    if target_codex_path.exists() and not allow_update:
-        return str(target_codex_path)
-
-    if target_app_dir.exists():
-        shutil.rmtree(target_app_dir)
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source_app_dir, target_app_dir, dirs_exist_ok=True)
-    write_source_signature(target_app_dir, get_source_signature(source_codex_path))
-    return str(target_codex_path)
-

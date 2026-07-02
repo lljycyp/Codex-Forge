@@ -8,7 +8,6 @@ from core.constants import (
     CONFIG_PATH,
     CONFIG_PREVIOUS_GOOD_PATH,
     DEFAULT_PROFILE_ROOT,
-    DEFAULT_SESSION_SYNC_ROOT,
 )
 
 
@@ -36,13 +35,9 @@ def load_config():
 def default_config():
     """生成默认配置，首次进入不预置任何账号。"""
     return {
-        "codex_path": "",
         "profile_root": str(DEFAULT_PROFILE_ROOT),
         "profiles": [],
-        "imported_original_profile": "",
-        "session_sync_enabled": False,
-        "session_sync_root": str(DEFAULT_SESSION_SYNC_ROOT),
-        "memory_sync_enabled": False,
+        "active_profile": "",
     }
 
 

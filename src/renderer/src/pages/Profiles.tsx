@@ -23,6 +23,7 @@ import type { ProfileSummary, ProfileUsageWindow, RunCommand } from "../types";
 
 type ProfilesProps = {
   profiles: ProfileSummary[];
+  runningCount: number;
   runCommand: RunCommand;
   loading: boolean;
 };
@@ -36,12 +37,15 @@ const profilePillBaseClass =
 const iconActionButtonClass =
   "flex items-center justify-center text-slate-500 hover:!text-brand-600";
 
-export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
+export function Profiles({ profiles, runningCount, runCommand, loading }: ProfilesProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ProfileSummary | null>(null);
   const [pendingProfileNames, setPendingProfileNames] = useState<Set<string>>(
     () => new Set(),
   );
+  const [pendingProfileTexts, setPendingProfileTexts] = useState<
+    Map<string, string>
+  >(() => new Map());
   const [pendingUsageProfileNames, setPendingUsageProfileNames] = useState<
     Set<string>
   >(() => new Set());
@@ -58,7 +62,7 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
   const confirmDelete = (profile: ProfileSummary) => {
     Modal.confirm({
       title: "删除账号",
-      content: `确认删除「${profile.name}」？该账号目录也会被删除。`,
+      content: `确认删除「${profile.name}」？该账号资料目录也会被删除。`,
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
@@ -67,13 +71,32 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
     });
   };
 
-  const toggleProfileRunning = async (profile: ProfileSummary) => {
+  const executeProfileToggle = async (
+    profile: ProfileSummary,
+    stopRunningFirst = false,
+  ) => {
+    const hasRunningCodex = runningCount > 0;
+    const pendingText = profile.running
+      ? "停止中"
+      : hasRunningCodex
+        ? "切换中"
+        : "启动中";
+
     setPendingProfileNames((current) => new Set(current).add(profile.name));
+    setPendingProfileTexts((current) => {
+      const next = new Map(current);
+      next.set(profile.name, pendingText);
+      return next;
+    });
     try {
       await runCommand(
         profile.running ? "stop_profile" : "launch_profile",
-        { name: profile.name },
-        profile.running ? "已停止账号" : "已启动账号",
+        { name: profile.name, stopRunningFirst },
+        profile.running
+          ? "已关闭 Codex"
+          : hasRunningCodex
+            ? "已切换并启动"
+            : "已启动",
         { blocking: false },
       );
     } finally {
@@ -82,7 +105,27 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
         next.delete(profile.name);
         return next;
       });
+      setPendingProfileTexts((current) => {
+        const next = new Map(current);
+        next.delete(profile.name);
+        return next;
+      });
     }
+  };
+
+  const toggleProfileRunning = (profile: ProfileSummary) => {
+    if (profile.running || runningCount === 0) {
+      void executeProfileToggle(profile);
+      return;
+    }
+
+    Modal.confirm({
+      title: "确认切换账号",
+      content: `检测到 Codex 正在运行。确认关闭当前 Codex，并切换启动「${profile.name}」？`,
+      okText: "关闭并启动",
+      cancelText: "取消",
+      onOk: () => executeProfileToggle(profile, true),
+    });
   };
 
   const refreshAllUsage = async () => {
@@ -117,194 +160,226 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
     }
   };
 
+  const accountHealth = profiles.reduce(
+    (summary, profile) => {
+      if (isHealthyProfile(profile)) {
+        summary.healthy += 1;
+      } else {
+        summary.abnormal += 1;
+      }
+      return summary;
+    },
+    { total: profiles.length, healthy: 0, abnormal: 0 },
+  );
+
   return (
-    <div className="overflow-hidden rounded-panel border border-shell-line bg-white shadow-[0_10px_28px_rgba(15,23,42,0.045)]">
-      <div className="flex items-center justify-between gap-4 border-b border-[#ecf1f6] bg-white px-5 py-4 max-[960px]:items-start max-[960px]:flex-col">
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-2xl font-extrabold leading-none text-gray-900">
-            {profiles.length}
-          </span>
-          <span className="text-sm font-medium text-slate-500">个账号</span>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2.5 max-[960px]:w-full max-[960px]:justify-start">
-          <Button
-            icon={<RefreshCw size={15} />}
-            loading={refreshingAllUsage}
-            disabled={pendingUsageProfileNames.size > 0}
-            onClick={refreshAllUsage}
-          >
-            刷新额度
-          </Button>
-          <Button
-            type="primary"
-            icon={<Plus size={15} />}
-            onClick={() => setCreateOpen(true)}
-          >
-            新增账号
-          </Button>
-        </div>
+    <div className="grid gap-4">
+      <div className="grid grid-cols-3 gap-3 max-[960px]:grid-cols-1">
+        <StatusTile label="账号总数量" value={accountHealth.total} tone="blue" />
+        <StatusTile label="健康账号数量" value={accountHealth.healthy} tone="green" />
+        <StatusTile
+          label="异常账号数量"
+          value={accountHealth.abnormal}
+          tone={accountHealth.abnormal > 0 ? "red" : "green"}
+        />
       </div>
 
-      <div className="relative">
-        {loading && profiles.length === 0 ? (
-          <div className="flex min-h-[220px] items-center justify-center px-6 py-8">
-            <Spin />
+      <div className="overflow-hidden rounded-panel border border-shell-line bg-white shadow-[0_10px_28px_rgba(15,23,42,0.045)]">
+        <div className="flex items-center justify-between gap-4 border-b border-[#ecf1f6] bg-white px-5 py-4 max-[960px]:items-start max-[960px]:flex-col">
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-2xl font-extrabold leading-none text-gray-900">
+              {profiles.length}
+            </span>
+            <span className="text-sm font-medium text-slate-500">个账号</span>
           </div>
-        ) : profiles.length ? (
-          profiles.map((profile) => (
-            <div
-              key={profile.name}
-              className={
-                profile.running
-                  ? `${profileRowBaseClass} bg-green-50/40 hover:bg-green-50/60`
-                  : profileRowBaseClass
-              }
+          <div className="flex flex-wrap items-center justify-end gap-2.5 max-[960px]:w-full max-[960px]:justify-start">
+            <Button
+              icon={<RefreshCw size={15} />}
+              loading={refreshingAllUsage}
+              disabled={pendingUsageProfileNames.size > 0}
+              onClick={refreshAllUsage}
             >
-              <div
-                className={
-                  profile.running
-                    ? "self-stretch rounded-full bg-green-500 basis-[3px] shrink-0"
-                    : "self-stretch rounded-full bg-[#ecf1f6] basis-[3px] shrink-0"
-                }
-                aria-hidden
-              />
-              <div className="min-w-0 flex-auto">
-                <div className="mb-1.5 flex flex-wrap items-center gap-2.5">
-                  <span className="text-[15px] font-bold leading-snug text-gray-900">
-                    {profile.name}
-                  </span>
-                  <span
-                    className={
-                      profile.running
-                        ? `${profilePillBaseClass} border-green-200 bg-green-50 text-green-600`
-                        : `${profilePillBaseClass} border-slate-200 bg-slate-50 text-slate-500`
-                    }
-                  >
-                    {profile.running ? "运行中" : "就绪"}
-                  </span>
-                  <span
-                    className={
-                      profile.portableCodexExists
-                        ? `${profilePillBaseClass} border-emerald-200 bg-emerald-50 text-emerald-600`
-                        : `${profilePillBaseClass} border-amber-200 bg-amber-50 text-amber-600`
-                    }
-                  >
-                    {profile.portableCodexExists ? "副本已准备" : "副本未准备"}
-                  </span>
-                </div>
-                <Tooltip title={profile.profileDir} placement="topLeft">
-                  <div className="truncate font-mono text-xs leading-normal text-slate-400">
-                    {profile.profileDir}
-                  </div>
-                </Tooltip>
-                <div className="mt-3 grid max-w-[520px] grid-cols-[max-content_minmax(108px,0.22fr)_minmax(108px,0.22fr)] items-center gap-3 max-[960px]:max-w-none max-[960px]:grid-cols-1">
-                  <span className="inline-flex h-6 w-fit items-center justify-center justify-self-start whitespace-nowrap rounded-[6px] border border-blue-200 bg-blue-50 px-2 text-[11.5px] font-bold text-blue-600">
-                    {formatPlanType(profile.usage?.planType)}
-                  </span>
-                  {profile.usage?.error ? (
-                    <Tooltip title={profile.usage.error}>
-                      <span className="col-span-2 min-w-0 truncate text-[11.5px] text-red-500 max-[960px]:col-auto">
-                        {profile.usage.error}
-                      </span>
-                    </Tooltip>
-                  ) : (
-                    <>
-                      <UsageMeter
-                        label="五小时"
-                        window={profile.usage?.fiveHour ?? null}
-                      />
-                      <UsageMeter
-                        label="一周"
-                        window={profile.usage?.oneWeek ?? null}
-                      />
-                    </>
-                  )}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center max-[960px]:items-end max-[960px]:flex-col">
-                <Space.Compact>
-                  {(() => {
-                    const isPending = pendingProfileNames.has(profile.name);
+              刷新额度
+            </Button>
+            <Button
+              type="primary"
+              icon={<Plus size={15} />}
+              onClick={() => setCreateOpen(true)}
+            >
+              新增账号
+            </Button>
+          </div>
+        </div>
 
-                    return (
+        <div className="relative">
+          {loading && profiles.length === 0 ? (
+            <div className="flex min-h-[220px] items-center justify-center px-6 py-8">
+              <Spin />
+            </div>
+          ) : profiles.length ? (
+            profiles.map((profile) => (
+              <div
+                key={profile.name}
+                className={
+                  profile.active
+                    ? `${profileRowBaseClass} bg-green-50/40 hover:bg-green-50/60`
+                    : profileRowBaseClass
+                }
+              >
+                <div
+                  className={
+                    profile.active
+                      ? "self-stretch rounded-full bg-green-500 basis-[3px] shrink-0"
+                      : "self-stretch rounded-full bg-[#ecf1f6] basis-[3px] shrink-0"
+                  }
+                  aria-hidden
+                />
+                <div className="min-w-0 flex-auto">
+                  <div className="mb-1.5 flex flex-wrap items-center gap-2.5">
+                    <span className="text-[15px] font-bold leading-snug text-gray-900">
+                      {profile.name}
+                    </span>
+                    <span
+                      className={
+                        profile.running
+                          ? `${profilePillBaseClass} border-green-200 bg-green-50 text-green-600`
+                          : `${profilePillBaseClass} border-slate-200 bg-slate-50 text-slate-500`
+                      }
+                    >
+                      {profile.running ? "运行中" : "就绪"}
+                    </span>
+                    <span
+                      className={
+                        profile.authExists
+                          ? `${profilePillBaseClass} border-emerald-200 bg-emerald-50 text-emerald-600`
+                          : `${profilePillBaseClass} border-amber-200 bg-amber-50 text-amber-600`
+                      }
+                    >
+                      {profile.authExists ? "认证已保存" : "认证缺失"}
+                    </span>
+                    {profile.active ? (
+                      <span className={`${profilePillBaseClass} border-blue-200 bg-blue-50 text-blue-600`}>
+                        当前账号
+                      </span>
+                    ) : null}
+                  </div>
+                  <Tooltip title={profile.profileDir} placement="topLeft">
+                    <div className="truncate font-mono text-xs leading-normal text-slate-400">
+                      {profile.profileDir}
+                    </div>
+                  </Tooltip>
+                  <div className="mt-3 grid max-w-[520px] grid-cols-[max-content_minmax(108px,0.22fr)_minmax(108px,0.22fr)] items-center gap-3 max-[960px]:max-w-none max-[960px]:grid-cols-1">
+                    <span className="inline-flex h-6 w-fit items-center justify-center justify-self-start whitespace-nowrap rounded-[6px] border border-blue-200 bg-blue-50 px-2 text-[11.5px] font-bold text-blue-600">
+                      {formatPlanType(profile.usage?.planType)}
+                    </span>
+                    {profile.usage?.error ? (
+                      <Tooltip title={profile.usage.error}>
+                        <span className="col-span-2 min-w-0 truncate text-[11.5px] text-red-500 max-[960px]:col-auto">
+                          {profile.usage.error}
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <>
+                        <UsageMeter
+                          label="五小时"
+                          window={profile.usage?.fiveHour ?? null}
+                        />
+                        <UsageMeter
+                          label="一周"
+                          window={profile.usage?.oneWeek ?? null}
+                        />
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center max-[960px]:items-end max-[960px]:flex-col">
+                  <Space.Compact>
+                    {(() => {
+                      const isPending = pendingProfileNames.has(profile.name);
+                      const pendingText = pendingProfileTexts.get(profile.name);
+                      const launchText = getProfileLaunchText(
+                        profile,
+                        runningCount,
+                      );
+
+                      return (
+                        <Button
+                          type="primary"
+                          danger={profile.running}
+                          icon={
+                            profile.running ? (
+                              <Square size={14} />
+                            ) : (
+                              <Play size={14} />
+                            )
+                          }
+                          loading={isPending}
+                          disabled={isPending}
+                          onClick={() => toggleProfileRunning(profile)}
+                        >
+                          {isPending
+                            ? pendingText ?? "处理中"
+                            : profile.running
+                              ? "关闭"
+                              : launchText}
+                        </Button>
+                      );
+                    })()}
+                    <Tooltip title="刷新额度">
                       <Button
-                        type="primary"
-                        danger={profile.running}
-                        icon={
-                          profile.running ? (
-                            <Square size={14} />
-                          ) : (
-                            <Play size={14} />
+                        className={iconActionButtonClass}
+                        icon={<RefreshCw size={14} />}
+                        loading={pendingUsageProfileNames.has(profile.name)}
+                        disabled={refreshingAllUsage}
+                        onClick={() => refreshProfileUsage(profile)}
+                      />
+                    </Tooltip>
+                    <Tooltip title="改名">
+                      <Button
+                        className={iconActionButtonClass}
+                        icon={<UserPen size={14} />}
+                        onClick={() => setRenameTarget(profile)}
+                      />
+                    </Tooltip>
+                    <Tooltip title="打开目录">
+                      <Button
+                        className={iconActionButtonClass}
+                        icon={<FolderOpen size={14} />}
+                        onClick={() =>
+                          runCommand(
+                            "open_path",
+                            { path: profile.profileDir },
+                            "已打开目录",
+                            { blocking: false, refreshAfter: false },
                           )
                         }
-                        loading={isPending}
-                        disabled={isPending}
-                        onClick={() => toggleProfileRunning(profile)}
-                      >
-                        {isPending
-                          ? profile.running
-                            ? "停止中"
-                            : "启动中"
-                          : profile.running
-                            ? "停止"
-                            : "启动"}
-                      </Button>
-                    );
-                  })()}
-                  <Tooltip title="刷新额度">
-                    <Button
-                      className={iconActionButtonClass}
-                      icon={<RefreshCw size={14} />}
-                      loading={pendingUsageProfileNames.has(profile.name)}
-                      disabled={refreshingAllUsage}
-                      onClick={() => refreshProfileUsage(profile)}
-                    />
-                  </Tooltip>
-                  <Tooltip title="改名">
-                    <Button
-                      className={iconActionButtonClass}
-                      icon={<UserPen size={14} />}
-                      onClick={() => setRenameTarget(profile)}
-                    />
-                  </Tooltip>
-                  <Tooltip title="打开目录">
-                    <Button
-                      className={iconActionButtonClass}
-                      icon={<FolderOpen size={14} />}
-                      onClick={() =>
-                        runCommand(
-                          "open_path",
-                          { path: profile.profileDir },
-                          "已打开目录",
-                          { blocking: false, refreshAfter: false },
-                        )
-                      }
-                    />
-                  </Tooltip>
-                  <Tooltip title="删除">
-                    <Button
-                      className={`${iconActionButtonClass} !text-red-500 hover:!bg-red-50 hover:!text-red-600 hover:!border-red-200`}
-                      icon={<Trash2 size={14} />}
-                      onClick={() => confirmDelete(profile)}
-                    />
-                  </Tooltip>
-                </Space.Compact>
+                      />
+                    </Tooltip>
+                    <Tooltip title="删除">
+                      <Button
+                        className={`${iconActionButtonClass} !text-red-500 hover:!bg-red-50 hover:!text-red-600 hover:!border-red-200`}
+                        icon={<Trash2 size={14} />}
+                        onClick={() => confirmDelete(profile)}
+                      />
+                    </Tooltip>
+                  </Space.Compact>
+                </div>
               </div>
+            ))
+          ) : (
+            <div className="flex min-h-[220px] items-center justify-center px-6 py-8">
+              <Empty description="暂无账号">
+                <Button
+                  type="primary"
+                  icon={<Plus size={16} />}
+                  onClick={() => setCreateOpen(true)}
+                >
+                  新增第一个账号
+                </Button>
+              </Empty>
             </div>
-          ))
-        ) : (
-          <div className="flex min-h-[220px] items-center justify-center px-6 py-8">
-            <Empty description="暂无账号">
-              <Button
-                type="primary"
-                icon={<Plus size={16} />}
-                onClick={() => setCreateOpen(true)}
-              >
-                新增第一个账号
-              </Button>
-            </Empty>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <Modal
@@ -319,6 +394,10 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
         }}
       >
         <Form form={createForm} layout="vertical">
+          <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
+            新增账号会保存当前默认 Codex 的 <Typography.Text code>auth.json</Typography.Text> 和{" "}
+            <Typography.Text code>config.toml</Typography.Text>。
+          </Typography.Paragraph>
           <Form.Item
             name="name"
             label="账号名称"
@@ -335,12 +414,12 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
         onOk={async () => {
           const values = await renameForm.validateFields();
           const oldName = renameTarget?.name;
-          setRenameTarget(null);
           await runCommand(
             "rename_profile",
             { oldName, newName: values.name },
             "已修改账号名称",
           );
+          setRenameTarget(null);
           renameForm.resetFields();
         }}
       >
@@ -354,6 +433,48 @@ export function Profiles({ profiles, runCommand, loading }: ProfilesProps) {
           </Form.Item>
         </Form>
       </Modal>
+    </div>
+  );
+}
+
+function isHealthyProfile(profile: ProfileSummary) {
+  return profile.profileDirExists && profile.authExists;
+}
+
+function getProfileLaunchText(profile: ProfileSummary, runningCount: number) {
+  if (profile.running) {
+    return "关闭";
+  }
+
+  return runningCount > 0 ? "切换并启动" : "启动";
+}
+
+function StatusTile({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  tone: "blue" | "green" | "amber" | "red";
+}) {
+  const toneClass =
+    tone === "green"
+      ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+      : tone === "red"
+        ? "border-red-100 bg-red-50 text-red-700"
+      : tone === "amber"
+        ? "border-amber-100 bg-amber-50 text-amber-700"
+        : "border-blue-100 bg-blue-50 text-blue-700";
+
+  return (
+    <div className="rounded-card border border-shell-line bg-white px-4 py-3">
+      <span className="block text-[12px] font-semibold text-shell-muted">
+        {label}
+      </span>
+      <strong className={`mt-2 inline-flex min-h-7 items-center rounded-[7px] border px-2.5 text-sm ${toneClass}`}>
+        {value}
+      </strong>
     </div>
   );
 }

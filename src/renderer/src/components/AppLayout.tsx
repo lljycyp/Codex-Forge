@@ -44,8 +44,9 @@ export function AppLayout({
             C
           </div>
           <div className="flex min-w-0 items-baseline gap-2.5 whitespace-nowrap">
-            <span className="text-sm font-extrabold text-white">Codex 多账号启动器</span>
-            <span className="text-xs text-white/80">账号隔离、启动与诊断工作台</span>
+            <span className="text-sm font-extrabold text-white">
+              Codex 多账号启动器
+            </span>
           </div>
         </div>
         <div className="h-full" />
@@ -78,29 +79,15 @@ export function AppLayout({
           width={236}
           className="h-full !min-w-[236px] !max-w-[236px] !basis-[236px] overflow-hidden border-r-0 !bg-transparent px-3.5 pb-3.5 pt-3 max-[960px]:!min-w-[210px] max-[960px]:!max-w-[210px] max-[960px]:!basis-[210px] [&_.ant-layout-sider-children]:grid [&_.ant-layout-sider-children]:h-full [&_.ant-layout-sider-children]:min-h-0 [&_.ant-layout-sider-children]:grid-rows-[1fr_auto] [&_.ant-layout-sider-children]:gap-4"
         >
-          <nav className="grid min-h-0 content-start gap-[22px] pt-1">
-            <div className="grid gap-1.5">
-              <div className="mx-2.5 mb-1.5 text-xs font-extrabold text-white/70">工作区</div>
-              {menuItems.slice(0, 2).map((item) => (
-                <NavButton
-                  key={item.key}
-                  item={item}
-                  active={activeView === item.key}
-                  onChangeView={onChangeView}
-                />
-              ))}
-            </div>
-            <div className="grid gap-1.5">
-              <div className="mx-2.5 mb-1.5 text-xs font-extrabold text-white/70">维护</div>
-              {menuItems.slice(2).map((item) => (
-                <NavButton
-                  key={item.key}
-                  item={item}
-                  active={activeView === item.key}
-                  onChangeView={onChangeView}
-                />
-              ))}
-            </div>
+          <nav className="grid min-h-0 content-start gap-1.5 pt-1">
+            {menuItems.map((item) => (
+              <NavButton
+                key={item.key}
+                item={item}
+                active={activeView === item.key}
+                onChangeView={onChangeView}
+              />
+            ))}
           </nav>
         </Sider>
         <Layout className="relative mb-3.5 mr-3.5 h-[calc(100%-14px)] min-w-0 overflow-hidden rounded-panel bg-shell-surface shadow-panel">

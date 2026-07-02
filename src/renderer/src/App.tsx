@@ -1,44 +1,39 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Layout, Typography, message } from "antd";
-import { Activity, RefreshCw, Settings, ShieldCheck, Stethoscope } from "lucide-react";
+import { RefreshCw, Settings, ShieldCheck } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
 import { viewMeta } from "./constants/views";
 import { invokeLauncher } from "./api/launcher";
-import { Dashboard } from "./pages/Dashboard";
-import { Diagnostics } from "./pages/Diagnostics";
 import { Profiles } from "./pages/Profiles";
 import { SettingsPage } from "./pages/SettingsPage";
-import type { AppState, DiagnosticsData, ProfileSummary, RunCommand, ViewKey } from "./types";
+import type { AppState, ProfileSummary, RunCommand, ViewKey } from "./types";
 
 const { Content } = Layout;
 
 const emptyState: AppState = {
-  codexPath: "",
-  codexExists: false,
-  codexVersion: "",
+  codexCommandAvailable: false,
+  activeAuthPath: "",
+  activeAuthExists: false,
+  activeConfigPath: "",
+  activeConfigExists: false,
+  activeProfile: "",
   profileRoot: "",
   profileRootExists: false,
   profileCount: 0,
-  runningCount: 0,
-  sessionSyncEnabled: false,
-  sessionSyncRoot: "",
-  memorySyncEnabled: false,
-  memorySyncDatabase: ""
+  runningCount: 0
 };
 
 const refreshDelayCommands = new Set(["launch_profile", "stop_profile"]);
 
 export default function App() {
-  const [activeView, setActiveView] = useState<ViewKey>("dashboard");
+  const [activeView, setActiveView] = useState<ViewKey>("profiles");
   const [appState, setAppState] = useState<AppState>(emptyState);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
-  const [diagnostics, setDiagnostics] = useState<DiagnosticsData | null>(null);
   const [refreshingView, setRefreshingView] = useState<ViewKey | null>(null);
-  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [commandingView, setCommandingView] = useState<ViewKey | null>(null);
   const [taskText, setTaskText] = useState("就绪");
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const activeViewRef = useRef<ViewKey>("dashboard");
+  const activeViewRef = useRef<ViewKey>("profiles");
   const refreshTokenRef = useRef(0);
   const commandTokenRef = useRef(0);
 
@@ -71,19 +66,6 @@ export default function App() {
   useEffect(() => {
     refresh(null);
   }, [refresh]);
-
-  const loadDiagnostics = useCallback(async () => {
-    setDiagnosticsLoading(true);
-    try {
-      const data = await invokeLauncher<DiagnosticsData>("get_diagnostics");
-      setDiagnostics(data);
-      setTaskText("诊断已更新");
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : "诊断失败");
-    } finally {
-      setDiagnosticsLoading(false);
-    }
-  }, []);
 
   const runCommand = useCallback<RunCommand>(
     async (command, payload, successText = "操作完成", options) => {
@@ -120,10 +102,8 @@ export default function App() {
 
   const menuItems = useMemo(
     () => [
-      { key: "dashboard" as const, label: "控制台", icon: <Activity size={18} /> },
       { key: "profiles" as const, label: "账号", icon: <ShieldCheck size={18} /> },
-      { key: "settings" as const, label: "设置", icon: <Settings size={18} /> },
-      { key: "diagnostics" as const, label: "诊断", icon: <Stethoscope size={18} /> }
+      { key: "settings" as const, label: "设置", icon: <Settings size={18} /> }
     ],
     []
   );
@@ -162,7 +142,9 @@ export default function App() {
       menuItems={menuItems}
       taskText={taskText}
       onChangeView={changeView}
-      topbarAction={activeView === "dashboard" ? refreshButton : null}
+      topbarAction={
+        activeView === "profiles" ? refreshButton : null
+      }
     >
       <Content
         ref={contentRef}
@@ -172,17 +154,16 @@ export default function App() {
           <Typography.Title level={3}>{currentView.title}</Typography.Title>
           <Typography.Text type="secondary">{currentView.description}</Typography.Text>
         </div>
-        {activeView === "dashboard" ? (
-          <Dashboard appState={appState} profiles={profiles} runCommand={runCommand} />
-        ) : null}
         {activeView === "profiles" ? (
-          <Profiles profiles={profiles} runCommand={runCommand} loading={commandingView === "profiles"} />
+          <Profiles
+            profiles={profiles}
+            runningCount={appState.runningCount}
+            runCommand={runCommand}
+            loading={commandingView === "profiles"}
+          />
         ) : null}
         {activeView === "settings" ? (
           <SettingsPage appState={appState} runCommand={runCommand} />
-        ) : null}
-        {activeView === "diagnostics" ? (
-          <Diagnostics diagnostics={diagnostics} loadDiagnostics={loadDiagnostics} loading={diagnosticsLoading} />
         ) : null}
       </Content>
     </AppLayout>

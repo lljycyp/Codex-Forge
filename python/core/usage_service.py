@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from core.constants import USAGE_CACHE_PATH
+from core.profile_service import resolve_profile_auth_path
 
 
 USAGE_URLS = (
@@ -89,9 +90,9 @@ def remove_cached_usage(profile_name):
 
 def _build_profile_usage(profile_dir):
     """读取账号授权并拉取额度接口。"""
-    auth_path = Path(profile_dir) / "CodexHome" / "auth.json"
+    auth_path = resolve_profile_auth_path(Path(profile_dir))
     if not auth_path.exists():
-        return _usage_error("未找到登录信息，请先启动该账号并完成登录")
+        return _usage_error("未找到登录信息，请先保存当前账号资料")
 
     try:
         auth_json = json.loads(auth_path.read_text(encoding="utf-8"))
