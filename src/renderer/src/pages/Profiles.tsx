@@ -5,6 +5,7 @@ import {
   Form,
   Input,
   Modal,
+  Radio,
   Space,
   Spin,
   Tooltip,
@@ -39,6 +40,7 @@ const iconActionButtonClass =
 
 export function Profiles({ profiles, runningCount, runCommand, loading }: ProfilesProps) {
   const [createOpen, setCreateOpen] = useState(false);
+  const [createMode, setCreateMode] = useState<"oauth" | "current">("oauth");
   const [renameTarget, setRenameTarget] = useState<ProfileSummary | null>(null);
   const [pendingProfileNames, setPendingProfileNames] = useState<Set<string>>(
     () => new Set(),
@@ -248,15 +250,11 @@ export function Profiles({ profiles, runningCount, runCommand, loading }: Profil
                     >
                       {profile.running ? "运行中" : "就绪"}
                     </span>
-                    <span
-                      className={
-                        profile.authExists
-                          ? `${profilePillBaseClass} border-emerald-200 bg-emerald-50 text-emerald-600`
-                          : `${profilePillBaseClass} border-amber-200 bg-amber-50 text-amber-600`
-                      }
-                    >
-                      {profile.authExists ? "认证已保存" : "认证缺失"}
-                    </span>
+                    {!profile.authExists ? (
+                      <span className={`${profilePillBaseClass} border-amber-200 bg-amber-50 text-amber-600`}>
+                        认证缺失
+                      </span>
+                    ) : null}
                     {profile.active ? (
                       <span className={`${profilePillBaseClass} border-blue-200 bg-blue-50 text-blue-600`}>
                         当前账号
@@ -338,6 +336,7 @@ export function Profiles({ profiles, runningCount, runCommand, loading }: Profil
                       <Button
                         className={iconActionButtonClass}
                         icon={<UserPen size={14} />}
+                        disabled={profile.running}
                         onClick={() => setRenameTarget(profile)}
                       />
                     </Tooltip>
@@ -389,15 +388,38 @@ export function Profiles({ profiles, runningCount, runCommand, loading }: Profil
         onOk={async () => {
           const values = await createForm.validateFields();
           setCreateOpen(false);
-          await runCommand("create_profile", values, "已新增账号");
+          const command =
+            createMode === "oauth" ? "create_oauth_profile" : "create_profile";
+          await runCommand(
+            command,
+            values,
+            createMode === "oauth" ? "浏览器授权账号已新增" : "当前账号已导入",
+          );
           createForm.resetFields();
+          setCreateMode("oauth");
         }}
+        okText={createMode === "oauth" ? "打开浏览器授权" : "导入当前账号"}
       >
         <Form form={createForm} layout="vertical">
-          <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
-            新增账号会保存当前默认 Codex 的 <Typography.Text code>auth.json</Typography.Text> 和{" "}
-            <Typography.Text code>config.toml</Typography.Text>。
-          </Typography.Paragraph>
+          <Form.Item label="新增方式">
+            <Radio.Group
+              value={createMode}
+              onChange={(event) => setCreateMode(event.target.value)}
+            >
+              <Radio.Button value="oauth">浏览器授权</Radio.Button>
+              <Radio.Button value="current">导入当前账号</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+          {createMode === "oauth" ? (
+            <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
+              将打开浏览器完成 OpenAI（开放式人工智能公司）授权，授权结果只保存到新账号资料目录，不会覆盖当前默认 Codex 账号。
+            </Typography.Paragraph>
+          ) : (
+            <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
+              将保存当前默认 Codex 的 <Typography.Text code>auth.json</Typography.Text> 和{" "}
+              <Typography.Text code>config.toml</Typography.Text>。
+            </Typography.Paragraph>
+          )}
           <Form.Item
             name="name"
             label="账号名称"

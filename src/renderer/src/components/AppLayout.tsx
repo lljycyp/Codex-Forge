@@ -45,7 +45,7 @@ export function AppLayout({
           </div>
           <div className="flex min-w-0 items-baseline gap-2.5 whitespace-nowrap">
             <span className="text-sm font-extrabold text-white">
-              Codex 多账号启动器
+              Codex 多账号切换器
             </span>
           </div>
         </div>

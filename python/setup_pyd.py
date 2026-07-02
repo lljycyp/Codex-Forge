@@ -8,9 +8,11 @@ PYTHON_DIR = Path(__file__).resolve().parent
 PROTECTED_MODULES = [
     "bridge.cli",
     "bridge.commands",
+    "core.auth_service",
     "core.codex_source",
     "core.config_store",
     "core.constants",
+    "core.oauth_service",
     "core.path_utils",
     "core.profile_service",
 ]

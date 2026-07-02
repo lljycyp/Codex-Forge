@@ -12,6 +12,7 @@ from core.codex_source import (
 )
 from core.config_store import load_config, save_config
 from core.constants import CONFIG_LAST_GOOD_PATH, CONFIG_PATH, CONFIG_PREVIOUS_GOOD_PATH, DEFAULT_PROFILE_ROOT
+from core.oauth_service import login_with_browser
 from core.path_utils import check_directory_writable, format_health_status, is_reparse_point, normalize_path_for_match, remove_readonly_path, sanitize_profile_name
 from core.profile_service import (
     apply_profile,
@@ -19,6 +20,7 @@ from core.profile_service import (
     get_active_codex_dir,
     get_active_config_path,
     get_profile_status,
+    import_auth_json_profile,
     import_active_profile,
 )
 from core.usage_service import (
@@ -45,6 +47,7 @@ def invoke(command, payload=None):
     payload = payload or {}
     commands = {
         "create_profile": create_profile,
+        "create_oauth_profile": create_oauth_profile,
         "delete_profile": delete_profile,
         "get_app_state": get_app_state,
         "get_diagnostics": get_diagnostics,
@@ -112,6 +115,19 @@ def create_profile(payload):
     return _build_profile_summary(config, name, read_running_codex_commands())
 
 
+def create_oauth_profile(payload):
+    """通过浏览器授权新增账号，不覆盖当前默认 Codex 账号资料。"""
+    config = load_config()
+    name = _validate_profile_name(config, payload.get("name", ""))
+    auth_json = login_with_browser()
+    profile_dir = _get_profile_dir(config, name)
+    import_auth_json_profile(profile_dir, auth_json)
+    profiles = config.setdefault("profiles", [])
+    profiles.append(name)
+    save_config(config)
+    return _build_profile_summary(config, name, read_running_codex_commands())
+
+
 def rename_profile(payload):
     """修改账号名称，并移动对应资料目录。"""
     old_name = payload.get("oldName", "")
@@ -119,14 +135,14 @@ def rename_profile(payload):
     if old_name not in config.get("profiles", []):
         raise ValueError("账号不存在")
     new_name = _validate_profile_name(config, payload.get("newName", ""), exclude_name=old_name)
-    if _running_codex_count() > 0:
-        raise RuntimeError("Codex 正在运行，请先关闭后再改名")
+    if _is_profile_running(config, old_name):
+        raise RuntimeError("该账号正在运行，请先关闭后再改名")
     old_dir = _get_profile_dir(config, old_name)
     new_dir = _get_profile_dir(config, new_name)
     if old_dir.exists() and old_dir != new_dir:
         if new_dir.exists():
             raise FileExistsError("目标账号资料目录已存在，请换一个账号名称")
-        old_dir.rename(new_dir)
+        _move_profile_dir(config, old_dir, new_dir)
     profiles = config.setdefault("profiles", [])
     profiles[profiles.index(old_name)] = new_name
     if config.get("active_profile") == old_name:
@@ -347,6 +363,37 @@ def _get_profile_dir(config, profile_name):
     return profile_root / sanitize_profile_name(profile_name)
 
 
+def _move_profile_dir(config, old_dir, new_dir):
+    """移动账号目录；目录被短暂占用时，改用复制后清理的方式完成改名。"""
+    try:
+        old_dir.rename(new_dir)
+        return
+    except PermissionError as exc:
+        try:
+            shutil.copytree(old_dir, new_dir, copy_function=shutil.copy2)
+        except Exception as copy_exc:
+            _remove_path_if_inside_profile_root(config, new_dir)
+            raise RuntimeError("账号资料目录被占用，改名失败；请关闭相关窗口后重试") from copy_exc
+        try:
+            shutil.rmtree(old_dir, onerror=remove_readonly_path)
+        except OSError:
+            # 新目录已复制成功，旧目录若仍被系统占用则保留为孤立目录，避免改名结果回滚。
+            pass
+        return
+
+
+def _remove_path_if_inside_profile_root(config, path):
+    """仅清理账号根目录内的临时目标，防止异常路径被误删。"""
+    profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT).resolve()
+    target_path = Path(path).resolve()
+    try:
+        target_path.relative_to(profile_root)
+    except ValueError:
+        return
+    if target_path.exists():
+        shutil.rmtree(target_path, onerror=remove_readonly_path)
+
+
 def _validate_profile_name(config, profile_name, exclude_name=None):
     """校验账号名称和对应目录是否可用。"""
     profile_name = str(profile_name or "").strip()
@@ -371,10 +418,15 @@ def _get_profile_health(config, profile_name):
     profile_dir = _get_profile_dir(config, profile_name)
     status = get_profile_status(profile_dir)
     return {
-        "running": profile_name == config.get("active_profile", "") and _running_codex_count() > 0,
+        "running": _is_profile_running(config, profile_name),
         "errors": status["errors"],
         "warnings": status["warnings"],
     }
+
+
+def _is_profile_running(config, profile_name):
+    """判断指定账号是否为当前正在运行的账号。"""
+    return profile_name == config.get("active_profile", "") and _running_codex_count() > 0
 
 
 def _running_codex_count():

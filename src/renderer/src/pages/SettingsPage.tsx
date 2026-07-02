@@ -1,6 +1,6 @@
-import { useEffect } from "react";
-import { Button, Form, Input, Modal, Space } from "antd";
-import { FolderOpen, HardDrive } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Button, Form, Input, message, Modal, Space, Switch } from "antd";
+import { FolderOpen, HardDrive, Power } from "lucide-react";
 import type { AppState, RunCommand } from "../types";
 
 type SettingsPageProps = {
@@ -10,12 +10,58 @@ type SettingsPageProps = {
 
 export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
   const [form] = Form.useForm();
+  const [autoStartEnabled, setAutoStartEnabled] = useState(false);
+  const [autoStartLoading, setAutoStartLoading] = useState(false);
 
   useEffect(() => {
     form.setFieldsValue({
       profileRoot: appState.profileRoot,
     });
   }, [appState, form]);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadAutoStartEnabled = async () => {
+      if (!window.launcherApi.getAutoStartEnabled) {
+        message.warning("请重启启动器后再使用开机自启设置");
+        return;
+      }
+      try {
+        const enabled = await window.launcherApi.getAutoStartEnabled();
+        if (!disposed) {
+          setAutoStartEnabled(enabled);
+        }
+      } catch (error) {
+        if (!disposed) {
+          message.error(error instanceof Error ? error.message : "读取开机自启状态失败");
+        }
+      }
+    };
+    void loadAutoStartEnabled();
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  const changeAutoStartEnabled = async (enabled: boolean) => {
+    if (!window.launcherApi.setAutoStartEnabled) {
+      message.warning("请重启启动器后再使用开机自启设置");
+      return;
+    }
+    const previousValue = autoStartEnabled;
+    setAutoStartEnabled(enabled);
+    setAutoStartLoading(true);
+    try {
+      const savedValue = await window.launcherApi.setAutoStartEnabled(enabled);
+      setAutoStartEnabled(savedValue);
+      message.success(savedValue ? "已开启开机自启" : "已关闭开机自启");
+    } catch (error) {
+      setAutoStartEnabled(previousValue);
+      message.error(error instanceof Error ? error.message : "保存开机自启设置失败");
+    } finally {
+      setAutoStartLoading(false);
+    }
+  };
 
   const chooseProfileRoot = async () => {
     const selectedPath = await window.launcherApi.selectDirectory(
@@ -89,6 +135,31 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
               </Button>
             </Space.Compact>
           </Form.Item>
+        </div>
+
+        <div className="mb-5 mt-8 flex items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded bg-brand-50 text-brand-600">
+            <Power size={16} />
+          </div>
+          <h2 className="m-0 text-lg font-bold leading-none text-slate-800">
+            启动设置
+          </h2>
+        </div>
+
+        <div className="rounded-xl border border-[#e4ebf3] bg-slate-50/50 p-6">
+          <div className="flex items-center justify-between gap-6">
+            <div className="min-w-0">
+              <div className="font-semibold text-slate-700">开机自启</div>
+              <div className="mt-1 text-sm leading-6 text-slate-500">
+                登录 Windows 后自动启动 Codex 多账号切换器。
+              </div>
+            </div>
+            <Switch
+              checked={autoStartEnabled}
+              loading={autoStartLoading}
+              onChange={changeAutoStartEnabled}
+            />
+          </div>
         </div>
       </Form>
     </div>

@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from "electron";
 import { invokeBackend } from "./python/launcherBackend";
 
 export function registerIpcHandlers(): void {
@@ -14,6 +14,16 @@ export function registerIpcHandlers(): void {
     };
     const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
     return result.canceled ? "" : result.filePaths[0] ?? "";
+  });
+  ipcMain.handle("app:get-auto-start-enabled", () => {
+    return app.getLoginItemSettings().openAtLogin;
+  });
+  ipcMain.handle("app:set-auto-start-enabled", (_event, enabled: boolean) => {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      path: process.execPath
+    });
+    return app.getLoginItemSettings().openAtLogin;
   });
   ipcMain.handle("window:minimize", (event) => {
     BrowserWindow.fromWebContents(event.sender)?.minimize();

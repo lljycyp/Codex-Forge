@@ -1,6 +1,8 @@
+import json
 import os
 import shutil
 import time
+import uuid
 from pathlib import Path
 
 
@@ -32,6 +34,29 @@ def import_active_profile(profile_dir):
         shutil.copy2(active_config_path, profile_dir / "config.toml")
     else:
         (profile_dir / "config.toml").write_text("", encoding="utf-8")
+
+
+def import_auth_json_profile(profile_dir, auth_json):
+    """把指定授权内容保存为启动器账号资料，不改动当前默认 Codex。"""
+    active_config_path = get_active_config_path()
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    write_profile_auth_json(profile_dir / "auth.json", auth_json)
+    if active_config_path.exists():
+        shutil.copy2(active_config_path, profile_dir / "config.toml")
+    else:
+        (profile_dir / "config.toml").write_text("", encoding="utf-8")
+
+
+def write_profile_auth_json(auth_path, auth_json):
+    """原子写入账号 auth.json，避免刷新令牌时留下半截文件。"""
+    auth_path = Path(auth_path)
+    auth_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = auth_path.with_name(f".{auth_path.name}.{uuid.uuid4().hex}.tmp")
+    temp_path.write_text(
+        json.dumps(auth_json, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temp_path.replace(auth_path)
 
 
 def migrate_legacy_profile_files(profile_dir):

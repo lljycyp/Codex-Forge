@@ -1,20 +1,34 @@
-import base64
+import contextlib
 import json
+import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from core.auth_service import ensure_fresh_auth, extract_auth
 from core.constants import USAGE_CACHE_PATH
-from core.profile_service import resolve_profile_auth_path
+from core.profile_service import (
+    resolve_profile_auth_path,
+    resolve_profile_config_path,
+    write_profile_auth_json,
+)
 
 
 USAGE_URLS = (
     "https://chatgpt.com/backend-api/wham/usage",
+    "https://chatgpt.com/wham/usage",
     "https://chatgpt.com/api/codex/usage",
 )
 REQUEST_TIMEOUT_SECONDS = 18
+TRANSIENT_RETRY_COUNT = 2
+TRANSIENT_RETRY_DELAY_SECONDS = 1.2
+REFRESH_USAGE_WORKERS_PER_CPU = 2
+DEFAULT_CHATGPT_BASE_URL = "https://chatgpt.com"
+BACKEND_API_PREFIX = "/backend-api"
 
 
 def load_usage_cache():
@@ -28,7 +42,7 @@ def load_usage_cache():
 def save_usage_cache(cache):
     """保存额度缓存，使用临时文件替换以降低写坏风险。"""
     USAGE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = USAGE_CACHE_PATH.with_name(f".{USAGE_CACHE_PATH.name}.tmp")
+    temp_path = USAGE_CACHE_PATH.with_name(f".{USAGE_CACHE_PATH.name}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
     temp_path.replace(USAGE_CACHE_PATH)
 
@@ -41,21 +55,22 @@ def get_cached_profile_usage(profile_name):
 
 def refresh_profile_usage(profile_name, profile_dir):
     """刷新单个账号额度并写入缓存。"""
+    started_at = time.time()
     usage = _build_profile_usage(profile_dir)
-    cache = load_usage_cache()
-    cache[profile_name] = usage
-    save_usage_cache(cache)
-    return usage
+    cache = _merge_usage_results({profile_name: usage}, started_at)
+    return cache.get(profile_name, usage)
 
 
 def refresh_all_profile_usage(profile_dirs):
-    """并发刷新全部账号额度，返回按账号名索引的快照。"""
-    cache = load_usage_cache()
+    """受控并发刷新全部账号额度，返回按账号名索引的快照。"""
+    started_at = time.time()
     if not profile_dirs:
+        cache = load_usage_cache()
         save_usage_cache(cache)
         return {}
 
-    max_workers = min(4, max(1, len(profile_dirs)))
+    results = {}
+    max_workers = _refresh_usage_worker_count(len(profile_dirs))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_by_name = {
             executor.submit(_build_profile_usage, Path(profile_dir)): profile_name
@@ -64,12 +79,26 @@ def refresh_all_profile_usage(profile_dirs):
         for future in as_completed(future_by_name):
             profile_name = future_by_name[future]
             try:
-                cache[profile_name] = future.result()
+                results[profile_name] = future.result()
             except Exception as exc:
-                cache[profile_name] = _usage_error(f"额度读取失败：{exc}")
+                results[profile_name] = _usage_error(f"额度读取失败：{exc}")
 
-    save_usage_cache(cache)
+    cache = _merge_usage_results(results, started_at)
     return {name: cache.get(name) for name in profile_dirs}
+
+
+def _merge_usage_results(results, started_at):
+    """合并刷新结果；避免较早启动的后台刷新覆盖较晚完成的手动刷新。"""
+    with _file_lock(USAGE_CACHE_PATH.with_name(f".{USAGE_CACHE_PATH.name}.lock")):
+        cache = load_usage_cache()
+        for profile_name, usage in results.items():
+            current = cache.get(profile_name)
+            current_fetched_at = current.get("fetchedAt") if isinstance(current, dict) else None
+            if isinstance(current_fetched_at, (int, float)) and current_fetched_at > started_at:
+                continue
+            cache[profile_name] = usage
+        save_usage_cache(cache)
+        return cache
 
 
 def rename_cached_usage(old_name, new_name):
@@ -90,7 +119,8 @@ def remove_cached_usage(profile_name):
 
 def _build_profile_usage(profile_dir):
     """读取账号授权并拉取额度接口。"""
-    auth_path = resolve_profile_auth_path(Path(profile_dir))
+    profile_dir = Path(profile_dir)
+    auth_path = resolve_profile_auth_path(profile_dir)
     if not auth_path.exists():
         return _usage_error("未找到登录信息，请先保存当前账号资料")
 
@@ -100,69 +130,70 @@ def _build_profile_usage(profile_dir):
         return _usage_error(f"登录信息读取失败：{exc}")
 
     try:
-        auth = _extract_auth(auth_json)
+        auth_json, refresh_error = _ensure_profile_auth_fresh(auth_path, auth_json)
+        auth = extract_auth(auth_json)
     except ValueError as exc:
         return _usage_error(str(exc))
+    except Exception as exc:
+        refresh_error = str(exc)
+        try:
+            auth = extract_auth(auth_json)
+        except ValueError as auth_exc:
+            return _usage_error(_normalize_usage_error(f"{auth_exc}；令牌刷新失败：{refresh_error}"))
 
     try:
-        payload = _fetch_usage_payload(auth["accessToken"], auth["accountId"])
+        payload = _fetch_usage_payload(
+            auth["accessToken"],
+            auth["accountId"],
+            resolve_profile_config_path(profile_dir),
+        )
         usage = _map_usage_payload(payload)
         if not usage.get("planType"):
             usage["planType"] = auth.get("planType")
         usage["error"] = None
         return usage
     except Exception as exc:
-        return _usage_error(_normalize_usage_error(str(exc)), auth.get("planType"))
+        message = str(exc)
+        if _should_retry_with_token_refresh(message):
+            try:
+                auth_json, _ = _ensure_profile_auth_fresh(auth_path, auth_json, force=True)
+                auth = extract_auth(auth_json)
+                payload = _fetch_usage_payload(
+                    auth["accessToken"],
+                    auth["accountId"],
+                    resolve_profile_config_path(profile_dir),
+                )
+                usage = _map_usage_payload(payload)
+                if not usage.get("planType"):
+                    usage["planType"] = auth.get("planType")
+                usage["error"] = None
+                return usage
+            except Exception as retry_exc:
+                message = f"{message}；刷新令牌重试失败：{retry_exc}"
+        elif refresh_error:
+            message = f"{message}；令牌刷新失败：{refresh_error}"
+        return _usage_error(_normalize_usage_error(message), auth.get("planType"))
 
 
-def _extract_auth(auth_json):
-    """从 Codex 登录文件里提取额度接口需要的令牌和账号标识。"""
-    tokens = _auth_tokens(auth_json)
-    if not tokens:
-        mode = str(auth_json.get("auth_mode") or "").lower() if isinstance(auth_json, dict) else ""
-        if mode and mode not in ("chatgpt", "chatgpt_auth_tokens"):
-            raise ValueError("当前账号不是 ChatGPT 登录模式，无法读取额度")
-        raise ValueError("登录信息缺少 ChatGPT 令牌，请先重新登录")
-
-    access_token = _clean_string(tokens.get("access_token"))
-    id_token = _clean_string(tokens.get("id_token"))
-    account_id = _clean_string(tokens.get("account_id") or tokens.get("chatgpt_account_id"))
-    if not access_token:
-        raise ValueError("登录信息缺少 access_token，无法读取额度")
-    if not id_token:
-        raise ValueError("登录信息缺少 id_token，无法识别账号额度")
-
-    claims = _decode_jwt_payload(id_token)
-    auth_claim = claims.get("https://api.openai.com/auth") if isinstance(claims, dict) else None
-    auth_claim = auth_claim if isinstance(auth_claim, dict) else {}
-    if not account_id:
-        account_id = _clean_string(auth_claim.get("chatgpt_account_id"))
-    if not account_id:
-        raise ValueError("无法从登录信息识别 ChatGPT 账号编号")
-
-    return {
-        "accessToken": access_token,
-        "accountId": account_id,
-        "planType": _clean_string(auth_claim.get("chatgpt_plan_type")),
-    }
+def _ensure_profile_auth_fresh(auth_path, auth_json, force=False):
+    """必要时刷新账号令牌，并把新 auth.json 写回账号目录。"""
+    auth_path = Path(auth_path)
+    with _file_lock(auth_path.with_name(f".{auth_path.name}.refresh.lock")):
+        latest_auth_json = auth_json
+        try:
+            latest_auth_json = json.loads(auth_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        refreshed_auth_json, refreshed = ensure_fresh_auth(latest_auth_json, force=force)
+        if refreshed:
+            write_profile_auth_json(auth_path, refreshed_auth_json)
+        return refreshed_auth_json, None
 
 
-def _auth_tokens(auth_json):
-    """兼容新旧 auth.json 结构，优先读取 tokens 节点。"""
-    if not isinstance(auth_json, dict):
-        return None
-    tokens = auth_json.get("tokens")
-    if isinstance(tokens, dict):
-        return tokens
-    if "access_token" in auth_json and "id_token" in auth_json:
-        return auth_json
-    return None
-
-
-def _fetch_usage_payload(access_token, account_id):
+def _fetch_usage_payload(access_token, account_id, config_path=None):
     """依次请求候选额度接口，任一成功即返回接口数据。"""
     errors = []
-    for usage_url in USAGE_URLS:
+    for usage_url in _resolve_usage_urls(config_path):
         request = urllib.request.Request(
             usage_url,
             headers={
@@ -174,9 +205,7 @@ def _fetch_usage_payload(access_token, account_id):
             method="GET",
         )
         try:
-            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-                body = response.read().decode("utf-8")
-                return json.loads(body)
+            return _request_usage_json(request)
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             errors.append(f"{usage_url} -> {exc.code}: {_truncate(body)}")
@@ -184,6 +213,88 @@ def _fetch_usage_payload(access_token, account_id):
             errors.append(f"{usage_url} -> {exc}")
 
     raise RuntimeError("；".join(errors[:2]) or "未命中任何额度接口")
+
+
+def _request_usage_json(request):
+    """请求额度接口；临时网络错误会短暂重试，最终失败才返回错误。"""
+    last_error = None
+    for attempt in range(TRANSIENT_RETRY_COUNT + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                body = response.read().decode("utf-8")
+                return json.loads(body)
+        except urllib.error.HTTPError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            if attempt >= TRANSIENT_RETRY_COUNT or not _is_transient_network_error(str(exc)):
+                raise
+            time.sleep(TRANSIENT_RETRY_DELAY_SECONDS * (attempt + 1))
+    raise last_error
+
+
+def _resolve_usage_urls(config_path=None):
+    """按账号配置和默认地址生成额度接口候选列表。"""
+    base_url = _read_chatgpt_base_url(config_path) or DEFAULT_CHATGPT_BASE_URL
+    normalized = base_url.rstrip("/")
+    parsed = urllib.parse.urlparse(normalized)
+    if not parsed.scheme or not parsed.netloc:
+        normalized = DEFAULT_CHATGPT_BASE_URL
+    candidates = []
+    if normalized.endswith(BACKEND_API_PREFIX):
+        origin = normalized[: -len(BACKEND_API_PREFIX)]
+        candidates.extend(
+            [
+                f"{normalized}/wham/usage",
+                f"{origin}{BACKEND_API_PREFIX}/wham/usage",
+                f"{origin}/api/codex/usage",
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                f"{normalized}{BACKEND_API_PREFIX}/wham/usage",
+                f"{normalized}/wham/usage",
+                f"{normalized}/api/codex/usage",
+            ]
+        )
+    candidates.extend(USAGE_URLS)
+    return _dedupe(candidates)
+
+
+def _read_chatgpt_base_url(config_path):
+    """从账号 config.toml 读取自定义 ChatGPT 地址。"""
+    if not config_path or not Path(config_path).exists():
+        return None
+    try:
+        for line in Path(config_path).read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("chatgpt_base_url"):
+                continue
+            _key, value = stripped.split("=", 1)
+            value = value.strip().strip('"').strip("'")
+            if value:
+                return value
+    except Exception:
+        return None
+    return None
+
+
+def _dedupe(values):
+    """保持顺序去重候选地址。"""
+    result = []
+    for value in values:
+        if value not in result:
+            result.append(value)
+    return result
+
+
+def _refresh_usage_worker_count(target_count):
+    """参考 Codex Tools 的受控并发：按账号数和处理器数量取较小值。"""
+    target_limit = max(1, int(target_count or 1))
+    cpu_count = os.cpu_count() or 1
+    cpu_limit = max(1, cpu_count * REFRESH_USAGE_WORKERS_PER_CPU)
+    return max(1, min(target_limit, cpu_limit))
 
 
 def _map_usage_payload(payload):
@@ -196,7 +307,7 @@ def _map_usage_payload(payload):
             _collect_rate_limit_windows(item.get("rate_limit"), windows)
 
     return {
-        "fetchedAt": int(time.time()),
+        "fetchedAt": time.time(),
         "planType": _clean_string(payload.get("plan_type")),
         "fiveHour": _to_usage_window(_pick_nearest_window(windows, 5 * 60 * 60)),
         "oneWeek": _to_usage_window(_pick_nearest_window(windows, 7 * 24 * 60 * 60)),
@@ -239,24 +350,10 @@ def _to_usage_window(window):
     }
 
 
-def _decode_jwt_payload(token):
-    """解析 JWT 第二段载荷，仅读取声明，不验证签名。"""
-    parts = token.split(".")
-    if len(parts) < 2:
-        return {}
-    payload = parts[1] + "=" * (-len(parts[1]) % 4)
-    try:
-        decoded = base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8")
-        claims = json.loads(decoded)
-        return claims if isinstance(claims, dict) else {}
-    except Exception:
-        return {}
-
-
 def _usage_error(message, plan_type=None):
     """生成失败快照，让前端能展示明确原因。"""
     return {
-        "fetchedAt": int(time.time()),
+        "fetchedAt": time.time(),
         "planType": plan_type,
         "fiveHour": None,
         "oneWeek": None,
@@ -267,11 +364,51 @@ def _usage_error(message, plan_type=None):
 def _normalize_usage_error(message):
     """把常见接口错误转成更容易理解的中文提示。"""
     lowered = message.lower()
+    if "invalid_grant" in lowered or "refresh_token_reused" in lowered:
+        return "登录刷新令牌已失效，请通过浏览器重新授权该账号"
+    if "缺少 refresh_token" in lowered:
+        return "登录信息缺少 refresh_token，无法自动刷新，请重新授权"
     if "401" in lowered or "unauthorized" in lowered or "expired" in lowered:
-        return "登录令牌已过期，请启动该账号重新登录后再刷新额度"
+        return "登录令牌已过期，请重新授权后再刷新额度"
     if "403" in lowered:
         return "当前登录信息无权读取额度，请确认账号状态"
+    if "timed out" in lowered or "timeout" in lowered:
+        return "额度读取超时，请检查网络或代理后重试"
     return f"额度读取失败：{message}"
+
+
+def _should_retry_with_token_refresh(message):
+    """识别可通过刷新令牌重试的额度接口错误。"""
+    lowered = message.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "401",
+            "unauthorized",
+            "expired",
+            "invalid token",
+            "provided authentication token",
+        )
+    )
+
+
+def _is_transient_network_error(message):
+    """识别短时间重试可能恢复的网络错误。"""
+    lowered = message.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "timed out",
+            "timeout",
+            "unexpected_eof",
+            "eof occurred",
+            "connection reset",
+            "connection aborted",
+            "remote end closed",
+            "temporarily unavailable",
+            "ssl",
+        )
+    )
 
 
 def _clean_string(value):
@@ -293,3 +430,30 @@ def _truncate(value, limit=140):
     if len(text) <= limit:
         return text
     return f"{text[:limit]}..."
+
+
+@contextlib.contextmanager
+def _file_lock(lock_path, timeout_seconds=30):
+    """用独占锁文件串行化跨进程读写，避免后台刷新覆盖手动刷新。"""
+    lock_path = Path(lock_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + timeout_seconds
+    file_handle = None
+    while True:
+        try:
+            file_handle = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(file_handle, str(os.getpid()).encode("utf-8"))
+            break
+        except FileExistsError:
+            if time.time() >= deadline:
+                raise TimeoutError(f"等待文件锁超时：{lock_path}")
+            time.sleep(0.08)
+    try:
+        yield
+    finally:
+        if file_handle is not None:
+            os.close(file_handle)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass

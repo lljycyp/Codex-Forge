@@ -9,6 +9,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import type { AppState, ProfileSummary, RunCommand, ViewKey } from "./types";
 
 const { Content } = Layout;
+const usageAutoRefreshMs = 30 * 1000;
 
 const emptyState: AppState = {
   codexCommandAvailable: false,
@@ -36,6 +37,7 @@ export default function App() {
   const activeViewRef = useRef<ViewKey>("profiles");
   const refreshTokenRef = useRef(0);
   const commandTokenRef = useRef(0);
+  const autoUsageRefreshingRef = useRef(false);
 
   useEffect(() => {
     activeViewRef.current = activeView;
@@ -66,6 +68,34 @@ export default function App() {
   useEffect(() => {
     refresh(null);
   }, [refresh]);
+
+  useEffect(() => {
+    const refreshUsageSilently = async () => {
+      if (autoUsageRefreshingRef.current) {
+        return;
+      }
+      autoUsageRefreshingRef.current = true;
+      try {
+        await invokeLauncher("refresh_all_profile_usage");
+        const [stateData, profileData] = await Promise.all([
+          invokeLauncher<AppState>("get_app_state"),
+          invokeLauncher<{ profiles: ProfileSummary[] }>("list_profiles")
+        ]);
+        setAppState(stateData);
+        setProfiles(profileData.profiles);
+      } catch {
+        // 静默自动刷新不打扰用户，手动刷新仍会展示具体错误。
+      } finally {
+        autoUsageRefreshingRef.current = false;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void refreshUsageSilently();
+    }, usageAutoRefreshMs);
+    void refreshUsageSilently();
+    return () => window.clearInterval(timer);
+  }, []);
 
   const runCommand = useCallback<RunCommand>(
     async (command, payload, successText = "操作完成", options) => {
@@ -110,7 +140,7 @@ export default function App() {
   const currentView = viewMeta[activeView];
 
   useEffect(() => {
-    document.title = `${currentView.title} - Codex 多账号启动器`;
+    document.title = `${currentView.title} - Codex 多账号切换器`;
   }, [currentView.title]);
 
   useEffect(() => {

@@ -5,6 +5,7 @@ import { registerIpcHandlers } from "./ipc";
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 function getAppIconPath(): string {
   return join(__dirname, "../../assets/app.ico");
@@ -28,7 +29,7 @@ function createMainWindow(): void {
     height: 760,
     minWidth: 980,
     minHeight: 640,
-    title: "Codex 多账号启动器",
+    title: "Codex 多账号切换器",
     icon: getAppIconPath(),
     frame: false,
     titleBarStyle: "hidden",
@@ -65,7 +66,7 @@ function createTray(): void {
     return;
   }
   tray = new Tray(getAppIconPath());
-  tray.setToolTip("Codex 多账号启动器");
+  tray.setToolTip("Codex 多账号切换器");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
@@ -85,19 +86,27 @@ function createTray(): void {
   tray.on("double-click", showMainWindow);
 }
 
-app.whenReady().then(() => {
-  registerIpcHandlers();
-  createMainWindow();
-  createTray();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
-      return;
-    }
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
     showMainWindow();
   });
-});
+
+  app.whenReady().then(() => {
+    registerIpcHandlers();
+    createMainWindow();
+    createTray();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createMainWindow();
+        return;
+      }
+      showMainWindow();
+    });
+  });
+}
 
 app.on("before-quit", () => {
   isQuitting = true;
