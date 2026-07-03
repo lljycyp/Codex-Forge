@@ -15,6 +15,16 @@ export function registerIpcHandlers(): void {
     const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
     return result.canceled ? "" : result.filePaths[0] ?? "";
   });
+  ipcMain.handle("launcher:select-auth-json-file", async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options: OpenDialogOptions = {
+      title: "选择 auth.json 文件",
+      filters: [{ name: "auth.json", extensions: ["json"] }],
+      properties: ["openFile"]
+    };
+    const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? "" : result.filePaths[0] ?? "";
+  });
   ipcMain.handle("app:get-auto-start-enabled", () => {
     return app.getLoginItemSettings().openAtLogin;
   });

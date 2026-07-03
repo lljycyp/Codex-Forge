@@ -11,6 +11,7 @@ export type AppState = {
   activeConfigPath: string;
   activeConfigExists: boolean;
   activeProfile: string;
+  shareSystemConfig: boolean;
   profileRoot: string;
   profileRootExists: boolean;
   profileCount: number;
@@ -67,6 +68,7 @@ export type ProfileUsage = {
 export type LauncherApi = {
   invoke: <T>(command: string, payload?: unknown) => Promise<BackendResponse<T>>;
   selectDirectory: (defaultPath?: string) => Promise<string>;
+  selectAuthJsonFile: () => Promise<string>;
   getAutoStartEnabled?: () => Promise<boolean>;
   setAutoStartEnabled?: (enabled: boolean) => Promise<boolean>;
   minimizeWindow: () => Promise<void>;

@@ -12,6 +12,7 @@ from pathlib import Path
 from core.auth_service import ensure_fresh_auth, extract_auth
 from core.constants import USAGE_CACHE_PATH
 from core.profile_service import (
+    get_active_config_path,
     resolve_profile_auth_path,
     resolve_profile_config_path,
     write_profile_auth_json,
@@ -53,15 +54,15 @@ def get_cached_profile_usage(profile_name):
     return usage if isinstance(usage, dict) else None
 
 
-def refresh_profile_usage(profile_name, profile_dir):
+def refresh_profile_usage(profile_name, profile_dir, share_system_config=False):
     """刷新单个账号额度并写入缓存。"""
     started_at = time.time()
-    usage = _build_profile_usage(profile_dir)
+    usage = _build_profile_usage(profile_dir, share_system_config=share_system_config)
     cache = _merge_usage_results({profile_name: usage}, started_at)
     return cache.get(profile_name, usage)
 
 
-def refresh_all_profile_usage(profile_dirs):
+def refresh_all_profile_usage(profile_dirs, share_system_config=False):
     """受控并发刷新全部账号额度，返回按账号名索引的快照。"""
     started_at = time.time()
     if not profile_dirs:
@@ -73,7 +74,11 @@ def refresh_all_profile_usage(profile_dirs):
     max_workers = _refresh_usage_worker_count(len(profile_dirs))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_by_name = {
-            executor.submit(_build_profile_usage, Path(profile_dir)): profile_name
+            executor.submit(
+                _build_profile_usage,
+                Path(profile_dir),
+                share_system_config=share_system_config,
+            ): profile_name
             for profile_name, profile_dir in profile_dirs.items()
         }
         for future in as_completed(future_by_name):
@@ -117,7 +122,7 @@ def remove_cached_usage(profile_name):
         save_usage_cache(cache)
 
 
-def _build_profile_usage(profile_dir):
+def _build_profile_usage(profile_dir, share_system_config=False):
     """读取账号授权并拉取额度接口。"""
     profile_dir = Path(profile_dir)
     auth_path = resolve_profile_auth_path(profile_dir)
@@ -142,10 +147,11 @@ def _build_profile_usage(profile_dir):
             return _usage_error(_normalize_usage_error(f"{auth_exc}；令牌刷新失败：{refresh_error}"))
 
     try:
+        config_path = get_active_config_path() if share_system_config else resolve_profile_config_path(profile_dir)
         payload = _fetch_usage_payload(
             auth["accessToken"],
             auth["accountId"],
-            resolve_profile_config_path(profile_dir),
+            config_path,
         )
         usage = _map_usage_payload(payload)
         if not usage.get("planType"):
@@ -158,10 +164,11 @@ def _build_profile_usage(profile_dir):
             try:
                 auth_json, _ = _ensure_profile_auth_fresh(auth_path, auth_json, force=True)
                 auth = extract_auth(auth_json)
+                config_path = get_active_config_path() if share_system_config else resolve_profile_config_path(profile_dir)
                 payload = _fetch_usage_payload(
                     auth["accessToken"],
                     auth["accountId"],
-                    resolve_profile_config_path(profile_dir),
+                    config_path,
                 )
                 usage = _map_usage_payload(payload)
                 if not usage.get("planType"):
@@ -263,7 +270,7 @@ def _resolve_usage_urls(config_path=None):
 
 
 def _read_chatgpt_base_url(config_path):
-    """从账号 config.toml 读取自定义 ChatGPT 地址。"""
+    """从当前生效的 config.toml 读取自定义 ChatGPT 地址。"""
     if not config_path or not Path(config_path).exists():
         return None
     try:

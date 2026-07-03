@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from core.codex_source import (
 )
 from core.config_store import load_config, save_config
 from core.constants import CONFIG_LAST_GOOD_PATH, CONFIG_PATH, CONFIG_PREVIOUS_GOOD_PATH, DEFAULT_PROFILE_ROOT
+from core.auth_service import auth_tokens
 from core.oauth_service import login_with_browser
 from core.path_utils import check_directory_writable, format_health_status, is_reparse_point, normalize_path_for_match, remove_readonly_path, sanitize_profile_name
 from core.profile_service import (
@@ -48,6 +50,7 @@ def invoke(command, payload=None):
     commands = {
         "create_profile": create_profile,
         "create_oauth_profile": create_oauth_profile,
+        "create_auth_file_profile": create_auth_file_profile,
         "delete_profile": delete_profile,
         "get_app_state": get_app_state,
         "get_diagnostics": get_diagnostics,
@@ -57,6 +60,7 @@ def invoke(command, payload=None):
         "refresh_codex_source": refresh_codex_source,
         "refresh_profile_usage": refresh_profile_usage,
         "rename_profile": rename_profile,
+        "set_share_system_config": set_share_system_config,
         "set_profile_root": set_profile_root,
         "open_path": open_path,
         "stop_profile": stop_profile,
@@ -83,6 +87,7 @@ def get_app_state(_payload=None):
         "activeConfigPath": str(get_active_config_path()),
         "activeConfigExists": get_active_config_path().exists(),
         "activeProfile": config.get("active_profile", ""),
+        "shareSystemConfig": bool(config.get("share_system_config", True)),
         "profileRoot": str(profile_root),
         "profileRootExists": profile_root.exists(),
         "profileCount": len(profiles),
@@ -107,7 +112,10 @@ def create_profile(payload):
     config = load_config()
     name = _validate_profile_name(config, payload.get("name", ""))
     profile_dir = _get_profile_dir(config, name)
-    import_active_profile(profile_dir)
+    import_active_profile(
+        profile_dir,
+        share_system_config=bool(config.get("share_system_config", True)),
+    )
     profiles = config.setdefault("profiles", [])
     profiles.append(name)
     config["active_profile"] = name
@@ -121,7 +129,36 @@ def create_oauth_profile(payload):
     name = _validate_profile_name(config, payload.get("name", ""))
     auth_json = login_with_browser()
     profile_dir = _get_profile_dir(config, name)
-    import_auth_json_profile(profile_dir, auth_json)
+    import_auth_json_profile(
+        profile_dir,
+        auth_json,
+        share_system_config=bool(config.get("share_system_config", True)),
+    )
+    profiles = config.setdefault("profiles", [])
+    profiles.append(name)
+    save_config(config)
+    return _build_profile_summary(config, name, read_running_codex_commands())
+
+
+def create_auth_file_profile(payload):
+    """通过本地 auth.json 文件新增账号，不覆盖当前默认 Codex 账号资料。"""
+    config = load_config()
+    name = _validate_profile_name(config, payload.get("name", ""))
+    auth_path = Path(payload.get("authJsonPath", ""))
+    if not auth_path.is_file() or auth_path.name.lower() != "auth.json":
+        raise ValueError("请选择有效的 auth.json 文件")
+    try:
+        auth_json = json.loads(auth_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("auth.json 内容不是有效的 JSON") from exc
+    if not isinstance(auth_json, dict) or not auth_tokens(auth_json):
+        raise ValueError("auth.json 内容不是有效的 Codex 登录信息")
+    profile_dir = _get_profile_dir(config, name)
+    import_auth_json_profile(
+        profile_dir,
+        auth_json,
+        share_system_config=bool(config.get("share_system_config", True)),
+    )
     profiles = config.setdefault("profiles", [])
     profiles.append(name)
     save_config(config)
@@ -186,7 +223,10 @@ def launch_profile(payload):
         time.sleep(0.5)
 
     profile_dir = _get_profile_dir(config, name)
-    apply_profile(profile_dir)
+    apply_profile(
+        profile_dir,
+        share_system_config=bool(config.get("share_system_config", True)),
+    )
     config["active_profile"] = name
     save_config(config)
     _launch_default_codex()
@@ -233,7 +273,11 @@ def refresh_profile_usage(payload):
     config = load_config()
     if name not in config.get("profiles", []):
         raise ValueError("账号不存在")
-    usage = refresh_profile_usage_cache(name, _get_profile_dir(config, name))
+    usage = refresh_profile_usage_cache(
+        name,
+        _get_profile_dir(config, name),
+        share_system_config=bool(config.get("share_system_config", True)),
+    )
     return {"name": name, "usage": usage}
 
 
@@ -244,7 +288,20 @@ def refresh_all_profile_usage(_payload=None):
         profile_name: str(_get_profile_dir(config, profile_name))
         for profile_name in config.get("profiles", [])
     }
-    return {"profiles": refresh_all_profile_usage_cache(profile_dirs)}
+    return {
+        "profiles": refresh_all_profile_usage_cache(
+            profile_dirs,
+            share_system_config=bool(config.get("share_system_config", True)),
+        )
+    }
+
+
+def set_share_system_config(payload):
+    """保存是否所有账号共享系统 config.toml。"""
+    config = load_config()
+    config["share_system_config"] = bool(payload.get("enabled"))
+    save_config(config)
+    return {"shareSystemConfig": config["share_system_config"]}
 
 
 def set_profile_root(payload):
@@ -332,6 +389,7 @@ def get_diagnostics(_payload=None):
             "codexCommandAvailable": _is_codex_command_available(),
             "runningCodexCount": _running_codex_count(),
             "activeProfile": config.get("active_profile", ""),
+            "shareSystemConfig": bool(config.get("share_system_config", True)),
             "profileCount": len(profiles),
         },
         "profiles": profile_items,
@@ -341,7 +399,10 @@ def get_diagnostics(_payload=None):
 def _build_profile_summary(config, profile_name, running_commands):
     """构造账号列表项，不执行启动或迁移副作用。"""
     profile_dir = _get_profile_dir(config, profile_name)
-    status = get_profile_status(profile_dir)
+    status = get_profile_status(
+        profile_dir,
+        share_system_config=bool(config.get("share_system_config", True)),
+    )
     active_profile = config.get("active_profile", "")
     return {
         "name": profile_name,
@@ -416,7 +477,10 @@ def _validate_profile_name(config, profile_name, exclude_name=None):
 def _get_profile_health(config, profile_name):
     """检查账号资料完整性。"""
     profile_dir = _get_profile_dir(config, profile_name)
-    status = get_profile_status(profile_dir)
+    status = get_profile_status(
+        profile_dir,
+        share_system_config=bool(config.get("share_system_config", True)),
+    )
     return {
         "running": _is_profile_running(config, profile_name),
         "errors": status["errors"],

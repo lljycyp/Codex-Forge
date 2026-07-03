@@ -9,7 +9,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import type { AppState, ProfileSummary, RunCommand, ViewKey } from "./types";
 
 const { Content } = Layout;
-const usageAutoRefreshMs = 30 * 1000;
+const usageAutoRefreshMs = 5 * 60 * 1000;
 
 const emptyState: AppState = {
   codexCommandAvailable: false,
@@ -18,6 +18,7 @@ const emptyState: AppState = {
   activeConfigPath: "",
   activeConfigExists: false,
   activeProfile: "",
+  shareSystemConfig: true,
   profileRoot: "",
   profileRootExists: false,
   profileCount: 0,
@@ -188,6 +189,7 @@ export default function App() {
           <Profiles
             profiles={profiles}
             runningCount={appState.runningCount}
+            shareSystemConfig={appState.shareSystemConfig}
             runCommand={runCommand}
             loading={commandingView === "profiles"}
           />

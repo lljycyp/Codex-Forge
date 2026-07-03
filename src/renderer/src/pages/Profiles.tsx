@@ -25,6 +25,7 @@ import type { ProfileSummary, ProfileUsageWindow, RunCommand } from "../types";
 type ProfilesProps = {
   profiles: ProfileSummary[];
   runningCount: number;
+  shareSystemConfig: boolean;
   runCommand: RunCommand;
   loading: boolean;
 };
@@ -38,9 +39,10 @@ const profilePillBaseClass =
 const iconActionButtonClass =
   "flex items-center justify-center text-slate-500 hover:!text-brand-600";
 
-export function Profiles({ profiles, runningCount, runCommand, loading }: ProfilesProps) {
+export function Profiles({ profiles, runningCount, shareSystemConfig, runCommand, loading }: ProfilesProps) {
   const [createOpen, setCreateOpen] = useState(false);
-  const [createMode, setCreateMode] = useState<"oauth" | "current">("oauth");
+  const [createMode, setCreateMode] = useState<"oauth" | "current" | "file">("oauth");
+  const [authJsonPath, setAuthJsonPath] = useState("");
   const [renameTarget, setRenameTarget] = useState<ProfileSummary | null>(null);
   const [pendingProfileNames, setPendingProfileNames] = useState<Set<string>>(
     () => new Set(),
@@ -97,7 +99,7 @@ export function Profiles({ profiles, runningCount, runCommand, loading }: Profil
         profile.running
           ? "已关闭 Codex"
           : hasRunningCodex
-            ? "已切换并启动"
+            ? "已切换"
             : "已启动",
         { blocking: false },
       );
@@ -159,6 +161,16 @@ export function Profiles({ profiles, runningCount, runCommand, loading }: Profil
         next.delete(profile.name);
         return next;
       });
+    }
+  };
+
+  const chooseAuthJsonFile = async () => {
+    const selectedPath = await window.launcherApi.selectAuthJsonFile();
+    if (selectedPath) {
+      setAuthJsonPath(selectedPath);
+      createForm.setFields([
+        { name: "authJsonPath", value: selectedPath, errors: [] },
+      ]);
     }
   };
 
@@ -384,21 +396,47 @@ export function Profiles({ profiles, runningCount, runCommand, loading }: Profil
       <Modal
         title="新增账号"
         open={createOpen}
-        onCancel={() => setCreateOpen(false)}
+        onCancel={() => {
+          setCreateOpen(false);
+          setAuthJsonPath("");
+          setCreateMode("oauth");
+          createForm.resetFields();
+        }}
         onOk={async () => {
           const values = await createForm.validateFields();
+          if (createMode === "file" && !authJsonPath) {
+            createForm.setFields([
+              { name: "authJsonPath", errors: ["请选择 auth.json 文件"] },
+            ]);
+            return;
+          }
           setCreateOpen(false);
           const command =
-            createMode === "oauth" ? "create_oauth_profile" : "create_profile";
+            createMode === "oauth"
+              ? "create_oauth_profile"
+              : createMode === "file"
+                ? "create_auth_file_profile"
+                : "create_profile";
           await runCommand(
             command,
-            values,
-            createMode === "oauth" ? "浏览器授权账号已新增" : "当前账号已导入",
+            createMode === "file" ? { ...values, authJsonPath } : values,
+            createMode === "oauth"
+              ? "浏览器授权账号已新增"
+              : createMode === "file"
+                ? "auth.json 已导入"
+                : "当前账号已导入",
           );
           createForm.resetFields();
+          setAuthJsonPath("");
           setCreateMode("oauth");
         }}
-        okText={createMode === "oauth" ? "打开浏览器授权" : "导入当前账号"}
+        okText={
+          createMode === "oauth"
+            ? "打开浏览器授权"
+            : createMode === "file"
+              ? "导入文件"
+              : "导入当前账号"
+        }
       >
         <Form form={createForm} layout="vertical">
           <Form.Item label="新增方式">
@@ -408,16 +446,30 @@ export function Profiles({ profiles, runningCount, runCommand, loading }: Profil
             >
               <Radio.Button value="oauth">浏览器授权</Radio.Button>
               <Radio.Button value="current">导入当前账号</Radio.Button>
+              <Radio.Button value="file">上传 auth.json</Radio.Button>
             </Radio.Group>
           </Form.Item>
           {createMode === "oauth" ? (
             <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
               将打开浏览器完成 OpenAI（开放式人工智能公司）授权，授权结果只保存到新账号资料目录，不会覆盖当前默认 Codex 账号。
             </Typography.Paragraph>
+          ) : createMode === "file" ? (
+            <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
+              将从本地选择 <Typography.Text code>auth.json</Typography.Text>，只保存到新账号资料目录，不会覆盖当前默认 Codex 账号。
+            </Typography.Paragraph>
           ) : (
             <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
-              将保存当前默认 Codex 的 <Typography.Text code>auth.json</Typography.Text> 和{" "}
-              <Typography.Text code>config.toml</Typography.Text>。
+              {shareSystemConfig ? (
+                <>
+                  将保存当前默认 Codex 的 <Typography.Text code>auth.json</Typography.Text>，并共用系统{" "}
+                  <Typography.Text code>config.toml</Typography.Text>。
+                </>
+              ) : (
+                <>
+                  将保存当前默认 Codex 的 <Typography.Text code>auth.json</Typography.Text> 和{" "}
+                  <Typography.Text code>config.toml</Typography.Text>。
+                </>
+              )}
             </Typography.Paragraph>
           )}
           <Form.Item
@@ -427,6 +479,19 @@ export function Profiles({ profiles, runningCount, runCommand, loading }: Profil
           >
             <Input placeholder="例如：工作号" />
           </Form.Item>
+          {createMode === "file" ? (
+            <Form.Item
+              name="authJsonPath"
+              label="认证文件"
+            >
+              <Space.Compact className="w-full">
+                <Input value={authJsonPath} readOnly placeholder="请选择 auth.json 文件" />
+                <Button icon={<FolderOpen size={15} />} onClick={chooseAuthJsonFile}>
+                  选择文件
+                </Button>
+              </Space.Compact>
+            </Form.Item>
+          ) : null}
         </Form>
       </Modal>
       <Modal
@@ -468,7 +533,7 @@ function getProfileLaunchText(profile: ProfileSummary, runningCount: number) {
     return "关闭";
   }
 
-  return runningCount > 0 ? "切换并启动" : "启动";
+  return runningCount > 0 ? "切换" : "启动";
 }
 
 function StatusTile({

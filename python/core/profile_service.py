@@ -21,7 +21,7 @@ def get_active_config_path():
     return get_active_codex_dir() / "config.toml"
 
 
-def import_active_profile(profile_dir):
+def import_active_profile(profile_dir, share_system_config=False):
     """把当前生效的 Codex 账号资料保存为启动器账号资料。"""
     active_auth_path = get_active_auth_path()
     active_config_path = get_active_config_path()
@@ -30,17 +30,21 @@ def import_active_profile(profile_dir):
 
     profile_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(active_auth_path, profile_dir / "auth.json")
+    if share_system_config:
+        return
     if active_config_path.exists():
         shutil.copy2(active_config_path, profile_dir / "config.toml")
     else:
         (profile_dir / "config.toml").write_text("", encoding="utf-8")
 
 
-def import_auth_json_profile(profile_dir, auth_json):
+def import_auth_json_profile(profile_dir, auth_json, share_system_config=False):
     """把指定授权内容保存为启动器账号资料，不改动当前默认 Codex。"""
     active_config_path = get_active_config_path()
     profile_dir.mkdir(parents=True, exist_ok=True)
     write_profile_auth_json(profile_dir / "auth.json", auth_json)
+    if share_system_config:
+        return
     if active_config_path.exists():
         shutil.copy2(active_config_path, profile_dir / "config.toml")
     else:
@@ -77,7 +81,7 @@ def migrate_legacy_profile_files(profile_dir):
     return changed
 
 
-def apply_profile(profile_dir):
+def apply_profile(profile_dir, share_system_config=False):
     """把指定账号资料写入当前 Codex 活动配置。"""
     migrate_legacy_profile_files(profile_dir)
     source_auth_path = resolve_profile_auth_path(profile_dir)
@@ -89,6 +93,8 @@ def apply_profile(profile_dir):
     active_dir.mkdir(parents=True, exist_ok=True)
     backup_active_files(active_dir)
     shutil.copy2(source_auth_path, get_active_auth_path())
+    if share_system_config:
+        return
     if source_config_path.exists():
         shutil.copy2(source_config_path, get_active_config_path())
     elif not get_active_config_path().exists():
@@ -106,7 +112,7 @@ def backup_active_files(active_dir):
             shutil.copy2(source_path, backup_dir / f"{file_name}.{timestamp}.bak")
 
 
-def get_profile_status(profile_dir):
+def get_profile_status(profile_dir, share_system_config=False):
     """检查账号资料是否完整。"""
     migrate_legacy_profile_files(profile_dir)
     auth_path = resolve_profile_auth_path(profile_dir)
@@ -117,7 +123,7 @@ def get_profile_status(profile_dir):
         errors.append("账号资料目录不存在")
     if not auth_path.exists():
         errors.append("账号认证文件不存在")
-    if not config_path.exists():
+    if not share_system_config and not config_path.exists():
         warnings.append("账号配置文件不存在，切换时会保留或创建空配置")
     return {
         "authPath": str(auth_path),

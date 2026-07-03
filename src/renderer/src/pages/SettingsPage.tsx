@@ -12,6 +12,7 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
   const [form] = Form.useForm();
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
   const [autoStartLoading, setAutoStartLoading] = useState(false);
+  const [shareConfigLoading, setShareConfigLoading] = useState(false);
 
   useEffect(() => {
     form.setFieldsValue({
@@ -86,6 +87,20 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
     });
   };
 
+  const changeShareSystemConfig = async (enabled: boolean) => {
+    setShareConfigLoading(true);
+    try {
+      await runCommand(
+        "set_share_system_config",
+        { enabled },
+        enabled ? "已开启共享系统配置" : "已关闭共享系统配置",
+        { blocking: false },
+      );
+    } finally {
+      setShareConfigLoading(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-[800px] pb-8 pt-2">
       <Form form={form} layout="vertical">
@@ -135,6 +150,19 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
               </Button>
             </Space.Compact>
           </Form.Item>
+          <div className="mt-6 flex items-center justify-between gap-6 border-t border-slate-200 pt-5">
+            <div className="min-w-0">
+              <div className="font-semibold text-slate-700">多账号共享系统配置</div>
+              <div className="mt-1 text-sm leading-6 text-slate-500">
+                开启后切换账号只更换登录信息，模型、代理和其他 Codex 配置始终使用系统当前 config.toml。
+              </div>
+            </div>
+            <Switch
+              checked={appState.shareSystemConfig}
+              loading={shareConfigLoading}
+              onChange={changeShareSystemConfig}
+            />
+          </div>
         </div>
 
         <div className="mb-5 mt-8 flex items-center gap-2">

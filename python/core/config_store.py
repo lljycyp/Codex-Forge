@@ -38,6 +38,7 @@ def default_config():
         "profile_root": str(DEFAULT_PROFILE_ROOT),
         "profiles": [],
         "active_profile": "",
+        "share_system_config": True,
     }
 
 
