@@ -9,5 +9,7 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 CONFIG_LAST_GOOD_PATH = CONFIG_DIR / "config.json.last-good.json"
 CONFIG_PREVIOUS_GOOD_PATH = CONFIG_DIR / "config.json.prev-good.json"
 USAGE_CACHE_PATH = CONFIG_DIR / "usage_cache.json"
+LOG_DIR = CONFIG_DIR / "logs"
+LOG_PATH = LOG_DIR / "launcher.log"
 DEFAULT_PROFILE_ROOT = Path.home() / "Documents" / "CodexProfiles"
 

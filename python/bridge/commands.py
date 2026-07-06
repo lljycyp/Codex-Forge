@@ -13,7 +13,8 @@ from core.codex_source import (
 )
 from core.config_store import load_config, save_config
 from core.constants import CONFIG_LAST_GOOD_PATH, CONFIG_PATH, CONFIG_PREVIOUS_GOOD_PATH, DEFAULT_PROFILE_ROOT
-from core.auth_service import auth_tokens
+from core.auth_service import auth_tokens, extract_auth
+from core.logger import get_logger
 from core.oauth_service import login_with_browser
 from core.path_utils import check_directory_writable, format_health_status, is_reparse_point, normalize_path_for_match, remove_readonly_path, sanitize_profile_name
 from core.profile_service import (
@@ -24,6 +25,7 @@ from core.profile_service import (
     get_profile_status,
     import_auth_json_profile,
     import_active_profile,
+    resolve_profile_auth_path,
 )
 from core.usage_service import (
     get_cached_profile_usage,
@@ -32,6 +34,9 @@ from core.usage_service import (
     remove_cached_usage,
     rename_cached_usage,
 )
+
+
+logger = get_logger(__name__)
 
 
 def ok(data=None):
@@ -67,10 +72,15 @@ def invoke(command, payload=None):
     }
     handler = commands.get(command)
     if not handler:
+        logger.warning("未知命令 命令=%s", command)
         return fail(f"未知命令：{command}")
     try:
-        return ok(handler(payload))
+        logger.info("命令开始 命令=%s", command)
+        result = handler(payload)
+        logger.info("命令成功 命令=%s", command)
+        return ok(result)
     except Exception as exc:
+        logger.exception("命令失败 命令=%s 错误=%s", command, exc)
         return fail(exc)
 
 
@@ -112,6 +122,7 @@ def create_profile(payload):
     config = load_config()
     name = _validate_profile_name(config, payload.get("name", ""))
     profile_dir = _get_profile_dir(config, name)
+    logger.info("账号创建开始 名称=%s 目录=%s", name, profile_dir)
     import_active_profile(
         profile_dir,
         share_system_config=bool(config.get("share_system_config", True)),
@@ -120,6 +131,7 @@ def create_profile(payload):
     profiles.append(name)
     config["active_profile"] = name
     save_config(config)
+    logger.info("账号创建成功 名称=%s 目录=%s", name, profile_dir)
     return _build_profile_summary(config, name, read_running_codex_commands())
 
 
@@ -127,6 +139,7 @@ def create_oauth_profile(payload):
     """通过浏览器授权新增账号，不覆盖当前默认 Codex 账号资料。"""
     config = load_config()
     name = _validate_profile_name(config, payload.get("name", ""))
+    logger.info("浏览器授权账号创建开始 名称=%s", name)
     auth_json = login_with_browser()
     profile_dir = _get_profile_dir(config, name)
     import_auth_json_profile(
@@ -137,6 +150,7 @@ def create_oauth_profile(payload):
     profiles = config.setdefault("profiles", [])
     profiles.append(name)
     save_config(config)
+    logger.info("浏览器授权账号创建成功 名称=%s 目录=%s", name, profile_dir)
     return _build_profile_summary(config, name, read_running_codex_commands())
 
 
@@ -145,6 +159,7 @@ def create_auth_file_profile(payload):
     config = load_config()
     name = _validate_profile_name(config, payload.get("name", ""))
     auth_path = Path(payload.get("authJsonPath", ""))
+    logger.info("本地认证文件账号创建开始 名称=%s 认证文件=%s", name, auth_path)
     if not auth_path.is_file() or auth_path.name.lower() != "auth.json":
         raise ValueError("请选择有效的 auth.json 文件")
     try:
@@ -162,6 +177,7 @@ def create_auth_file_profile(payload):
     profiles = config.setdefault("profiles", [])
     profiles.append(name)
     save_config(config)
+    logger.info("本地认证文件账号创建成功 名称=%s 目录=%s", name, profile_dir)
     return _build_profile_summary(config, name, read_running_codex_commands())
 
 
@@ -172,6 +188,7 @@ def rename_profile(payload):
     if old_name not in config.get("profiles", []):
         raise ValueError("账号不存在")
     new_name = _validate_profile_name(config, payload.get("newName", ""), exclude_name=old_name)
+    logger.info("账号重命名开始 原名称=%s 新名称=%s", old_name, new_name)
     if _is_profile_running(config, old_name):
         raise RuntimeError("该账号正在运行，请先关闭后再改名")
     old_dir = _get_profile_dir(config, old_name)
@@ -186,6 +203,7 @@ def rename_profile(payload):
         config["active_profile"] = new_name
     rename_cached_usage(old_name, new_name)
     save_config(config)
+    logger.info("账号重命名成功 原名称=%s 新名称=%s", old_name, new_name)
     return _build_profile_summary(config, new_name, read_running_codex_commands())
 
 
@@ -199,6 +217,7 @@ def delete_profile(payload):
     if config.get("active_profile") == name and _running_codex_count() > 0:
         raise RuntimeError("该账号可能正在使用中，请先关闭 Codex")
     profile_dir = _get_profile_dir(config, name)
+    logger.info("账号删除开始 名称=%s 目录=%s", name, profile_dir)
     if profile_dir.exists():
         shutil.rmtree(profile_dir, onerror=remove_readonly_path)
     profiles.remove(name)
@@ -206,6 +225,7 @@ def delete_profile(payload):
         config["active_profile"] = ""
     remove_cached_usage(name)
     save_config(config)
+    logger.info("账号删除成功 名称=%s", name)
     return {"name": name}
 
 
@@ -216,6 +236,7 @@ def launch_profile(payload):
     config = load_config()
     if name not in config.get("profiles", []):
         raise ValueError("账号不存在")
+    logger.info("账号启动开始 名称=%s 是否先关闭运行中实例=%s", name, stop_running_first)
     if _running_codex_count() > 0:
         if not stop_running_first:
             raise RuntimeError("检测到 Codex 正在运行，请先关闭后再切换账号")
@@ -230,6 +251,7 @@ def launch_profile(payload):
     config["active_profile"] = name
     save_config(config)
     _launch_default_codex()
+    logger.info("账号启动成功 名称=%s 目录=%s", name, profile_dir)
     return {"name": name, "activeAuthPath": str(get_active_auth_path()), "activeConfigPath": str(get_active_config_path())}
 
 
@@ -242,6 +264,7 @@ def _stop_running_codex_processes():
     """关闭当前运行的 Codex 进程，并返回实际发起关闭的数量。"""
     processes = read_running_codex_processes()
     stopped = 0
+    logger.info("关闭 Codex 进程开始 数量=%s", len(processes))
     for process in processes:
         pid = process.get("pid")
         if not pid:
@@ -254,6 +277,7 @@ def _stop_running_codex_processes():
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         stopped += 1
+    logger.info("关闭 Codex 进程成功 已关闭=%s", stopped)
     return {"stopped": stopped}
 
 
@@ -261,6 +285,7 @@ def refresh_codex_source(_payload=None):
     """刷新可启动的 Codex 程序来源，兼容无命令行别名的安装方式。"""
     config = load_config()
     launch_spec = _resolve_codex_launch_spec(config)
+    logger.info("刷新 Codex 来源成功 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
     return {
         "codexCommandAvailable": True,
         "codexLaunchPath": launch_spec["display"],
@@ -273,6 +298,7 @@ def refresh_profile_usage(payload):
     config = load_config()
     if name not in config.get("profiles", []):
         raise ValueError("账号不存在")
+    _sync_active_auth_to_profile(config, name)
     usage = refresh_profile_usage_cache(
         name,
         _get_profile_dir(config, name),
@@ -284,6 +310,7 @@ def refresh_profile_usage(payload):
 def refresh_all_profile_usage(_payload=None):
     """刷新全部账号的额度快照。"""
     config = load_config()
+    _sync_active_auth_to_profile(config, config.get("active_profile", ""))
     profile_dirs = {
         profile_name: str(_get_profile_dir(config, profile_name))
         for profile_name in config.get("profiles", [])
@@ -304,6 +331,40 @@ def set_share_system_config(payload):
     return {"shareSystemConfig": config["share_system_config"]}
 
 
+def _sync_active_auth_to_profile(config, profile_name):
+    """当前账号刷新额度前，把 Codex 刚续期的认证回写到账号目录。"""
+    if not profile_name or profile_name != config.get("active_profile"):
+        return
+    profile_dir = _get_profile_dir(config, profile_name)
+    profile_auth_path = resolve_profile_auth_path(profile_dir)
+    active_auth_path = get_active_auth_path()
+    if not active_auth_path.exists() or not profile_auth_path.exists():
+        return
+    try:
+        active_auth = json.loads(active_auth_path.read_text(encoding="utf-8"))
+        profile_auth = json.loads(profile_auth_path.read_text(encoding="utf-8"))
+        if not _is_same_auth_account(active_auth, profile_auth):
+            logger.warning("跳过当前账号认证同步 原因=账号身份不一致 名称=%s", profile_name)
+            return
+        import_active_profile(
+            profile_dir,
+            share_system_config=bool(config.get("share_system_config", True)),
+        )
+        logger.info("当前账号认证已同步 名称=%s 来源=%s 目标=%s", profile_name, active_auth_path, profile_auth_path)
+    except Exception as exc:
+        logger.warning("当前账号认证同步失败 名称=%s 错误=%s", profile_name, exc)
+
+
+def _is_same_auth_account(left_auth, right_auth):
+    """用账号编号和邮箱确认两个 auth.json 属于同一账号。"""
+    left = extract_auth(left_auth)
+    right = extract_auth(right_auth)
+    for key in ("accountId", "email"):
+        if left.get(key) and right.get(key) and left.get(key) == right.get(key):
+            return True
+    return False
+
+
 def set_profile_root(payload):
     """迁移整个账号资料根目录并保存新位置。"""
     new_root = Path(payload.get("profileRoot", ""))
@@ -320,6 +381,7 @@ def set_profile_root(payload):
     if old_root_resolved == new_root_resolved:
         config["profile_root"] = str(new_root_resolved)
         save_config(config)
+        logger.info("账号根目录未变化 路径=%s", new_root_resolved)
         return {"profileRoot": str(new_root_resolved), "migrated": False}
     if old_root_resolved in new_root_resolved.parents:
         raise ValueError("新位置不能放在当前账号目录内部")
@@ -333,6 +395,7 @@ def set_profile_root(payload):
         raise FileExistsError("目标账号根目录已存在且不为空")
 
     if old_root_resolved.exists():
+        logger.info("账号根目录迁移开始 原路径=%s 新路径=%s", old_root_resolved, new_root_resolved)
         _copy_directory(old_root_resolved, new_root_resolved)
         shutil.rmtree(old_root_resolved, onerror=remove_readonly_path)
     else:
@@ -340,6 +403,7 @@ def set_profile_root(payload):
 
     config["profile_root"] = str(new_root_resolved)
     save_config(config)
+    logger.info("账号根目录设置成功 原路径=%s 新路径=%s", old_root_resolved, new_root_resolved)
     return {"profileRoot": str(new_root_resolved), "migrated": True}
 
 
@@ -512,16 +576,19 @@ def _resolve_codex_launch_spec(config):
     configured_path = str(config.get("codex_path") or "").strip()
     configured_app_path = _resolve_configured_codex_app_path(configured_path)
     if configured_app_path:
+        logger.info("Codex 启动来源已识别 来源=已配置桌面程序 路径=%s", configured_app_path)
         return _build_app_launch_spec(configured_app_path)
 
     detected_path = find_windowsapps_codex_path() or find_running_codex_path()
     if detected_path:
         config["codex_path"] = detected_path
         save_config(config)
+        logger.info("Codex 启动来源已识别 来源=自动识别桌面程序 路径=%s", detected_path)
         return _build_app_launch_spec(detected_path)
 
     store_app_id = _find_windows_store_codex_app_id()
     if store_app_id:
+        logger.info("Codex 启动来源已识别 来源=微软商店 应用标识=%s", store_app_id)
         return {
             "kind": "store",
             "command": ["explorer.exe", f"shell:AppsFolder\\{store_app_id}"],
@@ -530,6 +597,7 @@ def _resolve_codex_launch_spec(config):
 
     cli_path = _find_codex_cli_path(configured_path)
     if cli_path:
+        logger.info("Codex 启动来源已识别 来源=命令行 路径=%s", cli_path)
         return {
             "kind": "cli",
             "command": [str(cli_path), "app"],
@@ -666,6 +734,7 @@ def _launch_default_codex():
     config = load_config()
     launch_spec = _resolve_codex_launch_spec(config)
     command = launch_spec["command"]
+    logger.info("Codex 启动开始 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
     env = os.environ.copy()
     path_for_env = launch_spec.get("path_for_env")
     if path_for_env:
@@ -679,7 +748,9 @@ def _launch_default_codex():
             close_fds=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        logger.info("Codex 启动成功 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
     except FileNotFoundError as exc:
+        logger.exception("Codex 启动失败 显示=%s 错误=%s", launch_spec["display"], exc)
         raise FileNotFoundError("未找到 Codex 程序，请在设置中重新识别或确认 Codex 已安装") from exc
 
 

@@ -9,6 +9,10 @@ from core.constants import (
     CONFIG_PREVIOUS_GOOD_PATH,
     DEFAULT_PROFILE_ROOT,
 )
+from core.logger import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def load_config():
@@ -18,17 +22,21 @@ def load_config():
 
     try:
         return normalize_config(read_config_file(CONFIG_PATH))
-    except Exception:
+    except Exception as exc:
+        logger.exception("配置读取失败 路径=%s 错误=%s", CONFIG_PATH, exc)
         backup_corrupted_config()
 
     for backup_path in (CONFIG_LAST_GOOD_PATH, CONFIG_PREVIOUS_GOOD_PATH):
         try:
             config = normalize_config(read_config_file(backup_path))
-        except Exception:
+        except Exception as exc:
+            logger.warning("备份配置读取失败 路径=%s 错误=%s", backup_path, exc)
             continue
         write_config_file(CONFIG_PATH, config)
+        logger.info("配置已从备份恢复 备份=%s 目标=%s", backup_path, CONFIG_PATH)
         return config
 
+    logger.warning("已使用默认配置 原因=主配置和备份配置均不可用")
     return default_config()
 
 
@@ -84,6 +92,8 @@ def backup_corrupted_config():
     corrupted_path = CONFIG_DIR / "config.json.corrupt"
     try:
         shutil.copy2(CONFIG_PATH, corrupted_path)
-    except Exception:
+        logger.info("损坏配置已备份 来源=%s 目标=%s", CONFIG_PATH, corrupted_path)
+    except Exception as exc:
+        logger.warning("损坏配置备份失败 来源=%s 错误=%s", CONFIG_PATH, exc)
         pass
 
