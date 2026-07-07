@@ -105,7 +105,7 @@ export type UpdateEvent =
       bytesPerSecond: number;
     }
   | { status: "downloaded"; currentVersion: string; version: string; releaseNotes?: string }
-  | { status: "not-available"; currentVersion: string; version: string }
+  | { status: "not-available"; currentVersion: string; version: string; manual: boolean }
   | { status: "error"; message: string };
 
 export type LauncherApi = {

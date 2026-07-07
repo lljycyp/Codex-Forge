@@ -126,7 +126,9 @@ export default function App() {
         showUpdateProgressRef.current = false;
         setShowUpdateProgress(false);
         setUpdateModalOpen(false);
-        message.success("当前已是最新版本");
+        if (event.manual) {
+          message.success("当前已是最新版本");
+        }
         return;
       }
       setUpdateEvent(event);

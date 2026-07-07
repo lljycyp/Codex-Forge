@@ -15,6 +15,7 @@ let updateDownloading = false;
 let updateDownloaded = false;
 let latestUpdateVersion = "";
 let latestUpdateReleaseNotes = "";
+let checkingUpdateManually = false;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 type UpdateEvent =
@@ -34,7 +35,7 @@ type UpdateEvent =
       bytesPerSecond: number;
     }
   | { status: "downloaded"; currentVersion: string; version: string; releaseNotes?: string }
-  | { status: "not-available"; currentVersion: string; version: string }
+  | { status: "not-available"; currentVersion: string; version: string; manual: boolean }
   | { status: "error"; message: string };
 let lastUpdateEvent: UpdateEvent | null = null;
 
@@ -83,6 +84,7 @@ function registerUpdateHandlers(): void {
   autoUpdater.on("update-available", (info: UpdateInfo) => {
     latestUpdateVersion = info.version;
     latestUpdateReleaseNotes = releaseNotesText(info) ?? "";
+    checkingUpdateManually = false;
     sendUpdateEvent({
       status: "available",
       currentVersion: app.getVersion(),
@@ -117,10 +119,13 @@ function registerUpdateHandlers(): void {
       status: "not-available",
       currentVersion: app.getVersion(),
       version: info.version,
+      manual: checkingUpdateManually,
     });
+    checkingUpdateManually = false;
   });
   autoUpdater.on("error", (error: Error) => {
     updateDownloading = false;
+    checkingUpdateManually = false;
     sendUpdateEvent({ status: "error", message: error.message || "更新失败" });
   });
 }
@@ -251,7 +256,13 @@ ipcMain.handle("app:update-check", async () => {
   if (updateDownloading) {
     return;
   }
-  await autoUpdater.checkForUpdates();
+  checkingUpdateManually = true;
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    checkingUpdateManually = false;
+    throw error;
+  }
 });
 ipcMain.handle("app:update-install", () => {
   if (!updateDownloaded) {
