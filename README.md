@@ -65,7 +65,7 @@
 | **TOML 编辑** | 直接查看和保存当前生效的 `config.toml`，且在保存前自动进行文件备份。 |
 | **指令模板** | 本地管理 Markdown 格式的指令模板，启用后写入 Codex 配置并更新 `model_instructions_file` 字段。 |
 | **诊断信息** | 展示核心配置路径、账号根目录、Codex 进程状态、账号资料完整性及日志文件路径。 |
-| **Windows 打包** | 采用 Cython 结合 PyInstaller 构建 Python 后端，再通过 Electron Builder 生成标准安装包。 |
+| **Windows 打包** | 采用 PyInstaller 构建 Python 后端，再通过 Electron Builder 生成标准安装包。 |
 
 ## 核心亮点
 
@@ -149,7 +149,7 @@ CodexProfiles/<账号名>/CodexPortableApp
 - **前端技术**：React 18 / TypeScript / Vite
 - **UI 组件**：Ant Design 5 / Tailwind CSS / lucide-react
 - **后端服务**：Python 3.11 (本地桥接进程)
-- **构建打包**：Cython / PyInstaller / Electron Builder
+- **构建打包**：PyInstaller / Electron Builder
 - **包管理器**：yarn / uv
 
 ### 环境要求
@@ -203,9 +203,8 @@ yarn build:installer
 ```
 
 > **打包流程说明**：
-> 1. 首先使用 Cython 编译受保护的 Python 核心模块。
-> 2. 通过 `python -m PyInstaller` 生成独立的后端可执行文件 `resources/main.exe`。
-> 3. 最后构建 Electron 桌面外壳，并生成 Windows 标准安装包。
+> 1. 通过 `python -m PyInstaller` 生成独立的后端可执行文件 `resources/main.exe`。
+> 2. 最后构建 Electron 桌面外壳，并生成 Windows 标准安装包。
 
 **主要产物路径**：
 ```text

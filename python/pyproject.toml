@@ -8,7 +8,6 @@ dependencies = []
 [dependency-groups]
 dev = [
     "basedpyright>=1.39.9",
-    "cython>=3.2.6",
     "pyinstaller>=6.14.0",
 ]
 

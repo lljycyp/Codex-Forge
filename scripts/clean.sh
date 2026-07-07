@@ -9,6 +9,5 @@ rm -rf build dist out release __pycache__
 rm -f resources/main.exe
 rm -f ./*.spec
 find src python -type d \( -name "__pycache__" -o -name "*.egg-info" \) -prune -exec rm -rf {} + 2>/dev/null || true
-(cd "$PROJECT_ROOT/python" && uv run python clear_pyd.py)
 
 echo "Cleaned build artifacts."

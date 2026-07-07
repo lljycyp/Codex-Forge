@@ -65,7 +65,7 @@
 | **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
 | **Instruction templates** | Manages Markdown instruction templates locally. Enabling a template writes it into the Codex config and updates `model_instructions_file`. |
 | **Diagnostics** | Shows key config paths, profile root, Codex process state, profile integrity, and log path. |
-| **Windows packaging** | Builds the Python backend with Cython and PyInstaller, then creates a standard Windows installer with Electron Builder. |
+| **Windows packaging** | Builds the Python backend with PyInstaller, then creates a standard Windows installer with Electron Builder. |
 
 ## Highlights
 
@@ -167,7 +167,7 @@ When launching an account, Codex Forge resolves the launch source in this order:
 - **Frontend**: React 18 / TypeScript / Vite
 - **UI**: Ant Design 5 / Tailwind CSS / lucide-react
 - **Backend**: Python 3.11 local bridge process
-- **Build**: Cython / PyInstaller / Electron Builder
+- **Build**: PyInstaller / Electron Builder
 - **Package managers**: yarn / uv
 
 ### Requirements
@@ -224,9 +224,8 @@ yarn build:installer
 ```
 
 > **Build flow**:
-> 1. Compile protected Python core modules with Cython.
-> 2. Generate the standalone backend executable `resources/main.exe` with `python -m PyInstaller`.
-> 3. Build the Electron desktop shell and generate the Windows installer.
+> 1. Generate the standalone backend executable `resources/main.exe` with `python -m PyInstaller`.
+> 2. Build the Electron desktop shell and generate the Windows installer.
 
 **Main artifacts:**
 
