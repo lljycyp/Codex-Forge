@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Layout, Typography } from "antd";
 import { Minus, Square, X } from "lucide-react";
 import type { ViewKey, ViewMeta } from "../types";
+import codexForgeLogo from "../assets/codex-forge-logo.png";
 
 const { Header, Sider } = Layout;
 
@@ -40,8 +41,13 @@ export function AppLayout({
     <Layout className="grid h-screen grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-[#e8f4f4] bg-shell-gradient">
       <div className="grid h-12 grid-cols-[auto_minmax(0,1fr)_auto] items-center border-b-0 bg-transparent [-webkit-app-region:drag]">
         <div className="flex min-w-0 items-center gap-2.5 pl-[18px]">
-          <div className="grid h-8 w-8 place-items-center rounded-card bg-brand-gradient text-[15px] font-black text-white shadow-[0_10px_24px_rgba(15,118,110,0.24)]">
-            C
+          <div className="grid h-8 w-8 place-items-center rounded-card bg-white shadow-[0_10px_24px_rgba(15,118,110,0.18)]">
+            <img
+              src={codexForgeLogo}
+              alt=""
+              className="h-7 w-7 object-contain"
+              draggable={false}
+            />
           </div>
           <div className="flex min-w-0 items-baseline gap-2.5 whitespace-nowrap">
             <span className="text-sm font-extrabold text-white">
