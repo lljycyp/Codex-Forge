@@ -12,10 +12,12 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"))
 const version = pkg.version;
 const tagName = process.env.GITHUB_REF_NAME || `v${version}`;
 const releaseDir = path.join(root, "release");
-const files = [
+const requiredFiles = [
   path.join(releaseDir, `Codex-Forge-Setup-${version}.exe`),
-  path.join(releaseDir, `Codex-Forge-Setup-${version}.exe.blockmap`),
   path.join(releaseDir, "latest.yml"),
+];
+const optionalFiles = [
+  path.join(releaseDir, `Codex-Forge-Setup-${version}.exe.blockmap`),
 ];
 
 function requireFile(file) {
@@ -112,7 +114,11 @@ async function uploadAsset(releaseId, file) {
 }
 
 async function main() {
-  files.forEach(requireFile);
+  requiredFiles.forEach(requireFile);
+  const files = [
+    ...requiredFiles,
+    ...optionalFiles.filter((file) => fs.existsSync(file) && !fs.statSync(file).isDirectory()),
+  ];
   const notes = releaseNotes();
 
   if (dryRun) {

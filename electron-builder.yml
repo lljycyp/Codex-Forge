@@ -1,6 +1,9 @@
 appId: com.codex.forge
 productName: Codex Forge
 artifactName: Codex-Forge-Setup-${version}.${ext}
+compression: maximum
+electronLanguages:
+  - zh-CN
 directories:
   output: release
 publish:
@@ -20,4 +23,5 @@ win:
 nsis:
   oneClick: false
   perMachine: false
+  differentialPackage: false
   allowToChangeInstallationDirectory: true

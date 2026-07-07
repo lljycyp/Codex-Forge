@@ -1,6 +1,6 @@
 {
   "name": "codex-forge-desktop",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Windows desktop workspace for Codex profiles, config, and instructions.",
   "author": "Codex Forge",
   "private": true,
@@ -15,23 +15,23 @@
     "preview": "electron-vite preview"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
-    "antd": "^5.22.7",
     "electron-store": "^10.0.1",
-    "electron-updater": "^6.8.9",
-    "lucide-react": "^0.468.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.5",
+    "antd": "^5.22.7",
     "autoprefixer": "^10.5.2",
     "electron": "41.7.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
+    "lucide-react": "^0.468.0",
     "postcss": "^8.5.16",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "tailwindcss": "3.4.17",
     "typescript": "^5.7.2",
     "vite": "^5.4.11"
