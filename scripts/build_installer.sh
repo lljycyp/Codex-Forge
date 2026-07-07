@@ -16,4 +16,4 @@ if [[ -n "${LOCALAPPDATA:-}" ]] && command -v cygpath >/dev/null 2>&1; then
   rm -f "$ELECTRON_CACHE_DIR"/*/"electron-v$ELECTRON_VERSION-win32-x64.zip" 2>/dev/null || true
 fi
 
-electron-builder --win
+electron-builder --win --publish never
