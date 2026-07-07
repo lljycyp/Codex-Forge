@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Layout, Typography, message } from "antd";
-import { RefreshCw, Settings, ShieldCheck } from "lucide-react";
+import { Code2, FileText, RefreshCw, Settings, ShieldCheck } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
 import { viewMeta } from "./constants/views";
 import { invokeLauncher } from "./api/launcher";
 import { Profiles } from "./pages/Profiles";
+import { InstructionsPage } from "./pages/InstructionsPage";
+import { TomlConfigPage } from "./pages/TomlConfigPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import type { AppState, ProfileSummary, RunCommand, ViewKey } from "./types";
 
@@ -134,6 +136,8 @@ export default function App() {
   const menuItems = useMemo(
     () => [
       { key: "profiles" as const, label: "账号", icon: <ShieldCheck size={18} /> },
+      { key: "instructions" as const, label: "指令模板", icon: <FileText size={18} /> },
+      { key: "toml" as const, label: "TOML", icon: <Code2 size={18} /> },
       { key: "settings" as const, label: "设置", icon: <Settings size={18} /> }
     ],
     []
@@ -141,7 +145,7 @@ export default function App() {
   const currentView = viewMeta[activeView];
 
   useEffect(() => {
-    document.title = `${currentView.title} - Codex 多账号切换器`;
+    document.title = `${currentView.title} - Codex Forge`;
   }, [currentView.title]);
 
   useEffect(() => {
@@ -179,12 +183,18 @@ export default function App() {
     >
       <Content
         ref={contentRef}
-        className="m-0 min-h-0 flex-auto overflow-auto rounded-none border-0 bg-white px-[30px] py-[22px] shadow-none"
+        className={
+          activeView === "toml"
+            ? "m-0 min-h-0 flex-auto overflow-hidden rounded-none border-0 bg-white px-[30px] py-[22px] shadow-none"
+            : "m-0 min-h-0 flex-auto overflow-auto rounded-none border-0 bg-white px-[30px] py-[22px] shadow-none"
+        }
       >
-        <div className="mb-4 hidden max-[960px]:block [&_h3]:!mb-1 [&_h3]:!leading-tight">
-          <Typography.Title level={3}>{currentView.title}</Typography.Title>
-          <Typography.Text type="secondary">{currentView.description}</Typography.Text>
-        </div>
+        {activeView !== "toml" ? (
+          <div className="mb-4 hidden max-[960px]:block [&_h3]:!mb-1 [&_h3]:!leading-tight">
+            <Typography.Title level={3}>{currentView.title}</Typography.Title>
+            <Typography.Text type="secondary">{currentView.description}</Typography.Text>
+          </div>
+        ) : null}
         {activeView === "profiles" ? (
           <Profiles
             profiles={profiles}
@@ -193,6 +203,12 @@ export default function App() {
             runCommand={runCommand}
             loading={commandingView === "profiles"}
           />
+        ) : null}
+        {activeView === "instructions" ? (
+          <InstructionsPage />
+        ) : null}
+        {activeView === "toml" ? (
+          <TomlConfigPage />
         ) : null}
         {activeView === "settings" ? (
           <SettingsPage appState={appState} runCommand={runCommand} />

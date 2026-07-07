@@ -29,7 +29,7 @@ extensions = [
 
 
 setup(
-    name="codex-multi-launcher-backend-protected",
+    name="codex-forge-backend-protected",
     ext_modules=cythonize(
         extensions,
         compiler_directives={

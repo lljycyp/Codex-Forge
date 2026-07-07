@@ -27,6 +27,14 @@ from core.profile_service import (
     import_active_profile,
     resolve_profile_auth_path,
 )
+from core.instruction_service import (
+    delete_instruction_template,
+    disable_instruction_template,
+    enable_instruction_template,
+    list_instruction_templates,
+    save_instruction_template,
+)
+from core.toml_config_service import read_toml_config, save_toml_config
 from core.usage_service import (
     get_cached_profile_usage,
     refresh_all_profile_usage as refresh_all_profile_usage_cache,
@@ -59,12 +67,19 @@ def invoke(command, payload=None):
         "delete_profile": delete_profile,
         "get_app_state": get_app_state,
         "get_diagnostics": get_diagnostics,
+        "list_instruction_templates": list_instruction_templates,
+        "save_instruction_template": save_instruction_template,
+        "delete_instruction_template": delete_instruction_template,
+        "enable_instruction_template": enable_instruction_template,
+        "disable_instruction_template": disable_instruction_template,
         "launch_profile": launch_profile,
         "list_profiles": list_profiles,
         "refresh_all_profile_usage": refresh_all_profile_usage,
         "refresh_codex_source": refresh_codex_source,
         "refresh_profile_usage": refresh_profile_usage,
+        "read_toml_config": read_toml_config,
         "rename_profile": rename_profile,
+        "save_toml_config": save_toml_config,
         "set_share_system_config": set_share_system_config,
         "set_profile_root": set_profile_root,
         "open_path": open_path,

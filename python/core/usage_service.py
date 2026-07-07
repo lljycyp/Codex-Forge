@@ -207,7 +207,7 @@ def _fetch_usage_payload(access_token, account_id, config_path=None):
                 "Authorization": f"Bearer {access_token}",
                 "ChatGPT-Account-Id": account_id,
                 "Accept": "application/json",
-                "User-Agent": "CodexMultiLauncher/0.1",
+                "User-Agent": "CodexForge/0.1",
             },
             method="GET",
         )

@@ -128,7 +128,7 @@ def refresh_chatgpt_auth_tokens(auth_json):
         data=urllib.parse.urlencode(form).encode("utf-8"),
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "CodexMultiLauncher/0.1",
+            "User-Agent": "CodexForge/0.1",
         },
         method="POST",
     )

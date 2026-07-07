@@ -1,5 +1,5 @@
-appId: com.codex.multi.launcher
-productName: CodexMultiLauncher
+appId: com.codex.forge
+productName: Codex Forge
 directories:
   output: release
 files:

@@ -179,7 +179,7 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
             <div className="min-w-0">
               <div className="font-semibold text-slate-700">开机自启</div>
               <div className="mt-1 text-sm leading-6 text-slate-500">
-                登录 Windows 后自动启动 Codex 多账号切换器。
+                登录 Windows 后自动启动 Codex Forge。
               </div>
             </div>
             <Switch

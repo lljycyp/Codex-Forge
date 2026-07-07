@@ -1,8 +1,8 @@
 {
-  "name": "codex-multi-launcher-desktop",
+  "name": "codex-forge-desktop",
   "version": "0.1.0",
-  "description": "Windows desktop launcher for isolated Codex profiles.",
-  "author": "CodexMultiLauncher",
+  "description": "Windows desktop workspace for Codex profiles, config, and instructions.",
+  "author": "Codex Forge",
   "private": true,
   "main": "out/main/index.js",
   "scripts": {

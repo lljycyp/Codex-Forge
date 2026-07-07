@@ -98,7 +98,7 @@ def _exchange_authorization_code(code, pending):
         data=form,
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "codex-multi-launcher/0.1",
+            "User-Agent": "codex-forge/0.1",
         },
         method="POST",
     )
@@ -203,7 +203,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             return
 
         self.server.callback_code = code
-        self._send_page("授权完成，可以回到 Codex 多账号切换器。")
+        self._send_page("授权完成，可以回到 Codex Forge。")
 
     def log_message(self, _format, *_args):
         """禁止把本地回调请求输出到后端标准流。"""

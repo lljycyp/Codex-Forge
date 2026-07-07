@@ -18,7 +18,7 @@ export type AppState = {
   runningCount: number;
 };
 
-export type ViewKey = "profiles" | "settings";
+export type ViewKey = "profiles" | "instructions" | "toml" | "settings";
 
 export type ViewMeta = {
   title: string;
@@ -63,6 +63,27 @@ export type ProfileUsage = {
   fiveHour: ProfileUsageWindow | null;
   oneWeek: ProfileUsageWindow | null;
   error: string | null;
+};
+
+export type InstructionTemplate = {
+  id: string;
+  title: string;
+  filename: string;
+  content: string;
+  enabled: boolean;
+};
+
+export type InstructionTemplateState = {
+  templates: InstructionTemplate[];
+  currentInstructionFile: string;
+  activeConfigPath: string;
+};
+
+export type TomlConfigState = {
+  path: string;
+  exists: boolean;
+  content: string;
+  backupPath?: string;
 };
 
 export type LauncherApi = {

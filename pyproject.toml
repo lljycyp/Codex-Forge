@@ -1,7 +1,7 @@
 [project]
-name = "codex-multi-launcher"
+name = "codex-forge"
 version = "0.1.0"
-description = "Windows launcher for running isolated Codex desktop profiles."
+description = "Windows desktop workspace for Codex profiles, config, and instructions."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []

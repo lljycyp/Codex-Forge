@@ -29,7 +29,7 @@ function createMainWindow(): void {
     height: 760,
     minWidth: 980,
     minHeight: 640,
-    title: "Codex 多账号切换器",
+    title: "Codex Forge",
     icon: getAppIconPath(),
     frame: false,
     titleBarStyle: "hidden",
@@ -66,7 +66,7 @@ function createTray(): void {
     return;
   }
   tray = new Tray(getAppIconPath());
-  tray.setToolTip("Codex 多账号切换器");
+  tray.setToolTip("Codex Forge");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {

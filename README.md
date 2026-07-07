@@ -1,6 +1,6 @@
-# CodexMultiLauncher
+# Codex Forge
 
-CodexMultiLauncher 现在定位为 Windows 桌面端的 Codex 多账号切换器。
+Codex Forge 现在定位为 Windows 桌面端的 Codex 账号、配置和指令工作台。
 
 当前项目使用 Electron + React 界面，并通过 Python 桥接命令调用本地能力。
 
@@ -33,7 +33,7 @@ codex --version
 ## 初始化环境
 
 ```bash
-cd /d/MyObject/CodexMultiLauncher
+cd /d/MyObject/CodexForge
 export UV_PROJECT_ENVIRONMENT="./python/.venv"
 uv sync
 yarn install
