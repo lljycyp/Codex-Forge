@@ -115,6 +115,7 @@ export type LauncherApi = {
   getAutoStartEnabled?: () => Promise<boolean>;
   getAppVersion?: () => Promise<string>;
   openProjectGitHub?: () => Promise<void>;
+  openProjectGitee?: () => Promise<void>;
   setAutoStartEnabled?: (enabled: boolean) => Promise<boolean>;
   onUpdateEvent?: (callback: (event: UpdateEvent) => void) => () => void;
   checkForUpdates?: () => Promise<void>;

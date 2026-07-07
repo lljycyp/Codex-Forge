@@ -1,6 +1,6 @@
 {
   "name": "codex-forge-desktop",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Windows desktop workspace for Codex profiles, config, and instructions.",
   "author": "Codex Forge",
   "private": true,

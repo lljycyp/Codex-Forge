@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 const projectGitHubUrl = "https://github.com/lljycyp/Codex-Forge";
+const projectGiteeUrl = "https://gitee.com/llj20010218/codex-forge";
 
 contextBridge.exposeInMainWorld("launcherApi", {
   invoke: (command: string, payload?: unknown) => ipcRenderer.invoke("launcher:invoke", command, payload ?? {}),
@@ -9,6 +10,7 @@ contextBridge.exposeInMainWorld("launcherApi", {
   getAutoStartEnabled: () => ipcRenderer.invoke("app:get-auto-start-enabled"),
   getAppVersion: () => ipcRenderer.invoke("app:get-version"),
   openProjectGitHub: () => ipcRenderer.invoke("app:open-external", projectGitHubUrl),
+  openProjectGitee: () => ipcRenderer.invoke("app:open-external", projectGiteeUrl),
   setAutoStartEnabled: (enabled: boolean) => ipcRenderer.invoke("app:set-auto-start-enabled", enabled),
   onUpdateEvent: (callback: (event: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, updateEvent: unknown) => callback(updateEvent);

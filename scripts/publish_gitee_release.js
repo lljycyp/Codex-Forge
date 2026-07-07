@@ -1,0 +1,146 @@
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = path.join(__dirname, "..");
+const apiBase = "https://gitee.com/api/v5";
+const owner = process.env.GITEE_OWNER || "llj20010218";
+const repo = process.env.GITEE_REPO || "codex-forge";
+const token = process.env.GITEE_TOKEN;
+const dryRun = process.env.GITEE_DRY_RUN === "1";
+
+const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const version = pkg.version;
+const tagName = process.env.GITHUB_REF_NAME || `v${version}`;
+const releaseDir = path.join(root, "release");
+const files = [
+  path.join(releaseDir, `Codex-Forge-Setup-${version}.exe`),
+  path.join(releaseDir, `Codex-Forge-Setup-${version}.exe.blockmap`),
+  path.join(releaseDir, "latest.yml"),
+];
+
+function requireFile(file) {
+  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    throw new Error(`Missing release asset: ${path.relative(root, file)}`);
+  }
+}
+
+function releaseNotes() {
+  const changelogPath = path.join(root, "CHANGELOG.md");
+  const lines = fs.readFileSync(changelogPath, "utf8").split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === `## ${version}`);
+  const end = lines.findIndex((line, index) => index > start && /^##\s+/.test(line));
+  const notes = start === -1 ? "" : lines.slice(start + 1, end === -1 ? undefined : end).join("\n").trim();
+  if (!notes) {
+    throw new Error(`CHANGELOG.md missing notes for version ${version}`);
+  }
+  return notes;
+}
+
+async function api(pathname, { method = "GET", params = {}, body, headers = {} } = {}) {
+  const url = new URL(`${apiBase}${pathname}`);
+  if (!body) {
+    url.searchParams.set("access_token", token);
+  }
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+
+  const response = await fetch(url, { method, body, headers });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    throw new Error(`${method} ${pathname} failed: ${response.status} ${text}`);
+  }
+  return data;
+}
+
+async function findRelease() {
+  try {
+    return await api(`/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tagName)}`);
+  } catch (error) {
+    if (error.message.includes("404")) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function createRelease(notes) {
+  const params = {
+    access_token: token,
+    tag_name: tagName,
+    name: `Codex Forge ${version}`,
+    body: notes,
+    target_commitish: "main",
+    prerelease: "false",
+  };
+  return api(`/repos/${owner}/${repo}/releases`, {
+    method: "POST",
+    body: new URLSearchParams(params),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+}
+
+async function updateRelease(id, notes) {
+  const params = {
+    access_token: token,
+    tag_name: tagName,
+    name: `Codex Forge ${version}`,
+    body: notes,
+    prerelease: "false",
+  };
+  return api(`/repos/${owner}/${repo}/releases/${id}`, {
+    method: "PATCH",
+    body: new URLSearchParams(params),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+}
+
+async function listAssets(releaseId) {
+  return api(`/repos/${owner}/${repo}/releases/${releaseId}/attach_files`);
+}
+
+async function deleteAsset(releaseId, assetId) {
+  return api(`/repos/${owner}/${repo}/releases/${releaseId}/attach_files/${assetId}`, { method: "DELETE" });
+}
+
+async function uploadAsset(releaseId, file) {
+  const form = new FormData();
+  form.append("access_token", token);
+  form.append("file", new Blob([fs.readFileSync(file)]), path.basename(file));
+  await api(`/repos/${owner}/${repo}/releases/${releaseId}/attach_files`, { method: "POST", body: form });
+}
+
+async function main() {
+  files.forEach(requireFile);
+  const notes = releaseNotes();
+
+  if (dryRun) {
+    console.log(`Gitee release dry run: ${owner}/${repo} ${tagName}`);
+    files.forEach((file) => console.log(`asset: ${path.relative(root, file)}`));
+    return;
+  }
+
+  if (!token) {
+    throw new Error("GITEE_TOKEN is required");
+  }
+
+  let release = await findRelease();
+  release = release?.id ? await updateRelease(release.id, notes) : await createRelease(notes);
+
+  const assets = await listAssets(release.id).catch(() => []);
+  for (const file of files) {
+    const fileName = path.basename(file);
+    const oldAsset = assets.find((asset) => [asset.name, asset.filename, asset.file_name].includes(fileName));
+    if (oldAsset?.id) {
+      await deleteAsset(release.id, oldAsset.id);
+    }
+    await uploadAsset(release.id, file);
+    console.log(`Uploaded ${fileName} to Gitee release ${tagName}`);
+  }
+}
+
+main().catch((error) => {
+  console.error(error.message);
+  process.exit(1);
+});

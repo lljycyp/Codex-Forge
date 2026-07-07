@@ -3,6 +3,7 @@ const path = require("node:path");
 
 const root = path.join(__dirname, "..");
 const changelogPath = path.join(root, "CHANGELOG.md");
+const releaseNotesPath = path.join(root, "release", "release-notes.md");
 const latestPath = path.join(root, "release", "latest.yml");
 
 if (!fs.existsSync(latestPath)) {
@@ -42,3 +43,4 @@ while (kept.length && kept[kept.length - 1] === "") {
 
 kept.push("releaseNotes: |", ...notes.split("\n").map((line) => `  ${line}`), "");
 fs.writeFileSync(latestPath, kept.join("\n"), "utf8");
+fs.writeFileSync(releaseNotesPath, `${notes}\n`, "utf8");

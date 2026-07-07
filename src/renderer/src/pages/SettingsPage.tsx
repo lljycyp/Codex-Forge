@@ -8,6 +8,25 @@ type SettingsPageProps = {
   runCommand: RunCommand;
 };
 
+function GiteeIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 1024 1024"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="512" cy="512" r="448" fill="#c71d23" />
+      <path
+        fill="#fff"
+        d="M300 512c0-117 95-212 212-212h212v120H512a92 92 0 0 0 0 184h92v-72H484V412h240v312H512c-117 0-212-95-212-212Z"
+      />
+    </svg>
+  );
+}
+
 export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
   const [form] = Form.useForm();
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
@@ -277,6 +296,13 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
                 icon={<Github size={16} />}
                 onClick={() => {
                   void window.launcherApi.openProjectGitHub?.();
+                }}
+              />
+              <Button
+                aria-label="打开 Gitee 项目"
+                icon={<GiteeIcon size={16} />}
+                onClick={() => {
+                  void window.launcherApi.openProjectGitee?.();
                 }}
               />
             </div>
