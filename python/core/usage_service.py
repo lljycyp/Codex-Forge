@@ -7,7 +7,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from core.auth_service import ensure_fresh_auth, extract_auth
@@ -21,13 +20,10 @@ from core.profile_service import (
 
 USAGE_URLS = (
     "https://chatgpt.com/backend-api/wham/usage",
-    "https://chatgpt.com/wham/usage",
-    "https://chatgpt.com/api/codex/usage",
 )
 REQUEST_TIMEOUT_SECONDS = 18
 TRANSIENT_RETRY_COUNT = 2
 TRANSIENT_RETRY_DELAY_SECONDS = 1.2
-REFRESH_USAGE_WORKERS_PER_CPU = 2
 DEFAULT_CHATGPT_BASE_URL = "https://chatgpt.com"
 BACKEND_API_PREFIX = "/backend-api"
 
@@ -75,23 +71,15 @@ def refresh_all_profile_usage(profile_dirs, share_system_config=False, use_codex
         return {}
 
     results = {}
-    max_workers = _refresh_usage_worker_count(len(profile_dirs))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_by_name = {
-            executor.submit(
-                _build_profile_usage,
+    for profile_name, profile_dir in profile_dirs.items():
+        try:
+            results[profile_name] = _build_profile_usage(
                 Path(profile_dir),
                 share_system_config=share_system_config,
                 use_codex_home_auth=use_codex_home_auth,
-            ): profile_name
-            for profile_name, profile_dir in profile_dirs.items()
-        }
-        for future in as_completed(future_by_name):
-            profile_name = future_by_name[future]
-            try:
-                results[profile_name] = future.result()
-            except Exception as exc:
-                results[profile_name] = _usage_error(f"额度读取失败：{exc}")
+            )
+        except Exception as exc:
+            results[profile_name] = _usage_error(f"额度读取失败：{exc}")
 
     cache = _merge_usage_results(results, started_at)
     return {name: cache.get(name) for name in profile_dirs}
@@ -274,7 +262,9 @@ def _request_usage_json(request):
             if attempt >= TRANSIENT_RETRY_COUNT or not _is_transient_network_error(str(exc)):
                 raise
             time.sleep(TRANSIENT_RETRY_DELAY_SECONDS * (attempt + 1))
-    raise last_error
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("额度读取失败")
 
 
 def _resolve_usage_urls(config_path=None):
@@ -286,22 +276,9 @@ def _resolve_usage_urls(config_path=None):
         normalized = DEFAULT_CHATGPT_BASE_URL
     candidates = []
     if normalized.endswith(BACKEND_API_PREFIX):
-        origin = normalized[: -len(BACKEND_API_PREFIX)]
-        candidates.extend(
-            [
-                f"{normalized}/wham/usage",
-                f"{origin}{BACKEND_API_PREFIX}/wham/usage",
-                f"{origin}/api/codex/usage",
-            ]
-        )
+        candidates.append(f"{normalized}/wham/usage")
     else:
-        candidates.extend(
-            [
-                f"{normalized}{BACKEND_API_PREFIX}/wham/usage",
-                f"{normalized}/wham/usage",
-                f"{normalized}/api/codex/usage",
-            ]
-        )
+        candidates.append(f"{normalized}{BACKEND_API_PREFIX}/wham/usage")
     candidates.extend(USAGE_URLS)
     return _dedupe(candidates)
 
@@ -331,14 +308,6 @@ def _dedupe(values):
         if value not in result:
             result.append(value)
     return result
-
-
-def _refresh_usage_worker_count(target_count):
-    """参考 Codex Tools 的受控并发：按账号数和处理器数量取较小值。"""
-    target_limit = max(1, int(target_count or 1))
-    cpu_count = os.cpu_count() or 1
-    cpu_limit = max(1, cpu_count * REFRESH_USAGE_WORKERS_PER_CPU)
-    return max(1, min(target_limit, cpu_limit))
 
 
 def _map_usage_payload(payload):

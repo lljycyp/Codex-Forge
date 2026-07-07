@@ -10,11 +10,11 @@
 <h1 align="center">Codex Forge</h1>
 
 <p align="center">
-  <b>Codex 账号切换 · Auth 管理 · TOML / 指令模板可视化工作台</b>
+  <b>Codex 多账号多开 · Auth 管理 · TOML / 指令模板可视化工作台</b>
 </p>
 
 <p align="center">
-  面向 Windows 桌面端 Codex 的本地管理工具。它将多个 Codex 登录资料、<code>auth.json</code>、<code>config.toml</code>、指令模板和额度快照集中到一个桌面界面中，在切换账号时自动写入当前用户的 <code>.codex</code> 目录并启动 Codex。
+  面向 Windows 桌面端 Codex 的本地多账号与多开管理工具。它将多个 Codex 登录资料、<code>auth.json</code>、<code>config.toml</code>、指令模板和额度快照集中到一个桌面界面中，既可切换账号后启动 Codex，也可用隔离环境同时多开多个 Codex 客户端。
 </p>
 
 <p align="center">
@@ -30,15 +30,11 @@
   <img src="https://img.shields.io/badge/Tailwind-CSS-38B2AC?logo=tailwind-css&logoColor=white" />
 </p>
 
-<p align="center">
-  <img src="docs/images/home.png" alt="Codex Forge 首页" />
-</p>
-
 ---
 
 ## 简介
 
-**Codex Forge** 并非 Codex 的替代品，而是一个强大的**本地账号与配置工作台**。它将日常高频的终端操作转化为直观的桌面应用功能：
+**Codex Forge** 并非 Codex 的替代品，而是一个强大的**本地多账号、多开与配置工作台**。它将日常高频的终端操作转化为直观的桌面应用功能：
 
 - **多账号管理**：集中管理多个 Codex 账号资料。
 - **灵活授权**：支持通过浏览器授权、保存当前默认账号，或导入本地 `auth.json` 来新增账号。
@@ -47,9 +43,15 @@
 - **可视化编辑**：提供查看和编辑当前生效的 `~/.codex/config.toml` 的可视化界面。
 - **模板管理**：轻松保存、启用、禁用自定义的 Codex 指令模板。
 - **状态监控**：实时查看账号健康状态、运行状态以及额度快照。
-- **可选启动模式**：支持稳定的账号切换模式，也支持多开隔离模式并发启动多个账号。
+- **可选启动模式**：支持稳定的账号切换模式，也支持多开隔离模式并发启动多个 Codex 客户端。
 
 > **注意**：多开隔离模式会为每个账号复制一整份 `CodexPortableApp`，磁盘占用会随账号数量增长；当前版本不做会话提供者（Provider）修复，也不恢复旧版实验性会话/记忆同步。
+
+## 软件预览
+
+<p align="center">
+  <img src="docs/images/home.png" alt="Codex Forge 首页" />
+</p>
 
 ## 功能特性
 
@@ -99,7 +101,7 @@ Codex Forge 会读取当前生效的配置文件：
 ### 5. 多开隔离启动
 除默认的账号切换模式外，Codex Forge 的特色启动能力是多开隔离：
 - **账号切换模式**：默认模式。切换账号时写入系统 `~/.codex`，同一时间只建议运行一个 Codex。
-- **多开隔离模式**：特色模式。每个账号使用独立环境并复制一份完整 `CodexPortableApp`，可同时运行多个账号。
+- **多开隔离模式**：特色模式。每个账号使用独立环境并复制一份完整 `CodexPortableApp`，可同时运行多个 Codex 客户端。
 
 多开隔离模式会隔离 `CodexHome`、`APPDATA`、`LOCALAPPDATA` 和浏览器 `--user-data-dir`，账号目录会额外包含：
 ```text
@@ -170,8 +172,9 @@ codex --version
 
 ```bash
 cd /d/MyObject/CodexForge
-export UV_PROJECT_ENVIRONMENT="./python/.venv"
+cd python
 uv sync --dev
+cd ..
 yarn install
 yarn dev
 ```
@@ -179,8 +182,9 @@ yarn dev
 ### 代码检查
 
 ```bash
-export UV_PROJECT_ENVIRONMENT="./python/.venv"
-uv run python -m py_compile ./python/main.py
+cd python
+uv run python -m py_compile main.py
+cd ..
 yarn tsc --noEmit
 ```
 

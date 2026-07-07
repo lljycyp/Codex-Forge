@@ -2,7 +2,6 @@
 name = "codex-forge"
 version = "0.1.0"
 description = "Windows desktop workspace for Codex profiles, config, and instructions."
-readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -17,22 +16,21 @@ dev = [
 package = true
 
 [tool.setuptools]
-package-dir = {"" = "python"}
 py-modules = ["main"]
 
 [tool.setuptools.packages.find]
-where = ["python"]
+where = ["."]
 
 [tool.pyinstaller]
-entry = "python/main.py"
+entry = "main.py"
 
 [tool.basedpyright]
-include = ["python"]
+include = ["."]
 exclude = [
-    "python/.venv",
-    "python/__pycache__",
-    "python/**/*.egg-info",
+    ".venv",
+    "__pycache__",
+    "**/*.egg-info",
 ]
 typeCheckingMode = "basic"
-extraPaths = ["python"]
+extraPaths = ["."]
 reportMissingTypeStubs = false

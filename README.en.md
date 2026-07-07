@@ -10,11 +10,11 @@
 <h1 align="center">Codex Forge</h1>
 
 <p align="center">
-  <b>Codex account switching · Auth management · Visual TOML / instruction workspace</b>
+  <b>Codex multi-account and multi-instance management · Auth management · Visual TOML / instruction workspace</b>
 </p>
 
 <p align="center">
-  A local management tool for Codex on Windows. It brings multiple Codex login profiles, <code>auth.json</code>, <code>config.toml</code>, instruction templates, and usage snapshots into one desktop interface. When switching accounts, it writes the selected profile into the current user's <code>.codex</code> directory and launches Codex.
+  A local multi-account and multi-instance management tool for Codex on Windows. It brings multiple Codex login profiles, <code>auth.json</code>, <code>config.toml</code>, instruction templates, and usage snapshots into one desktop interface. You can switch accounts before launching Codex, or use isolated environments to run multiple Codex clients at the same time.
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@
 
 ## Overview
 
-**Codex Forge** is not a replacement for Codex. It is a local workspace for Codex accounts and configuration. It turns common terminal-side operations into desktop app workflows:
+**Codex Forge** is not a replacement for Codex. It is a local workspace for Codex accounts, multi-instance launches, and configuration. It turns common terminal-side operations into desktop app workflows:
 
 - **Multiple accounts**: Manage multiple Codex account profiles in one place.
 - **Flexible auth import**: Add accounts through browser OAuth, the current default account, or a local `auth.json` file.
@@ -43,9 +43,15 @@
 - **Visual editing**: View and edit the active `~/.codex/config.toml`.
 - **Template management**: Save, enable, and disable custom Codex instruction templates.
 - **Status monitoring**: View account health, running status, and usage snapshots.
-- **Selectable launch modes**: Supports the stable account-switching mode and an isolated multi-instance mode.
+- **Selectable launch modes**: Supports the stable account-switching mode and an isolated multi-instance mode for running multiple Codex clients at the same time.
 
 > **Note**: Isolated multi-instance mode copies a full `CodexPortableApp` for each account, so disk usage grows with account count. This version does not repair session providers or restore the old experimental session/memory sync features.
+
+## Software Preview
+
+<p align="center">
+  <img src="docs/images/home.png" alt="Codex Forge home page" />
+</p>
 
 ## Features
 
@@ -54,7 +60,7 @@
 | **Profile management** | Create, rename, and delete account profiles. Data is stored in `~/Documents/CodexProfiles` by default. |
 | **Auth import** | Supports browser OAuth, saving the current default Codex account, and importing a local `auth.json` file. |
 | **One-click switch and launch** | In account-switching mode, writes the selected account into the current user's `.codex` directory and launches the default Codex app. If Codex is already running, the app prompts you to close it first. |
-| **Isolated multi-instance launch** | In multi-instance mode, prepares a per-account `CodexHome`, `APPDATA`, `LOCALAPPDATA`, `--user-data-dir`, and full `CodexPortableApp` copy. |
+| **Isolated multi-instance launch** | Featured capability. In multi-instance mode, prepares a per-account `CodexHome`, `APPDATA`, `LOCALAPPDATA`, `--user-data-dir`, and full `CodexPortableApp` copy to avoid accounts overwriting each other. |
 | **Usage snapshots** | Reads account auth data, requests the Codex usage endpoint, and caches each account's usage state. |
 | **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
 | **Instruction templates** | Manages Markdown instruction templates locally. Enabling a template writes it into the Codex config and updates `model_instructions_file`. |
@@ -102,14 +108,14 @@ Before saving changes, it validates the TOML content and backs up the old file t
 
 Instruction templates are stored in the launcher's local directory. When a template is enabled, Codex Forge writes it into the current Codex config directory and updates `model_instructions_file` in `config.toml`.
 
-### 5. Codex Launch Modes
+### 5. Isolated Multi-instance Launch
 
-Codex Forge provides two launch modes:
+In addition to the default account-switching mode, Codex Forge's featured launch capability is isolated multi-instance mode:
 
 - **Account-switching mode**: The default mode. Switching accounts writes into the system `~/.codex`; one Codex instance is recommended.
-- **Isolated multi-instance mode**: Each account uses an isolated environment and a full `CodexPortableApp` copy, allowing multiple accounts to run at once.
+- **Isolated multi-instance mode**: Featured mode. Each account uses an isolated environment and a full `CodexPortableApp` copy, allowing multiple Codex clients to run at once.
 
-In isolated multi-instance mode, each account directory also contains:
+Isolated multi-instance mode separates `CodexHome`, `APPDATA`, `LOCALAPPDATA`, and the browser `--user-data-dir`. Each account directory also contains:
 
 ```text
 CodexProfiles/<account>/CodexHome
@@ -185,8 +191,9 @@ codex --version
 
 ```bash
 cd /d/MyObject/CodexForge
-export UV_PROJECT_ENVIRONMENT="./python/.venv"
+cd python
 uv sync --dev
+cd ..
 yarn install
 yarn dev
 ```
@@ -194,8 +201,9 @@ yarn dev
 ### Checks
 
 ```bash
-export UV_PROJECT_ENVIRONMENT="./python/.venv"
-uv run python -m py_compile ./python/main.py
+cd python
+uv run python -m py_compile main.py
+cd ..
 yarn tsc --noEmit
 ```
 
