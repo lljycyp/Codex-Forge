@@ -5,6 +5,8 @@ import time
 import uuid
 from pathlib import Path
 
+from core.constants import DEFAULT_CODEX_ENV_PATH
+
 
 def get_active_codex_dir():
     """返回默认 Codex 当前用户配置目录。"""
@@ -24,31 +26,19 @@ def get_active_config_path():
 def import_active_profile(profile_dir, share_system_config=False):
     """把当前生效的 Codex 账号资料保存为启动器账号资料。"""
     active_auth_path = get_active_auth_path()
-    active_config_path = get_active_config_path()
     if not active_auth_path.exists():
         raise FileNotFoundError("当前 Codex 认证文件不存在，请先用默认 Codex 完成登录")
 
     profile_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(active_auth_path, profile_dir / "auth.json")
-    if share_system_config:
-        return
-    if active_config_path.exists():
-        shutil.copy2(active_config_path, profile_dir / "config.toml")
-    else:
-        (profile_dir / "config.toml").write_text("", encoding="utf-8")
+    ensure_profile_config_path(profile_dir)
 
 
 def import_auth_json_profile(profile_dir, auth_json, share_system_config=False):
     """把指定授权内容保存为启动器账号资料，不改动当前默认 Codex。"""
-    active_config_path = get_active_config_path()
     profile_dir.mkdir(parents=True, exist_ok=True)
     write_profile_auth_json(profile_dir / "auth.json", auth_json)
-    if share_system_config:
-        return
-    if active_config_path.exists():
-        shutil.copy2(active_config_path, profile_dir / "config.toml")
-    else:
-        (profile_dir / "config.toml").write_text("", encoding="utf-8")
+    ensure_profile_config_path(profile_dir)
 
 
 def write_profile_auth_json(auth_path, auth_json):
@@ -63,29 +53,80 @@ def write_profile_auth_json(auth_path, auth_json):
     temp_path.replace(auth_path)
 
 
+def ensure_profile_env_file(codex_home_dir):
+    """确保账号 CodexHome 里有默认 .env；已有账号专属配置时不覆盖。"""
+    target_env_path = Path(codex_home_dir) / ".env"
+    if target_env_path.exists() or not DEFAULT_CODEX_ENV_PATH.exists():
+        return
+    target_env_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(DEFAULT_CODEX_ENV_PATH, target_env_path)
+
+
+def prepare_profile_codex_home(profile_dir, share_system_config=False):
+    """把账号资料同步到多开模式使用的 CodexHome。"""
+    migrate_legacy_profile_files(profile_dir)
+    profile_dir = Path(profile_dir)
+    source_auth_path = resolve_profile_auth_path(profile_dir)
+    if not source_auth_path.exists():
+        raise FileNotFoundError("账号认证文件不存在，无法启动")
+
+    codex_home_dir = profile_dir / "CodexHome"
+    codex_home_dir.mkdir(parents=True, exist_ok=True)
+    ensure_profile_env_file(codex_home_dir)
+    shutil.copy2(source_auth_path, codex_home_dir / "auth.json")
+    ensure_profile_config_path(profile_dir)
+
+
+def sync_codex_home_to_profile(profile_dir, share_system_config=False):
+    """多开实例关闭后，把 CodexHome 中刷新过的认证回写到账号根目录。"""
+    profile_dir = Path(profile_dir)
+    codex_home_dir = profile_dir / "CodexHome"
+    auth_path = codex_home_dir / "auth.json"
+    if auth_path.exists():
+        shutil.copy2(auth_path, profile_dir / "auth.json")
+
+
 def migrate_legacy_profile_files(profile_dir):
-    """把旧版 CodexHome 中的账号资料复制到新版账号根目录。"""
+    """把旧版外层 config.toml 收敛到 CodexHome/config.toml。"""
     profile_dir = Path(profile_dir)
     legacy_auth_path = profile_dir / "CodexHome" / "auth.json"
-    legacy_config_path = profile_dir / "CodexHome" / "config.toml"
     root_auth_path = profile_dir / "auth.json"
     root_config_path = profile_dir / "config.toml"
+    runtime_config_path = profile_dir / "CodexHome" / "config.toml"
     changed = False
 
     if legacy_auth_path.exists() and not root_auth_path.exists():
         shutil.copy2(legacy_auth_path, root_auth_path)
         changed = True
-    if legacy_config_path.exists() and not root_config_path.exists():
-        shutil.copy2(legacy_config_path, root_config_path)
+    if root_config_path.exists():
+        runtime_config_path.parent.mkdir(parents=True, exist_ok=True)
+        if not runtime_config_path.exists():
+            shutil.copy2(root_config_path, runtime_config_path)
+        root_config_path.unlink()
         changed = True
     return changed
+
+
+def ensure_profile_config_path(profile_dir):
+    """确保账号级配置只存在于 CodexHome/config.toml。"""
+    profile_dir = Path(profile_dir)
+    migrate_legacy_profile_files(profile_dir)
+    config_path = resolve_profile_config_path(profile_dir)
+    if config_path.exists():
+        return config_path
+    active_config_path = get_active_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    if active_config_path.exists():
+        shutil.copy2(active_config_path, config_path)
+    else:
+        config_path.write_text("", encoding="utf-8")
+    return config_path
 
 
 def apply_profile(profile_dir, share_system_config=False):
     """把指定账号资料写入当前 Codex 活动配置。"""
     migrate_legacy_profile_files(profile_dir)
     source_auth_path = resolve_profile_auth_path(profile_dir)
-    source_config_path = resolve_profile_config_path(profile_dir)
     if not source_auth_path.exists():
         raise FileNotFoundError("账号认证文件不存在，无法切换")
 
@@ -93,12 +134,6 @@ def apply_profile(profile_dir, share_system_config=False):
     active_dir.mkdir(parents=True, exist_ok=True)
     backup_active_files(active_dir)
     shutil.copy2(source_auth_path, get_active_auth_path())
-    if share_system_config:
-        return
-    if source_config_path.exists():
-        shutil.copy2(source_config_path, get_active_config_path())
-    elif not get_active_config_path().exists():
-        get_active_config_path().write_text("", encoding="utf-8")
 
 
 def backup_active_files(active_dir):
@@ -123,8 +158,8 @@ def get_profile_status(profile_dir, share_system_config=False):
         errors.append("账号资料目录不存在")
     if not auth_path.exists():
         errors.append("账号认证文件不存在")
-    if not share_system_config and not config_path.exists():
-        warnings.append("账号配置文件不存在，切换时会保留或创建空配置")
+    if not config_path.exists():
+        warnings.append("多开配置文件不存在，启动多开时会自动创建")
     return {
         "authPath": str(auth_path),
         "authExists": auth_path.exists(),
@@ -145,9 +180,6 @@ def resolve_profile_auth_path(profile_dir):
 
 
 def resolve_profile_config_path(profile_dir):
-    """兼容新版根目录配置文件和旧版 CodexHome 配置文件。"""
+    """返回 multi 模式唯一账号级配置文件。"""
     profile_dir = Path(profile_dir)
-    root_config_path = profile_dir / "config.toml"
-    if root_config_path.exists():
-        return root_config_path
     return profile_dir / "CodexHome" / "config.toml"

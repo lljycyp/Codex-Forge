@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Layout, Typography, message } from "antd";
-import { Code2, FileText, RefreshCw, Settings, ShieldCheck } from "lucide-react";
+import { Code2, FileText, Home, RefreshCw, Settings, ShieldCheck } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
 import { viewMeta } from "./constants/views";
 import { invokeLauncher } from "./api/launcher";
+import { HomePage } from "./pages/HomePage";
 import { Profiles } from "./pages/Profiles";
 import { InstructionsPage } from "./pages/InstructionsPage";
 import { TomlConfigPage } from "./pages/TomlConfigPage";
@@ -21,6 +22,7 @@ const emptyState: AppState = {
   activeConfigExists: false,
   activeProfile: "",
   shareSystemConfig: true,
+  launchMode: "switch",
   profileRoot: "",
   profileRootExists: false,
   profileCount: 0,
@@ -30,14 +32,14 @@ const emptyState: AppState = {
 const refreshDelayCommands = new Set(["launch_profile", "stop_profile"]);
 
 export default function App() {
-  const [activeView, setActiveView] = useState<ViewKey>("profiles");
+  const [activeView, setActiveView] = useState<ViewKey>("home");
   const [appState, setAppState] = useState<AppState>(emptyState);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [refreshingView, setRefreshingView] = useState<ViewKey | null>(null);
   const [commandingView, setCommandingView] = useState<ViewKey | null>(null);
   const [taskText, setTaskText] = useState("就绪");
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const activeViewRef = useRef<ViewKey>("profiles");
+  const activeViewRef = useRef<ViewKey>("home");
   const refreshTokenRef = useRef(0);
   const commandTokenRef = useRef(0);
   const autoUsageRefreshingRef = useRef(false);
@@ -69,7 +71,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    refresh("profiles");
+    refresh("home");
   }, [refresh]);
 
   useEffect(() => {
@@ -135,6 +137,7 @@ export default function App() {
 
   const menuItems = useMemo(
     () => [
+      { key: "home" as const, label: "首页", icon: <Home size={18} /> },
       { key: "profiles" as const, label: "账号", icon: <ShieldCheck size={18} /> },
       { key: "instructions" as const, label: "指令模板", icon: <FileText size={18} /> },
       { key: "toml" as const, label: "TOML", icon: <Code2 size={18} /> },
@@ -178,7 +181,7 @@ export default function App() {
       taskText={taskText}
       onChangeView={changeView}
       topbarAction={
-        activeView === "profiles" ? refreshButton : null
+        activeView === "home" || activeView === "profiles" ? refreshButton : null
       }
     >
       <Content
@@ -195,20 +198,27 @@ export default function App() {
             <Typography.Text type="secondary">{currentView.description}</Typography.Text>
           </div>
         ) : null}
+        {activeView === "home" ? (
+          <HomePage
+            appState={appState}
+            profiles={profiles}
+            onOpenProfiles={() => setActiveView("profiles")}
+          />
+        ) : null}
         {activeView === "profiles" ? (
           <Profiles
             profiles={profiles}
             runningCount={appState.runningCount}
-            shareSystemConfig={appState.shareSystemConfig}
+            launchMode={appState.launchMode}
             runCommand={runCommand}
             loading={commandingView === "profiles" || refreshingView === "profiles"}
           />
         ) : null}
         {activeView === "instructions" ? (
-          <InstructionsPage />
+          <InstructionsPage appState={appState} profiles={profiles} />
         ) : null}
         {activeView === "toml" ? (
-          <TomlConfigPage />
+          <TomlConfigPage appState={appState} profiles={profiles} />
         ) : null}
         {activeView === "settings" ? (
           <SettingsPage appState={appState} runCommand={runCommand} />

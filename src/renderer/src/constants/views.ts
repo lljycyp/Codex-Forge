@@ -1,6 +1,10 @@
 import type { ViewKey, ViewMeta } from "../types";
 
 export const viewMeta: Record<ViewKey, ViewMeta> = {
+  home: {
+    title: "首页",
+    description: "查看账号、运行模式和当前配置状态"
+  },
   profiles: {
     title: "账号管理",
     description: "保存当前账号资料、切换账号、改名、删除和打开目录"

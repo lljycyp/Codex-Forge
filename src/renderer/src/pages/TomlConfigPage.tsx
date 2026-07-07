@@ -1,21 +1,51 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Input, Space, Spin, Tooltip, message } from "antd";
+import { Alert, Button, Input, Modal, Select, Spin, Tooltip, message } from "antd";
 import { RefreshCw, Save } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
-import type { TomlConfigState } from "../types";
+import type { AppState, ProfileSummary, TomlConfigState } from "../types";
 
 const { TextArea } = Input;
+const SYSTEM_PROFILE_NAME = "__system__";
+const isMulti = (mode: AppState["launchMode"]) => mode === "multi";
 
-export function TomlConfigPage() {
+type TomlConfigPageProps = {
+  appState: AppState;
+  profiles: ProfileSummary[];
+};
+
+export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
   const [state, setState] = useState<TomlConfigState | null>(null);
   const [content, setContent] = useState("");
+  const [profileName, setProfileName] = useState(appState.activeProfile || profiles[0]?.name || SYSTEM_PROFILE_NAME);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [syncTargetProfile, setSyncTargetProfile] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const multiMode = isMulti(appState.launchMode);
+  const noProfile = multiMode && !profileName;
+  const targetPayload = multiMode ? { profileName } : {};
+  const profileOptions = [
+    { label: "系统级配置", value: SYSTEM_PROFILE_NAME },
+    ...profiles.map((profile) => ({ label: profile.name, value: profile.name })),
+  ];
+  const accountOptions = profiles.map((profile) => ({ label: profile.name, value: profile.name }));
+
+  useEffect(() => {
+    if (multiMode && !profileName) {
+      setProfileName(appState.activeProfile || profiles[0]?.name || SYSTEM_PROFILE_NAME);
+    }
+  }, [appState.activeProfile, multiMode, profileName, profiles]);
+
   const refresh = async () => {
+    if (noProfile) {
+      setState(null);
+      setContent("");
+      return;
+    }
     setLoading(true);
     try {
-      const next = await invokeLauncher<TomlConfigState>("read_toml_config");
+      const next = await invokeLauncher<TomlConfigState>("read_toml_config", targetPayload);
       setState(next);
       setContent(next.content);
     } catch (error) {
@@ -27,12 +57,12 @@ export function TomlConfigPage() {
 
   useEffect(() => {
     void refresh();
-  }, []);
+  }, [profileName, multiMode]);
 
   const save = async () => {
     setSaving(true);
     try {
-      const next = await invokeLauncher<TomlConfigState>("save_toml_config", { content });
+      const next = await invokeLauncher<TomlConfigState>("save_toml_config", { ...targetPayload, content });
       setState(next);
       setContent(next.content);
       message.success(next.backupPath ? "已保存，旧配置已备份" : "已保存");
@@ -43,25 +73,88 @@ export function TomlConfigPage() {
     }
   };
 
+  const syncAll = async () => {
+    setSaving(true);
+    try {
+      const next = await invokeLauncher<TomlConfigState>("save_toml_config", { content, scope: "all" });
+      setState(next);
+      message.success("已同步到所有账号");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "同步 TOML 配置失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const syncToProfile = async () => {
+    if (!syncTargetProfile) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await invokeLauncher<TomlConfigState>("save_toml_config", { content, profileName: syncTargetProfile });
+      message.success("已同步到指定账号");
+      setSyncOpen(false);
+      setSyncTargetProfile("");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "同步 TOML 配置失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="flex items-center justify-between gap-3 rounded-panel border border-shell-line bg-white px-5 py-4 shadow-[0_10px_28px_rgba(15,23,42,0.045)] max-[960px]:items-start max-[960px]:flex-col">
-        <div className="min-w-0">
-          <div className="text-base font-bold text-slate-800">当前 config.toml</div>
+      <div className="flex flex-wrap items-start justify-between gap-4 rounded-panel border border-shell-line bg-white px-5 py-4 shadow-[0_10px_28px_rgba(15,23,42,0.045)]">
+        <div className="min-w-[260px] flex-1">
+          <div className="flex flex-wrap items-center gap-2 text-base font-bold text-slate-800">
+            当前 config.toml
+            {multiMode ? (
+              <span className="rounded-[6px] border border-brand-100 bg-brand-50 px-2 py-0.5 text-[11px] font-bold text-brand-600">
+                多开
+              </span>
+            ) : null}
+          </div>
           <Tooltip title={state?.path}>
             <div className="mt-1 truncate text-xs text-slate-500">
-              {state?.path || "读取中"}
+              {noProfile ? "请选择账号后查看配置" : state?.path || "读取中"}
             </div>
           </Tooltip>
         </div>
-        <Space wrap>
+        <div className="flex max-w-full flex-wrap items-center justify-end gap-2 max-[960px]:w-full max-[960px]:justify-start">
+          {multiMode ? (
+            <Select
+              className="w-[292px] max-w-full"
+              value={profileName || undefined}
+              placeholder="选择账号"
+              options={profileOptions}
+              onChange={setProfileName}
+            />
+          ) : null}
+          <Button type="primary" icon={<Save size={15} />} loading={saving} disabled={noProfile} onClick={save}>
+            保存
+          </Button>
           <Button icon={<RefreshCw size={15} />} loading={loading} onClick={refresh}>
             刷新
           </Button>
-          <Button type="primary" icon={<Save size={15} />} loading={saving} onClick={save}>
-            保存
-          </Button>
-        </Space>
+          {multiMode ? (
+            <Button loading={saving} disabled={noProfile} onClick={syncAll}>
+              同步全部账号
+            </Button>
+          ) : null}
+          {multiMode ? (
+            <Button
+              loading={saving}
+              disabled={noProfile || profiles.length === 0}
+              onClick={() => {
+                setSyncTargetProfile(profiles[0]?.name || "");
+                setSyncOpen(true);
+              }}
+            >
+              同步到账号
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {state && !state.exists ? (
@@ -76,6 +169,10 @@ export function TomlConfigPage() {
         {loading && !state ? (
           <div className="flex h-full min-h-0 items-center justify-center">
             <Spin />
+          </div>
+        ) : noProfile ? (
+          <div className="flex h-full min-h-0 items-center justify-center text-sm text-slate-500">
+            请选择账号后查看配置
           </div>
         ) : (
           <TextArea
@@ -93,6 +190,26 @@ export function TomlConfigPage() {
           <div className="truncate text-xs text-slate-500">最近备份：{state.backupPath}</div>
         </Tooltip>
       ) : null}
+      <Modal
+        title="同步到账号"
+        open={syncOpen}
+        onCancel={() => {
+          setSyncOpen(false);
+          setSyncTargetProfile("");
+        }}
+        onOk={syncToProfile}
+        okText="同步"
+        cancelText="取消"
+        okButtonProps={{ disabled: !syncTargetProfile }}
+      >
+        <Select
+          className="w-full"
+          value={syncTargetProfile || undefined}
+          placeholder="选择目标账号"
+          options={accountOptions}
+          onChange={setSyncTargetProfile}
+        />
+      </Modal>
     </div>
   );
 }

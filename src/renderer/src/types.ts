@@ -12,13 +12,14 @@ export type AppState = {
   activeConfigExists: boolean;
   activeProfile: string;
   shareSystemConfig: boolean;
+  launchMode: "switch" | "multi";
   profileRoot: string;
   profileRootExists: boolean;
   profileCount: number;
   runningCount: number;
 };
 
-export type ViewKey = "profiles" | "instructions" | "toml" | "settings";
+export type ViewKey = "home" | "profiles" | "instructions" | "toml" | "settings";
 
 export type ViewMeta = {
   title: string;
@@ -47,6 +48,12 @@ export type ProfileSummary = {
   authExists: boolean;
   configPath: string;
   configExists: boolean;
+  codexHome?: string;
+  codexHomeExists?: boolean;
+  portableCodexPath?: string;
+  portableCodexExists?: boolean;
+  portableCodexSizeBytes?: number;
+  portableCodexSizeText?: string;
   usage: ProfileUsage | null;
 };
 

@@ -40,19 +40,28 @@ export function AppLayout({
   return (
     <Layout className="grid h-screen grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-[#e8f4f4] bg-shell-gradient">
       <div className="grid h-12 grid-cols-[auto_minmax(0,1fr)_auto] items-center border-b-0 bg-transparent [-webkit-app-region:drag]">
-        <div className="flex min-w-0 items-center gap-2.5 pl-[18px]">
-          <div className="grid h-8 w-8 place-items-center rounded-card bg-white shadow-[0_10px_24px_rgba(15,118,110,0.18)]">
-            <img
-              src={codexForgeLogo}
-              alt=""
-              className="h-7 w-7 object-contain"
-              draggable={false}
-            />
-          </div>
-          <div className="flex min-w-0 items-baseline gap-2.5 whitespace-nowrap">
-            <span className="text-sm font-extrabold text-white">
-              Codex Forge
-            </span>
+        <div className="relative h-full w-[236px] max-[960px]:w-[210px]">
+          <div className="absolute left-[20px] top-[14px] flex items-center z-10">
+            <div className="grid h-12 w-12 place-items-center rounded-[14px] bg-white shadow-[0_8px_20px_rgba(15,118,110,0.2)]">
+              <img
+                src={codexForgeLogo}
+                alt=""
+                className="h-[36px] w-[36px] object-contain"
+                draggable={false}
+              />
+            </div>
+            <div className="ml-3.5 flex min-w-0 flex-col gap-0.5">
+              <span className="whitespace-nowrap text-[16px] font-extrabold tracking-wide text-white">
+                Codex Forge
+              </span>
+              <div className="flex items-center gap-2 text-[11px] font-medium text-white/80">
+                <span>多开</span>
+                <span className="h-[3px] w-[3px] rounded-full bg-white/40" />
+                <span>切换</span>
+                <span className="h-[3px] w-[3px] rounded-full bg-white/40" />
+                <span>指令</span>
+              </div>
+            </div>
           </div>
         </div>
         <div className="h-full" />
@@ -83,7 +92,7 @@ export function AppLayout({
       <Layout className="h-full min-h-0 overflow-hidden bg-transparent">
         <Sider
           width={236}
-          className="h-full !min-w-[236px] !max-w-[236px] !basis-[236px] overflow-hidden border-r-0 !bg-transparent px-3.5 pb-3.5 pt-3 max-[960px]:!min-w-[210px] max-[960px]:!max-w-[210px] max-[960px]:!basis-[210px] [&_.ant-layout-sider-children]:grid [&_.ant-layout-sider-children]:h-full [&_.ant-layout-sider-children]:min-h-0 [&_.ant-layout-sider-children]:grid-rows-[1fr_auto] [&_.ant-layout-sider-children]:gap-4"
+          className="h-full !min-w-[236px] !max-w-[236px] !basis-[236px] overflow-hidden border-r-0 !bg-transparent px-3.5 pb-3.5 pt-6 max-[960px]:!min-w-[210px] max-[960px]:!max-w-[210px] max-[960px]:!basis-[210px] [&_.ant-layout-sider-children]:grid [&_.ant-layout-sider-children]:h-full [&_.ant-layout-sider-children]:min-h-0 [&_.ant-layout-sider-children]:grid-rows-[1fr_auto] [&_.ant-layout-sider-children]:gap-4"
         >
           <nav className="grid min-h-0 content-start gap-1.5 pt-1">
             {menuItems.map((item) => (

@@ -12,7 +12,8 @@ BACKUP_DIR = CONFIG_DIR / "backups" / "config-toml"
 
 def read_toml_config(_payload=None):
     """读取当前生效的 Codex config.toml 原文。"""
-    path = get_active_config_path()
+    payload = _payload or {}
+    path = Path(payload.get("path") or get_active_config_path())
     return {
         "path": str(path),
         "exists": path.exists(),
@@ -30,7 +31,7 @@ def save_toml_config(payload):
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(f"TOML 语法错误：{exc}") from exc
 
-    path = get_active_config_path()
+    path = Path(payload.get("path") or get_active_config_path())
     backup_path = _backup_config(path)
     _write_text_atomic(path, content.rstrip() + "\n")
     return {

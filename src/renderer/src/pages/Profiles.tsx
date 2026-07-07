@@ -25,7 +25,7 @@ import type { ProfileSummary, ProfileUsageWindow, RunCommand } from "../types";
 type ProfilesProps = {
   profiles: ProfileSummary[];
   runningCount: number;
-  shareSystemConfig: boolean;
+  launchMode: "switch" | "multi";
   runCommand: RunCommand;
   loading: boolean;
 };
@@ -39,7 +39,7 @@ const profilePillBaseClass =
 const iconActionButtonClass =
   "flex items-center justify-center text-slate-500 hover:!text-brand-600";
 
-export function Profiles({ profiles, runningCount, shareSystemConfig, runCommand, loading }: ProfilesProps) {
+export function Profiles({ profiles, runningCount, launchMode, runCommand, loading }: ProfilesProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [createMode, setCreateMode] = useState<"oauth" | "current" | "file">("oauth");
   const [authJsonPath, setAuthJsonPath] = useState("");
@@ -79,7 +79,7 @@ export function Profiles({ profiles, runningCount, shareSystemConfig, runCommand
     profile: ProfileSummary,
     stopRunningFirst = false,
   ) => {
-    const hasRunningCodex = runningCount > 0;
+    const hasRunningCodex = launchMode === "switch" && runningCount > 0;
     const pendingText = profile.running
       ? "停止中"
       : hasRunningCodex
@@ -118,7 +118,7 @@ export function Profiles({ profiles, runningCount, shareSystemConfig, runCommand
   };
 
   const toggleProfileRunning = (profile: ProfileSummary) => {
-    if (profile.running || runningCount === 0) {
+    if (profile.running || launchMode === "multi" || runningCount === 0) {
       void executeProfileToggle(profile);
       return;
     }
@@ -272,6 +272,13 @@ export function Profiles({ profiles, runningCount, shareSystemConfig, runCommand
                         当前账号
                       </span>
                     ) : null}
+                    {launchMode === "multi" ? (
+                      <span className={`${profilePillBaseClass} border-purple-200 bg-purple-50 text-purple-600`}>
+                        {profile.portableCodexExists
+                          ? `程序副本 ${profile.portableCodexSizeText ?? ""}`
+                          : "程序副本待创建"}
+                      </span>
+                    ) : null}
                   </div>
                   <Tooltip title={profile.profileDir} placement="topLeft">
                     <div className="truncate font-mono text-xs leading-normal text-slate-400">
@@ -310,6 +317,7 @@ export function Profiles({ profiles, runningCount, shareSystemConfig, runCommand
                       const launchText = getProfileLaunchText(
                         profile,
                         runningCount,
+                        launchMode,
                       );
 
                       return (
@@ -459,17 +467,8 @@ export function Profiles({ profiles, runningCount, shareSystemConfig, runCommand
             </Typography.Paragraph>
           ) : (
             <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
-              {shareSystemConfig ? (
-                <>
-                  将保存当前默认 Codex 的 <Typography.Text code>auth.json</Typography.Text>，并共用系统{" "}
-                  <Typography.Text code>config.toml</Typography.Text>。
-                </>
-              ) : (
-                <>
-                  将保存当前默认 Codex 的 <Typography.Text code>auth.json</Typography.Text> 和{" "}
-                  <Typography.Text code>config.toml</Typography.Text>。
-                </>
-              )}
+              将保存当前默认 Codex 的 <Typography.Text code>auth.json</Typography.Text>；系统{" "}
+              <Typography.Text code>config.toml</Typography.Text> 会作为多开隔离模式的初始账号配置。
             </Typography.Paragraph>
           )}
           <Form.Item
@@ -528,9 +527,13 @@ function isHealthyProfile(profile: ProfileSummary) {
   return profile.profileDirExists && profile.authExists;
 }
 
-function getProfileLaunchText(profile: ProfileSummary, runningCount: number) {
+function getProfileLaunchText(profile: ProfileSummary, runningCount: number, launchMode: "switch" | "multi") {
   if (profile.running) {
     return "关闭";
+  }
+
+  if (launchMode === "multi") {
+    return "启动";
   }
 
   return runningCount > 0 ? "切换" : "启动";

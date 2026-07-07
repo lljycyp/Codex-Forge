@@ -30,6 +30,10 @@
   <img src="https://img.shields.io/badge/Tailwind-CSS-38B2AC?logo=tailwind-css&logoColor=white" />
 </p>
 
+<p align="center">
+  <img src="docs/images/home.png" alt="Codex Forge 首页" />
+</p>
+
 ---
 
 ## 简介
@@ -39,13 +43,13 @@
 - **多账号管理**：集中管理多个 Codex 账号资料。
 - **灵活授权**：支持通过浏览器授权、保存当前默认账号，或导入本地 `auth.json` 来新增账号。
 - **无缝切换**：切换账号时自动写入当前用户的 `~/.codex/auth.json`。
-- **配置隔离**：可选择所有账号共享系统 `config.toml`，或为各个账号保存独立配置。
+- **配置隔离**：账号切换模式固定使用系统 `~/.codex/config.toml`；多开隔离模式使用账号 `CodexHome/config.toml`。
 - **可视化编辑**：提供查看和编辑当前生效的 `~/.codex/config.toml` 的可视化界面。
 - **模板管理**：轻松保存、启用、禁用自定义的 Codex 指令模板。
 - **状态监控**：实时查看账号健康状态、运行状态以及额度快照。
-- **智能启动**：自动识别并启动本机已安装的 Codex 桌面端或 `codex app` 命令。
+- **可选启动模式**：支持稳定的账号切换模式，也支持多开隔离模式并发启动多个账号。
 
-> **注意**：当前版本不会复制 Codex 程序目录，不做会话提供者（Provider）修复，亦不支持多个账号并发多开。
+> **注意**：多开隔离模式会为每个账号复制一整份 `CodexPortableApp`，磁盘占用会随账号数量增长；当前版本不做会话提供者（Provider）修复，也不恢复旧版实验性会话/记忆同步。
 
 ## 功能特性
 
@@ -53,7 +57,8 @@
 | :--- | :--- |
 | **账号资料管理** | 新增、重命名、删除账号资料，数据默认保存在 `~/Documents/CodexProfiles`。 |
 | **授权导入** | 支持浏览器 OAuth 授权、保存当前默认 Codex 账号、导入本地 `auth.json` 文件。 |
-| **一键切换启动** | 切换账号时自动写入当前用户 `.codex` 目录并启动默认 Codex。若检测到 Codex 正在运行会提示先关闭。 |
+| **一键切换启动** | 账号切换模式下自动写入当前用户 `.codex` 目录并启动默认 Codex。若检测到 Codex 正在运行会提示先关闭。 |
+| **多开隔离启动** | 特色功能。多开隔离模式下为账号准备独立 `CodexHome`、`APPDATA`、`LOCALAPPDATA`、`--user-data-dir` 和完整 `CodexPortableApp` 副本，避免多账号互相覆盖。 |
 | **额度快照** | 读取账号认证信息并请求 Codex 额度接口，缓存并直观显示各账号的额度状态。 |
 | **TOML 编辑** | 直接查看和保存当前生效的 `config.toml`，且在保存前自动进行文件备份。 |
 | **指令模板** | 本地管理 Markdown 格式的指令模板，启用后写入 Codex 配置并更新 `model_instructions_file` 字段。 |
@@ -66,9 +71,9 @@
 每个账号资料独立保存自身的登录凭证与配置：
 ```text
 ~/Documents/CodexProfiles/<账号名>/auth.json
-~/Documents/CodexProfiles/<账号名>/config.toml
+~/Documents/CodexProfiles/<账号名>/CodexHome/config.toml
 ```
-开启“共享系统 config.toml”后，切换账号仅替换 `auth.json`，模型、代理等全局 Codex 配置将继续使用系统当前配置。
+账号切换模式只替换 `auth.json`，模型、代理等全局 Codex 配置始终使用系统 `~/.codex/config.toml`。多开隔离模式使用账号自己的 `CodexHome/config.toml`。
 
 ### 2. 多样化的认证（Auth）管理
 提供三种便捷的新增账号方式：
@@ -91,7 +96,19 @@ Codex Forge 会读取当前生效的配置文件：
 ### 4. 指令模板管理
 指令模板安全保存在启动器的本地目录中。启用特定模板后，Codex Forge 会将其自动写入当前的 Codex 配置目录，并同步更新 `config.toml` 中的 `model_instructions_file` 参数。
 
-### 5. Codex 启动来源智能识别
+### 5. 多开隔离启动
+除默认的账号切换模式外，Codex Forge 的特色启动能力是多开隔离：
+- **账号切换模式**：默认模式。切换账号时写入系统 `~/.codex`，同一时间只建议运行一个 Codex。
+- **多开隔离模式**：特色模式。每个账号使用独立环境并复制一份完整 `CodexPortableApp`，可同时运行多个账号。
+
+多开隔离模式会隔离 `CodexHome`、`APPDATA`、`LOCALAPPDATA` 和浏览器 `--user-data-dir`，账号目录会额外包含：
+```text
+CodexProfiles/<账号名>/CodexHome
+CodexProfiles/<账号名>/AppData
+CodexProfiles/<账号名>/CodexPortableApp
+```
+
+### 6. Codex 启动来源智能识别
 在启动账号时，系统会按以下优先级顺序智能识别启动路径：
 1. 已保存的 Codex 桌面程序自定义路径。
 2. 正在运行的 Codex 或 Microsoft Store 版本的 Codex。

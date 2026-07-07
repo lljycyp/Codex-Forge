@@ -1,6 +1,7 @@
 import contextlib
 import json
 import os
+import shutil
 import time
 import urllib.error
 import urllib.parse
@@ -14,7 +15,6 @@ from core.constants import USAGE_CACHE_PATH
 from core.profile_service import (
     get_active_config_path,
     resolve_profile_auth_path,
-    resolve_profile_config_path,
     write_profile_auth_json,
 )
 
@@ -54,15 +54,19 @@ def get_cached_profile_usage(profile_name):
     return usage if isinstance(usage, dict) else None
 
 
-def refresh_profile_usage(profile_name, profile_dir, share_system_config=False):
+def refresh_profile_usage(profile_name, profile_dir, share_system_config=False, use_codex_home_auth=False):
     """刷新单个账号额度并写入缓存。"""
     started_at = time.time()
-    usage = _build_profile_usage(profile_dir, share_system_config=share_system_config)
+    usage = _build_profile_usage(
+        profile_dir,
+        share_system_config=share_system_config,
+        use_codex_home_auth=use_codex_home_auth,
+    )
     cache = _merge_usage_results({profile_name: usage}, started_at)
     return cache.get(profile_name, usage)
 
 
-def refresh_all_profile_usage(profile_dirs, share_system_config=False):
+def refresh_all_profile_usage(profile_dirs, share_system_config=False, use_codex_home_auth=False):
     """受控并发刷新全部账号额度，返回按账号名索引的快照。"""
     started_at = time.time()
     if not profile_dirs:
@@ -78,6 +82,7 @@ def refresh_all_profile_usage(profile_dirs, share_system_config=False):
                 _build_profile_usage,
                 Path(profile_dir),
                 share_system_config=share_system_config,
+                use_codex_home_auth=use_codex_home_auth,
             ): profile_name
             for profile_name, profile_dir in profile_dirs.items()
         }
@@ -122,10 +127,10 @@ def remove_cached_usage(profile_name):
         save_usage_cache(cache)
 
 
-def _build_profile_usage(profile_dir, share_system_config=False):
+def _build_profile_usage(profile_dir, share_system_config=False, use_codex_home_auth=False):
     """读取账号授权并拉取额度接口。"""
     profile_dir = Path(profile_dir)
-    auth_path = resolve_profile_auth_path(profile_dir)
+    auth_path = _resolve_usage_auth_path(profile_dir, use_codex_home_auth)
     if not auth_path.exists():
         return _usage_error("未找到登录信息，请先保存当前账号资料")
 
@@ -146,8 +151,10 @@ def _build_profile_usage(profile_dir, share_system_config=False):
         except ValueError as auth_exc:
             return _usage_error(_normalize_usage_error(f"{auth_exc}；令牌刷新失败：{refresh_error}"))
 
+    _sync_usage_auth_to_profile(profile_dir, auth_path, use_codex_home_auth)
+
     try:
-        config_path = get_active_config_path() if share_system_config else resolve_profile_config_path(profile_dir)
+        config_path = _resolve_usage_config_path(profile_dir, share_system_config, use_codex_home_auth)
         payload = _fetch_usage_payload(
             auth["accessToken"],
             auth["accountId"],
@@ -157,6 +164,7 @@ def _build_profile_usage(profile_dir, share_system_config=False):
         if not usage.get("planType"):
             usage["planType"] = auth.get("planType")
         usage["error"] = None
+        _sync_usage_auth_to_profile(profile_dir, auth_path, use_codex_home_auth)
         return usage
     except Exception as exc:
         message = str(exc)
@@ -164,7 +172,7 @@ def _build_profile_usage(profile_dir, share_system_config=False):
             try:
                 auth_json, _ = _ensure_profile_auth_fresh(auth_path, auth_json, force=True)
                 auth = extract_auth(auth_json)
-                config_path = get_active_config_path() if share_system_config else resolve_profile_config_path(profile_dir)
+                config_path = _resolve_usage_config_path(profile_dir, share_system_config, use_codex_home_auth)
                 payload = _fetch_usage_payload(
                     auth["accessToken"],
                     auth["accountId"],
@@ -174,12 +182,41 @@ def _build_profile_usage(profile_dir, share_system_config=False):
                 if not usage.get("planType"):
                     usage["planType"] = auth.get("planType")
                 usage["error"] = None
+                _sync_usage_auth_to_profile(profile_dir, auth_path, use_codex_home_auth)
                 return usage
             except Exception as retry_exc:
                 message = f"{message}；刷新令牌重试失败：{retry_exc}"
         elif refresh_error:
             message = f"{message}；令牌刷新失败：{refresh_error}"
         return _usage_error(_normalize_usage_error(message), auth.get("planType"))
+
+
+def _resolve_usage_auth_path(profile_dir, use_codex_home_auth=False):
+    """多开模式优先读取 Codex 进程正在使用的 CODEX_HOME/auth.json。"""
+    profile_dir = Path(profile_dir)
+    codex_home_auth_path = profile_dir / "CodexHome" / "auth.json"
+    if use_codex_home_auth and codex_home_auth_path.exists():
+        return codex_home_auth_path
+    return resolve_profile_auth_path(profile_dir)
+
+
+def _resolve_usage_config_path(profile_dir, share_system_config=False, use_codex_home_auth=False):
+    """switch 使用系统配置；multi 使用 CodexHome/config.toml。"""
+    profile_dir = Path(profile_dir)
+    codex_home_config_path = profile_dir / "CodexHome" / "config.toml"
+    if use_codex_home_auth:
+        return codex_home_config_path
+    return get_active_config_path()
+
+
+def _sync_usage_auth_to_profile(profile_dir, auth_path, use_codex_home_auth=False):
+    """额度刷新使用 CodexHome/auth.json 时，把最新 token 回写到账号主资料。"""
+    if not use_codex_home_auth:
+        return
+    auth_path = Path(auth_path)
+    profile_auth_path = Path(profile_dir) / "auth.json"
+    if auth_path.exists() and auth_path != profile_auth_path:
+        shutil.copy2(auth_path, profile_auth_path)
 
 
 def _ensure_profile_auth_fresh(auth_path, auth_json, force=False):

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Button, Form, Input, message, Modal, Space, Switch } from "antd";
+import { Alert, Button, Form, Input, message, Modal, Radio, Space, Switch } from "antd";
 import { FolderOpen, HardDrive, Power } from "lucide-react";
 import type { AppState, RunCommand } from "../types";
 
@@ -12,7 +12,7 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
   const [form] = Form.useForm();
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
   const [autoStartLoading, setAutoStartLoading] = useState(false);
-  const [shareConfigLoading, setShareConfigLoading] = useState(false);
+  const [launchModeLoading, setLaunchModeLoading] = useState(false);
 
   useEffect(() => {
     form.setFieldsValue({
@@ -87,18 +87,37 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
     });
   };
 
-  const changeShareSystemConfig = async (enabled: boolean) => {
-    setShareConfigLoading(true);
+  const saveLaunchMode = async (mode: "switch" | "multi") => {
+    if (mode === appState.launchMode) {
+      return;
+    }
+    setLaunchModeLoading(true);
     try {
       await runCommand(
-        "set_share_system_config",
-        { enabled },
-        enabled ? "已开启共享系统配置" : "已关闭共享系统配置",
+        "set_launch_mode",
+        { mode },
+        mode === "multi" ? "已切换到多开隔离模式" : "已切换到账号切换模式",
         { blocking: false },
       );
     } finally {
-      setShareConfigLoading(false);
+      setLaunchModeLoading(false);
     }
+  };
+
+  const changeLaunchMode = (mode: "switch" | "multi") => {
+    if (mode === "multi") {
+      Modal.confirm({
+        title: "切换到多开隔离模式",
+        content: appState.runningCount > 0
+          ? "检测到 Codex 正在运行。建议先关闭当前 Codex；多开隔离模式会为每个账号复制一整份 CodexPortableApp，磁盘占用约等于 Codex 程序大小 × 多开账号数。"
+          : "多开隔离模式会为每个账号复制一整份 CodexPortableApp，磁盘占用约等于 Codex 程序大小 × 多开账号数。",
+        okText: "切换",
+        cancelText: "取消",
+        onOk: () => saveLaunchMode(mode),
+      });
+      return;
+    }
+    void saveLaunchMode(mode);
   };
 
   return (
@@ -150,19 +169,6 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
               </Button>
             </Space.Compact>
           </Form.Item>
-          <div className="mt-6 flex items-center justify-between gap-6 border-t border-slate-200 pt-5">
-            <div className="min-w-0">
-              <div className="font-semibold text-slate-700">多账号共享系统配置</div>
-              <div className="mt-1 text-sm leading-6 text-slate-500">
-                开启后切换账号只更换登录信息，模型、代理和其他 Codex 配置始终使用系统当前 config.toml。
-              </div>
-            </div>
-            <Switch
-              checked={appState.shareSystemConfig}
-              loading={shareConfigLoading}
-              onChange={changeShareSystemConfig}
-            />
-          </div>
         </div>
 
         <div className="mb-5 mt-8 flex items-center gap-2">
@@ -175,6 +181,29 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
         </div>
 
         <div className="rounded-xl border border-[#e4ebf3] bg-slate-50/50 p-6">
+          <div className="mb-6 border-b border-slate-200 pb-5">
+            <div className="mb-3 font-semibold text-slate-700">启动模式</div>
+            <Radio.Group
+              value={appState.launchMode}
+              disabled={launchModeLoading}
+              onChange={(event) => changeLaunchMode(event.target.value)}
+            >
+              <Radio.Button value="switch">账号切换模式</Radio.Button>
+              <Radio.Button value="multi">多开隔离模式</Radio.Button>
+            </Radio.Group>
+            <div className="mt-3 text-sm leading-6 text-slate-500">
+              账号切换模式共用系统 .codex；多开隔离模式为每个账号使用独立环境，可同时运行多个 Codex。
+            </div>
+            {appState.launchMode === "multi" ? (
+              <Alert
+                className="mt-3"
+                type="warning"
+                showIcon
+                message="多开模式会复制完整 CodexPortableApp"
+                description="如果账号较多，磁盘占用会随账号数量增长。运行中的多开实例需要先关闭，才能切回账号切换模式。"
+              />
+            ) : null}
+          </div>
           <div className="flex items-center justify-between gap-6">
             <div className="min-w-0">
               <div className="font-semibold text-slate-700">开机自启</div>
