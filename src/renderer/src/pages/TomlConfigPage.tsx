@@ -64,7 +64,7 @@ export function TomlConfigPage() {
         </Space>
       </div>
 
-      {!state?.exists ? (
+      {state && !state.exists ? (
         <Alert
           type="warning"
           showIcon

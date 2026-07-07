@@ -20,7 +20,7 @@ uv run python ./python/setup_pyd.py build_ext --inplace
 mkdir -p resources
 rm -f resources/main.exe
 
-uv run pyinstaller \
+uv run python -m PyInstaller \
   --onefile \
   --console \
   --name main \

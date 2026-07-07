@@ -69,7 +69,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    refresh(null);
+    refresh("profiles");
   }, [refresh]);
 
   useEffect(() => {
@@ -201,7 +201,7 @@ export default function App() {
             runningCount={appState.runningCount}
             shareSystemConfig={appState.shareSystemConfig}
             runCommand={runCommand}
-            loading={commandingView === "profiles"}
+            loading={commandingView === "profiles" || refreshingView === "profiles"}
           />
         ) : null}
         {activeView === "instructions" ? (
