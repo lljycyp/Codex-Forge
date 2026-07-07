@@ -27,3 +27,41 @@ input {
 button {
   cursor: pointer;
 }
+
+.forge-splash-logo-wrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 112px;
+  height: 112px;
+}
+
+.forge-splash-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 2px solid rgba(13, 148, 136, 0.14);
+  border-top-color: #0d9488;
+  animation: forge-splash-spin 1s linear infinite;
+}
+
+.forge-splash-progress {
+  width: 45%;
+  animation: forge-splash-progress 1.4s ease-in-out infinite;
+}
+
+@keyframes forge-splash-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes forge-splash-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(230%);
+  }
+}

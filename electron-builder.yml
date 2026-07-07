@@ -1,7 +1,10 @@
 appId: com.codex.forge
 productName: Codex Forge
+artifactName: Codex-Forge-Setup-${version}.${ext}
 directories:
   output: release
+publish:
+  provider: github
 files:
   - out/**
   - assets/**

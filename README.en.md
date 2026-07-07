@@ -45,8 +45,6 @@
 - **Status monitoring**: View account health, running status, and usage snapshots.
 - **Selectable launch modes**: Supports the stable account-switching mode and an isolated multi-instance mode for running multiple Codex clients at the same time.
 
-> **Note**: Isolated multi-instance mode copies a full `CodexPortableApp` for each account, so disk usage grows with account count. This version does not repair session providers or restore the old experimental session/memory sync features.
-
 ## Software Preview
 
 <p align="center">

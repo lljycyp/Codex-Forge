@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, Tray, ipcMain, shell } from "electron";
+import { autoUpdater } from "electron-updater";
 import { join } from "node:path";
 import { registerIpcHandlers } from "./ipc";
 
@@ -97,6 +98,9 @@ if (!gotSingleInstanceLock) {
     registerIpcHandlers();
     createMainWindow();
     createTray();
+    if (app.isPackaged) {
+      autoUpdater.checkForUpdatesAndNotify();
+    }
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {

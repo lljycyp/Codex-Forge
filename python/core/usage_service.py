@@ -94,6 +94,8 @@ def _merge_usage_results(results, started_at):
             current_fetched_at = current.get("fetchedAt") if isinstance(current, dict) else None
             if isinstance(current_fetched_at, (int, float)) and current_fetched_at > started_at:
                 continue
+            if _should_keep_current_usage(current, usage):
+                continue
             cache[profile_name] = usage
         save_usage_cache(cache)
         return cache
@@ -422,6 +424,21 @@ def _is_transient_network_error(message):
             "ssl",
         )
     )
+
+
+def _should_keep_current_usage(current, usage):
+    """临时网络失败不覆盖已有成功额度。"""
+    if not isinstance(current, dict) or current.get("error"):
+        return False
+    if not isinstance(usage, dict):
+        return False
+    error = usage.get("error")
+    return isinstance(error, str) and _is_transient_usage_error(error)
+
+
+def _is_transient_usage_error(message):
+    lowered = message.lower()
+    return "超时" in message or _is_transient_network_error(lowered)
 
 
 def _clean_string(value):

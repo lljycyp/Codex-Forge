@@ -9,6 +9,7 @@ import { Profiles } from "./pages/Profiles";
 import { InstructionsPage } from "./pages/InstructionsPage";
 import { TomlConfigPage } from "./pages/TomlConfigPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import codexForgeLogo from "./assets/codex-forge-logo.png";
 import type { AppState, ProfileSummary, RunCommand, ViewKey } from "./types";
 
 const { Content } = Layout;
@@ -35,6 +36,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<ViewKey>("home");
   const [appState, setAppState] = useState<AppState>(emptyState);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [refreshingView, setRefreshingView] = useState<ViewKey | null>(null);
   const [commandingView, setCommandingView] = useState<ViewKey | null>(null);
   const [taskText, setTaskText] = useState("就绪");
@@ -66,6 +68,9 @@ export default function App() {
     } finally {
       if (view && refreshTokenRef.current === refreshToken) {
         setRefreshingView(null);
+      }
+      if (view === "home") {
+        setInitialLoading(false);
       }
     }
   }, []);
@@ -174,56 +179,82 @@ export default function App() {
   );
 
   return (
-    <AppLayout
-      activeView={activeView}
-      currentView={currentView}
-      menuItems={menuItems}
-      taskText={taskText}
-      onChangeView={changeView}
-      topbarAction={
-        activeView === "home" || activeView === "profiles" ? refreshButton : null
-      }
-    >
-      <Content
-        ref={contentRef}
-        className={
-          activeView === "toml"
-            ? "m-0 min-h-0 flex-auto overflow-hidden rounded-none border-0 bg-white px-[30px] py-[22px] shadow-none"
-            : "m-0 min-h-0 flex-auto overflow-auto rounded-none border-0 bg-white px-[30px] py-[22px] shadow-none"
+    <>
+      <AppLayout
+        activeView={activeView}
+        currentView={currentView}
+        menuItems={menuItems}
+        taskText={taskText}
+        onChangeView={changeView}
+        topbarAction={
+          activeView === "home" || activeView === "profiles" ? refreshButton : null
         }
       >
-        {activeView !== "toml" ? (
-          <div className="mb-4 hidden max-[960px]:block [&_h3]:!mb-1 [&_h3]:!leading-tight">
-            <Typography.Title level={3}>{currentView.title}</Typography.Title>
-            <Typography.Text type="secondary">{currentView.description}</Typography.Text>
+        <Content
+          ref={contentRef}
+          className={
+            activeView === "toml"
+              ? "m-0 min-h-0 flex-auto overflow-hidden rounded-none border-0 bg-white px-[30px] py-[22px] shadow-none"
+              : "m-0 min-h-0 flex-auto overflow-auto rounded-none border-0 bg-white px-[30px] py-[22px] shadow-none"
+          }
+        >
+          {activeView !== "toml" ? (
+            <div className="mb-4 hidden max-[960px]:block [&_h3]:!mb-1 [&_h3]:!leading-tight">
+              <Typography.Title level={3}>{currentView.title}</Typography.Title>
+              <Typography.Text type="secondary">{currentView.description}</Typography.Text>
+            </div>
+          ) : null}
+          {activeView === "home" ? (
+            <HomePage
+              appState={appState}
+              profiles={profiles}
+              onOpenProfiles={() => setActiveView("profiles")}
+            />
+          ) : null}
+          {activeView === "profiles" ? (
+            <Profiles
+              profiles={profiles}
+              runningCount={appState.runningCount}
+              launchMode={appState.launchMode}
+              runCommand={runCommand}
+              loading={commandingView === "profiles" || refreshingView === "profiles"}
+            />
+          ) : null}
+          {activeView === "instructions" ? (
+            <InstructionsPage appState={appState} profiles={profiles} />
+          ) : null}
+          {activeView === "toml" ? (
+            <TomlConfigPage appState={appState} profiles={profiles} />
+          ) : null}
+          {activeView === "settings" ? (
+            <SettingsPage appState={appState} runCommand={runCommand} />
+          ) : null}
+        </Content>
+      </AppLayout>
+      {initialLoading ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-white/80 backdrop-blur-md">
+          <div className="grid place-items-center gap-4 text-center">
+            <div className="forge-splash-logo-wrap">
+              <div className="forge-splash-ring" />
+              <div className="grid h-[76px] w-[76px] place-items-center rounded-[20px] bg-white shadow-[0_18px_46px_rgba(15,118,110,0.22)]">
+                <img
+                  src={codexForgeLogo}
+                  alt=""
+                  className="h-[54px] w-[54px] object-contain"
+                  draggable={false}
+                />
+              </div>
+            </div>
+            <div className="grid gap-1">
+              <div className="text-xl font-extrabold text-slate-900">Codex Forge</div>
+              <div className="text-sm font-semibold text-slate-500">正在加载账号数据...</div>
+            </div>
+            <div className="h-1.5 w-[210px] overflow-hidden rounded-full bg-slate-200">
+              <div className="forge-splash-progress h-full rounded-full bg-brand-gradient" />
+            </div>
           </div>
-        ) : null}
-        {activeView === "home" ? (
-          <HomePage
-            appState={appState}
-            profiles={profiles}
-            onOpenProfiles={() => setActiveView("profiles")}
-          />
-        ) : null}
-        {activeView === "profiles" ? (
-          <Profiles
-            profiles={profiles}
-            runningCount={appState.runningCount}
-            launchMode={appState.launchMode}
-            runCommand={runCommand}
-            loading={commandingView === "profiles" || refreshingView === "profiles"}
-          />
-        ) : null}
-        {activeView === "instructions" ? (
-          <InstructionsPage appState={appState} profiles={profiles} />
-        ) : null}
-        {activeView === "toml" ? (
-          <TomlConfigPage appState={appState} profiles={profiles} />
-        ) : null}
-        {activeView === "settings" ? (
-          <SettingsPage appState={appState} runCommand={runCommand} />
-        ) : null}
-      </Content>
-    </AppLayout>
+        </div>
+      ) : null}
+    </>
   );
 }
