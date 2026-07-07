@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Form, Input, message, Modal, Radio, Space, Switch } from "antd";
-import { FolderOpen, HardDrive, Power } from "lucide-react";
+import { FolderOpen, Github, HardDrive, Info, Power, RefreshCw } from "lucide-react";
 import type { AppState, RunCommand } from "../types";
 
 type SettingsPageProps = {
@@ -11,7 +11,9 @@ type SettingsPageProps = {
 export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
   const [form] = Form.useForm();
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
   const [autoStartLoading, setAutoStartLoading] = useState(false);
+  const [checkUpdateLoading, setCheckUpdateLoading] = useState(false);
   const [launchModeLoading, setLaunchModeLoading] = useState(false);
 
   useEffect(() => {
@@ -22,6 +24,13 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
 
   useEffect(() => {
     let disposed = false;
+    void window.launcherApi.getAppVersion?.()
+      .then((version) => {
+        if (!disposed) {
+          setAppVersion(version);
+        }
+      })
+      .catch(() => undefined);
     const loadAutoStartEnabled = async () => {
       if (!window.launcherApi.getAutoStartEnabled) {
         message.warning("请重启启动器后再使用开机自启设置");
@@ -61,6 +70,22 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
       message.error(error instanceof Error ? error.message : "保存开机自启设置失败");
     } finally {
       setAutoStartLoading(false);
+    }
+  };
+
+  const checkForUpdates = async () => {
+    if (!window.launcherApi.checkForUpdates) {
+      message.warning("当前版本不支持手动检查更新，请重启后再试");
+      return;
+    }
+    setCheckUpdateLoading(true);
+    try {
+      message.info("正在检查更新");
+      await window.launcherApi.checkForUpdates();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "检查更新失败");
+    } finally {
+      setCheckUpdateLoading(false);
     }
   };
 
@@ -216,6 +241,45 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
               loading={autoStartLoading}
               onChange={changeAutoStartEnabled}
             />
+          </div>
+        </div>
+
+        <div className="mb-5 mt-8 flex items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded bg-brand-50 text-brand-600">
+            <Info size={16} />
+          </div>
+          <h2 className="m-0 text-lg font-bold leading-none text-slate-800">
+            关于
+          </h2>
+        </div>
+
+        <div className="rounded-xl border border-[#e4ebf3] bg-slate-50/50 p-6">
+          <div className="flex items-center justify-between gap-6">
+            <div className="min-w-0">
+              <div className="font-semibold text-slate-700">Codex Forge</div>
+              <div className="mt-1 text-sm leading-6 text-slate-500">
+                当前版本
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="shrink-0 rounded bg-white px-3 py-1.5 text-sm font-bold text-brand-700 shadow-sm ring-1 ring-slate-900/5">
+                {appVersion ? `v${appVersion}` : "-"}
+              </div>
+              <Button
+                icon={<RefreshCw size={16} />}
+                loading={checkUpdateLoading}
+                onClick={checkForUpdates}
+              >
+                检查更新
+              </Button>
+              <Button
+                aria-label="打开 GitHub 项目"
+                icon={<Github size={16} />}
+                onClick={() => {
+                  void window.launcherApi.openProjectGitHub?.();
+                }}
+              />
+            </div>
           </div>
         </div>
       </Form>

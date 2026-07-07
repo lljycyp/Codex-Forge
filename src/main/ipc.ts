@@ -28,6 +28,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("app:get-auto-start-enabled", () => {
     return app.getLoginItemSettings().openAtLogin;
   });
+  ipcMain.handle("app:get-version", () => app.getVersion());
   ipcMain.handle("app:set-auto-start-enabled", (_event, enabled: boolean) => {
     app.setLoginItemSettings({
       openAtLogin: enabled,

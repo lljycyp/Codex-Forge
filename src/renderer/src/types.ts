@@ -93,12 +93,33 @@ export type TomlConfigState = {
   backupPath?: string;
 };
 
+export type UpdateEvent =
+  | { status: "available"; currentVersion: string; version: string; releaseNotes?: string }
+  | {
+      status: "downloading";
+      currentVersion: string;
+      version: string;
+      percent: number;
+      transferred: number;
+      total: number;
+      bytesPerSecond: number;
+    }
+  | { status: "downloaded"; currentVersion: string; version: string; releaseNotes?: string }
+  | { status: "not-available"; currentVersion: string; version: string }
+  | { status: "error"; message: string };
+
 export type LauncherApi = {
   invoke: <T>(command: string, payload?: unknown) => Promise<BackendResponse<T>>;
   selectDirectory: (defaultPath?: string) => Promise<string>;
   selectAuthJsonFile: () => Promise<string>;
   getAutoStartEnabled?: () => Promise<boolean>;
+  getAppVersion?: () => Promise<string>;
+  openProjectGitHub?: () => Promise<void>;
   setAutoStartEnabled?: (enabled: boolean) => Promise<boolean>;
+  onUpdateEvent?: (callback: (event: UpdateEvent) => void) => () => void;
+  checkForUpdates?: () => Promise<void>;
+  downloadUpdate?: () => Promise<void>;
+  installUpdate?: () => Promise<void>;
   minimizeWindow: () => Promise<void>;
   toggleMaximizeWindow: () => Promise<void>;
   closeWindow: () => Promise<void>;

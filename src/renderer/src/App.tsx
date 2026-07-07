@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Layout, Typography, message } from "antd";
+import { Button, Layout, Modal, Progress, Typography, message } from "antd";
 import { Code2, FileText, Home, RefreshCw, Settings, ShieldCheck } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
 import { viewMeta } from "./constants/views";
@@ -10,10 +10,11 @@ import { InstructionsPage } from "./pages/InstructionsPage";
 import { TomlConfigPage } from "./pages/TomlConfigPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import codexForgeLogo from "./assets/codex-forge-logo.png";
-import type { AppState, ProfileSummary, RunCommand, ViewKey } from "./types";
+import type { AppState, ProfileSummary, RunCommand, UpdateEvent, ViewKey } from "./types";
 
 const { Content } = Layout;
 const usageAutoRefreshMs = 5 * 60 * 1000;
+type UpdateModalEvent = Exclude<UpdateEvent, { status: "error" } | { status: "not-available" }>;
 
 const emptyState: AppState = {
   codexCommandAvailable: false,
@@ -32,6 +33,32 @@ const emptyState: AppState = {
 
 const refreshDelayCommands = new Set(["launch_profile", "stop_profile"]);
 
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function updateNotes(event: UpdateEvent | null) {
+  if (!event || !("releaseNotes" in event) || !event.releaseNotes) {
+    return [];
+  }
+  const notes = event.releaseNotes
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-*]\s*/, "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  return notes;
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState<ViewKey>("home");
   const [appState, setAppState] = useState<AppState>(emptyState);
@@ -45,6 +72,10 @@ export default function App() {
   const refreshTokenRef = useRef(0);
   const commandTokenRef = useRef(0);
   const autoUsageRefreshingRef = useRef(false);
+  const showUpdateProgressRef = useRef(false);
+  const [updateEvent, setUpdateEvent] = useState<UpdateModalEvent | null>(null);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [showUpdateProgress, setShowUpdateProgress] = useState(false);
 
   useEffect(() => {
     activeViewRef.current = activeView;
@@ -78,6 +109,42 @@ export default function App() {
   useEffect(() => {
     refresh("home");
   }, [refresh]);
+
+  useEffect(() => {
+    if (!window.launcherApi.onUpdateEvent) {
+      return undefined;
+    }
+    return window.launcherApi.onUpdateEvent((event) => {
+      if (event.status === "error") {
+        showUpdateProgressRef.current = false;
+        setShowUpdateProgress(false);
+        setUpdateModalOpen(false);
+        message.error(event.message || "更新失败");
+        return;
+      }
+      if (event.status === "not-available") {
+        showUpdateProgressRef.current = false;
+        setShowUpdateProgress(false);
+        setUpdateModalOpen(false);
+        message.success("当前已是最新版本");
+        return;
+      }
+      setUpdateEvent(event);
+      if (event.status === "available") {
+        showUpdateProgressRef.current = false;
+        setShowUpdateProgress(false);
+        setUpdateModalOpen(true);
+        return;
+      }
+      if (event.status === "downloaded") {
+        showUpdateProgressRef.current = false;
+        setShowUpdateProgress(false);
+        setUpdateModalOpen(true);
+        return;
+      }
+      setUpdateModalOpen(showUpdateProgressRef.current);
+    });
+  }, []);
 
   useEffect(() => {
     const refreshUsageSilently = async () => {
@@ -167,6 +234,39 @@ export default function App() {
     []
   );
 
+  const hideUpdateModal = useCallback(() => {
+    showUpdateProgressRef.current = false;
+    setShowUpdateProgress(false);
+    setUpdateModalOpen(false);
+  }, []);
+
+  const startUpdateDownload = useCallback((showProgress: boolean) => {
+    if (!window.launcherApi.downloadUpdate) {
+      message.error("当前版本不支持下载更新，请重启后再试");
+      return;
+    }
+    showUpdateProgressRef.current = showProgress;
+    setShowUpdateProgress(showProgress);
+    setUpdateModalOpen(showProgress);
+    if (!showProgress) {
+      message.info("更新将在后台下载，完成后会提示安装");
+    }
+    void window.launcherApi.downloadUpdate().catch((error) => {
+      showUpdateProgressRef.current = false;
+      setShowUpdateProgress(false);
+      setUpdateModalOpen(false);
+      message.error(error instanceof Error ? error.message : "下载更新失败");
+    });
+  }, []);
+
+  const installUpdate = useCallback(() => {
+    if (!window.launcherApi.installUpdate) {
+      message.error("当前版本不支持安装更新，请重启后再试");
+      return;
+    }
+    void window.launcherApi.installUpdate();
+  }, []);
+
   const refreshButton = (
     <Button
       className="shrink-0 rounded-card border-shell-line font-bold text-[#344054] hover:!border-brand-600 hover:!text-brand-600"
@@ -177,6 +277,13 @@ export default function App() {
       刷新
     </Button>
   );
+  const notes = updateNotes(updateEvent);
+  const updateModalTitle =
+    updateEvent?.status === "downloaded"
+      ? "更新已下载"
+      : updateEvent?.status === "downloading" && showUpdateProgress
+        ? "正在下载更新"
+        : "发现新版本";
 
   return (
     <>
@@ -255,6 +362,84 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      <Modal
+        centered
+        width={520}
+        title={updateModalTitle}
+        open={updateModalOpen && updateEvent !== null}
+        onCancel={hideUpdateModal}
+        footer={
+          updateEvent?.status === "downloaded" ? (
+            <>
+              <Button onClick={hideUpdateModal}>稍后</Button>
+              <Button type="primary" onClick={installUpdate}>
+                立即重启安装
+              </Button>
+            </>
+          ) : updateEvent?.status === "downloading" && showUpdateProgress ? (
+            <Button onClick={hideUpdateModal}>稍后隐藏</Button>
+          ) : (
+            <>
+              <Button onClick={hideUpdateModal}>稍后</Button>
+              <Button onClick={() => startUpdateDownload(false)}>后台下载</Button>
+              <Button type="primary" onClick={() => startUpdateDownload(true)}>
+                立即下载
+              </Button>
+            </>
+          )
+        }
+      >
+        {updateEvent ? (
+          <div className="grid gap-5">
+            <div className="flex items-center gap-4 rounded-xl bg-slate-50 p-4">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white shadow-sm ring-1 ring-slate-900/5">
+                <img src={codexForgeLogo} alt="" className="h-8 w-8 object-contain" draggable={false} />
+              </div>
+              <div className="grid gap-1">
+                <div className="text-[15px] font-semibold text-slate-900">
+                  当前版本 <span className="text-slate-500 font-normal">{updateEvent.currentVersion}</span> <span className="mx-1 text-slate-300">→</span> 最新版本 <span className="text-brand-600">{updateEvent.version}</span>
+                </div>
+                <div className="text-sm text-slate-500 leading-relaxed">
+                  {updateEvent.status === "downloaded"
+                    ? "更新包已下载完成，重启后将自动安装。"
+                    : updateEvent.status === "downloading"
+                      ? "更新包正在下载，下载期间可以继续使用 Codex Forge。"
+                      : "新版本已可用。你可以立即下载并查看进度，也可以让它在后台下载。"}
+                </div>
+              </div>
+            </div>
+            {updateEvent.status === "downloading" && showUpdateProgress ? (
+              <div className="grid gap-2 px-1">
+                <Progress percent={Math.round(updateEvent.percent)} strokeColor="#0f766e" />
+                <div className="text-xs font-medium text-slate-500">
+                  {formatBytes(updateEvent.transferred)} / {formatBytes(updateEvent.total)} ·{" "}
+                  {formatBytes(updateEvent.bytesPerSecond)}/s
+                </div>
+              </div>
+            ) : null}
+            {updateEvent.status !== "downloading" ? (
+              <div className="grid gap-3 px-1">
+                <div className="flex items-center gap-2">
+                  <div className="h-3.5 w-1 rounded-full bg-brand-600" />
+                  <div className="text-[15px] font-bold text-slate-900">更新内容</div>
+                </div>
+                {notes.length > 0 ? (
+                  <ul className="m-0 grid gap-2.5 pl-1 text-[14px] text-slate-600 list-none">
+                    {notes.map((note) => (
+                      <li key={note} className="relative pl-4 leading-relaxed">
+                        <span className="absolute left-0 top-[9px] h-1.5 w-1.5 rounded-full bg-slate-300" />
+                        {note}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-[14px] text-slate-500">暂无更新说明</div>
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
     </>
   );
 }

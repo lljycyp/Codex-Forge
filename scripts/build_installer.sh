@@ -17,3 +17,4 @@ if [[ -n "${LOCALAPPDATA:-}" ]] && command -v cygpath >/dev/null 2>&1; then
 fi
 
 electron-builder --win --publish never
+node scripts/write_release_notes.js
