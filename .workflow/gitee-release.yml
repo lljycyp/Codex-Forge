@@ -45,9 +45,9 @@ stages:
             target: D:\gitee_go\codex-forge
             dependArtifact: DEPLOY_PLACEHOLDER
         script:
-          - bash -lc "set -euo pipefail; if [ ! -d /d/gitee_go/codex-forge/.git ]; then git clone https://gitee.com/llj20010218/codex-forge.git /d/gitee_go/codex-forge; fi; cd /d/gitee_go/codex-forge; git remote set-url origin https://gitee.com/llj20010218/codex-forge.git; git fetch --tags origin; git checkout main; git pull --ff-only origin main"
-          - bash -lc "set -euo pipefail; cd /d/gitee_go/codex-forge; npm config set registry https://registry.npmmirror.com; command -v yarn >/dev/null 2>&1 || npm install -g yarn; yarn config set registry https://registry.npmmirror.com; command -v uv >/dev/null 2>&1 || powershell -NoProfile -ExecutionPolicy Bypass -Command 'irm https://astral.sh/uv/install.ps1 | iex'; export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\"; yarn install --frozen-lockfile --network-timeout 600000; yarn build"
-          - bash -lc "set -euo pipefail; cd /d/gitee_go/codex-forge; export GITEE_TOKEN='${G_TOKEN}'; if [ -z \"$GITEE_TOKEN\" ]; then echo G_TOKEN is required in Gitee Go variables; exit 1; fi; export GITEE_UPLOAD_MAX_TIME=7200; node scripts/publish_gitee_release.js"
+          - '"C:\Program Files\Git\bin\bash.exe" -lc "set -euo pipefail; if [ ! -d /d/gitee_go/codex-forge/.git ]; then git clone https://gitee.com/llj20010218/codex-forge.git /d/gitee_go/codex-forge; fi; cd /d/gitee_go/codex-forge; git remote set-url origin https://gitee.com/llj20010218/codex-forge.git; git fetch --tags origin; git checkout main; git pull --ff-only origin main"'
+          - '"C:\Program Files\Git\bin\bash.exe" -lc "set -euo pipefail; cd /d/gitee_go/codex-forge; npm config set registry https://registry.npmmirror.com; command -v yarn >/dev/null 2>&1 || npm install -g yarn; yarn config set registry https://registry.npmmirror.com; command -v uv >/dev/null 2>&1 || powershell -NoProfile -ExecutionPolicy Bypass -Command ''irm https://astral.sh/uv/install.ps1 | iex''; export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\"; yarn install --frozen-lockfile --network-timeout 600000; yarn build"'
+          - '"C:\Program Files\Git\bin\bash.exe" -lc "set -euo pipefail; cd /d/gitee_go/codex-forge; export GITEE_TOKEN=''${G_TOKEN}''; if [ -z \"$GITEE_TOKEN\" ]; then echo G_TOKEN is required in Gitee Go variables; exit 1; fi; export GITEE_UPLOAD_MAX_TIME=7200; node scripts/publish_gitee_release.js"'
         notify: []
         strategy:
           retry: "0"
