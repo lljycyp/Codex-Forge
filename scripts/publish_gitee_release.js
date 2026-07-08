@@ -47,7 +47,15 @@ async function api(pathname, { method = "GET", params = {}, body, headers = {} }
     url.searchParams.set(key, value);
   }
 
-  const response = await fetch(url, { method, body, headers });
+  let response;
+  try {
+    response = await fetch(url, { method, body, headers });
+  } catch (error) {
+    const safeUrl = new URL(url);
+    safeUrl.searchParams.delete("access_token");
+    const cause = error.cause?.code || error.cause?.message || error.message;
+    throw new Error(`${method} ${safeUrl.pathname}${safeUrl.search} failed: ${cause}`);
+  }
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
   if (!response.ok) {
