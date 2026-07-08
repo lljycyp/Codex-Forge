@@ -18,14 +18,14 @@ stages:
       - step: build@nodejs
         name: build_installer
         displayName: Build installer
-        nodeVersion: 16.14.2
+        nodeVersion: 20.18.1
         commands:
           - set -e
           - npm config set registry https://registry.npmmirror.com
-          - npm install -g yarn
+          - yarn config set registry https://registry.npmmirror.com
           - curl -LsSf https://astral.sh/uv/install.sh | sh
           - export PATH="$HOME/.local/bin:$PATH"
-          - yarn install --frozen-lockfile
+          - yarn install --frozen-lockfile --network-timeout 600000
           - yarn build
           - echo "APP_VERSION=$(node -p 'require(\"./package.json\").version')" >> GITEE_PARAMS
           - ls -lh release
@@ -37,6 +37,7 @@ stages:
               - release/release-notes.md
         caches:
           - ~/.npm
+          - ~/.cache/yarn
         notify: []
         strategy:
           retry: "0"
