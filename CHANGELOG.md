@@ -1,5 +1,17 @@
 # 更新日志
 
+## 0.1.10
+
+### zh-CN
+
+- 维护发布，整理安装包版本标记
+- 未引入新的用户侧功能
+
+### en-US
+
+- Maintenance release for installer version metadata
+- No new user-facing features
+
 ## 0.1.9
 
 ### zh-CN
