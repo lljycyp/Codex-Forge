@@ -46,6 +46,18 @@ def init_db(connection):
           FOREIGN KEY (profile_name) REFERENCES profiles(name)
             ON DELETE CASCADE ON UPDATE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS instruction_templates (
+          scope_key TEXT NOT NULL,
+          id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          filename TEXT NOT NULL,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (scope_key, id),
+          UNIQUE (scope_key, filename)
+        );
         """
     )
 
@@ -145,3 +157,42 @@ def save_usage_cache(cache):
             )
         else:
             connection.execute("DELETE FROM profile_usage")
+
+
+def load_instruction_templates(scope_key):
+    with connect() as connection:
+        return [
+            {"id": row["id"], "title": row["title"], "filename": row["filename"]}
+            for row in connection.execute(
+                """
+                SELECT id, title, filename
+                FROM instruction_templates
+                WHERE scope_key = ?
+                ORDER BY sort_order, title
+                """,
+                (scope_key,),
+            )
+        ]
+
+
+def save_instruction_templates(scope_key, templates):
+    now = int(time.time())
+    with connect() as connection:
+        connection.execute("DELETE FROM instruction_templates WHERE scope_key = ?", (scope_key,))
+        for sort_order, template in enumerate(templates):
+            connection.execute(
+                """
+                INSERT INTO instruction_templates
+                  (scope_key, id, title, filename, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scope_key,
+                    template["id"],
+                    template["title"],
+                    template["filename"],
+                    sort_order,
+                    now,
+                    now,
+                ),
+            )

@@ -48,20 +48,30 @@ function formatBytes(bytes: number) {
   return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
-function updateNotes(event: UpdateEvent | null) {
+function releaseNotesForLanguage(releaseNotes: string, language: string) {
+  const lines = releaseNotes.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim().toLowerCase() === `### ${language}`.toLowerCase());
+  if (start === -1) {
+    return releaseNotes;
+  }
+  const end = lines.findIndex((line, index) => index > start && /^###\s+/.test(line.trim()));
+  return lines.slice(start + 1, end === -1 ? undefined : end).join("\n").trim();
+}
+
+function updateNotes(event: UpdateEvent | null, language: string) {
   if (!event || !("releaseNotes" in event) || !event.releaseNotes) {
     return [];
   }
-  const notes = event.releaseNotes
+  const notes = releaseNotesForLanguage(event.releaseNotes, language)
     .split(/\r?\n/)
     .map((line) => line.replace(/^[-*]\s*/, "").trim())
-    .filter(Boolean)
+    .filter((line) => line && !/^#{1,6}\s+/.test(line))
     .slice(0, 5);
   return notes;
 }
 
 export default function App() {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   const [activeView, setActiveView] = useState<ViewKey>("home");
   const [appState, setAppState] = useState<AppState>(emptyState);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
@@ -285,7 +295,7 @@ export default function App() {
       {t("刷新")}
     </Button>
   );
-  const notes = updateNotes(updateEvent);
+  const notes = updateNotes(updateEvent, language);
   const updateModalTitle =
     updateEvent?.status === "downloaded"
       ? t("更新已下载")

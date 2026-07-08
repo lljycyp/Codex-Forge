@@ -1,9 +1,9 @@
-import json
 import re
 import shutil
 import uuid
 from pathlib import Path
 
+from core import db
 from core.constants import CONFIG_DIR
 from core.profile_service import get_active_codex_dir, get_active_config_path
 
@@ -133,21 +133,9 @@ def _template_dir(payload=None):
     return Path((payload or {}).get("templateDir") or DEFAULT_TEMPLATE_DIR)
 
 
-def _index_path(template_dir):
-    return Path(template_dir) / "index.json"
-
-
 def _load_index(template_dir=None):
-    """读取模板索引，坏文件直接当空列表处理。"""
-    index_path = _index_path(template_dir or DEFAULT_TEMPLATE_DIR)
-    if not index_path.exists():
-        return []
-    try:
-        data = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    if not isinstance(data, list):
-        return []
+    """读取模板索引。"""
+    data = db.load_instruction_templates(_template_scope(template_dir))
     result = []
     for item in data:
         if not isinstance(item, dict):
@@ -161,11 +149,14 @@ def _load_index(template_dir=None):
 
 
 def _save_index(templates, template_dir=None):
-    """原子保存模板索引，避免异常中断留下半截文件。"""
+    """保存模板索引。"""
     template_dir = Path(template_dir or DEFAULT_TEMPLATE_DIR)
     template_dir.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(templates, ensure_ascii=False, indent=2)
-    _write_text_atomic(_index_path(template_dir), payload + "\n")
+    db.save_instruction_templates(_template_scope(template_dir), templates)
+
+
+def _template_scope(template_dir=None):
+    return str(Path(template_dir or DEFAULT_TEMPLATE_DIR).resolve())
 
 
 def _find_template(template_id, template_dir=None):

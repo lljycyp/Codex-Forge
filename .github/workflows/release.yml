@@ -47,7 +47,7 @@ jobs:
           body_path: release/release-notes.md
           files: |
             release/*.exe
-            release/*.yml
+            release/latest.yml
             release/*.blockmap
 
       - name: Upload installer to Gitee release
