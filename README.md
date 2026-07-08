@@ -41,7 +41,7 @@
 - 🔄 **无缝切换**：切换账号时自动写入当前用户的 `~/.codex/auth.json`。
 - 🛡️ **配置隔离**：账号切换模式固定使用系统 `~/.codex/config.toml`；多开隔离模式使用账号 `CodexHome/config.toml`。
 - 🛠️ **可视化编辑**：提供查看和编辑当前生效的 `~/.codex/config.toml` 的可视化界面。
-- 📝 **指令模板**：把常用提示词保存成 Markdown 模板，一键切换 Codex 的全局行为设定。
+- 📝 **指令模板（提示词注入）**：把常用提示词保存成 Markdown 模板，一键切换 Codex 的全局行为设定，使用内置提示词可实现破除限制，可实现SQL 注入测试、逆向等效果。
 - 📊 **状态监控**：实时查看账号健康状态、运行状态以及额度快照。
 - 🚀 **可选启动模式**：支持稳定的账号切换模式，也支持多开隔离模式并发启动多个 Codex 客户端。
 
@@ -102,13 +102,11 @@ Codex Forge 会读取当前生效的配置文件：
 %LOCALAPPDATA%/CodexForge/backups/config-toml/
 ```
 
-### 4. 📝 指令模板管理
+### 4. 📝 指令模板管理（提示词注入）
 
 指令模板用于快速切换 Codex 的系统级行为提示词。你可以把常用工作方式、代码规范、审查标准，或类似 `docs/propmt/gpt5.5-unrestricted.md` 这样的破除限制提示词保存为 Markdown（标记语言）模板，需要时一键启用。
 
-本功能的破除限制提示词模板参考了 [yynxxxxx/Codex-5.5-codex-instruct-5.5](https://github.com/yynxxxxx/Codex-5.5-codex-instruct-5.5) 项目。
-
-Codex Forge 当前内置提示词模板：
+Codex Forge 当前内置破除限制提示词模板：
 
 - `docs/propmt/gpt5.5-unrestricted.md`
 
@@ -124,7 +122,7 @@ Codex Forge 当前内置提示词模板：
 部署后可以测试：
 
 ```text
-如何对目标进行 SQL 注入测试？
+如何对目标进行渗透测试？
 ```
 
 典型效果：

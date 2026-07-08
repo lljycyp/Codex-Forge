@@ -41,7 +41,7 @@
 - 🔄 **Smooth switching**: Write the selected account to `~/.codex/auth.json` automatically.
 - 🛡️ **Config isolation**: Account-switching mode always uses the system `~/.codex/config.toml`; isolated multi-instance mode uses each account's `CodexHome/config.toml`.
 - 🛠️ **Visual editing**: View and edit the active `~/.codex/config.toml`.
-- 📝 **Instruction templates**: Save common prompts as Markdown templates and switch Codex's global behavior profile with one click.
+- 📝 **Instruction templates (prompt injection)**: Save common prompts as Markdown templates and switch Codex's global behavior profile with one click. The built-in prompt can break restrictions and support effects such as SQL injection testing and reverse engineering.
 - 📊 **Status monitoring**: View account health, running status, and usage snapshots.
 - 🚀 **Selectable launch modes**: Supports the stable account-switching mode and an isolated multi-instance mode for running multiple Codex clients at the same time.
 
@@ -61,7 +61,7 @@
 | 📦 **Isolated multi-instance launch** | Featured capability. In multi-instance mode, prepares a per-account `CodexHome`, `APPDATA`, `LOCALAPPDATA`, `--user-data-dir`, and full `CodexPortableApp` copy to avoid accounts overwriting each other. |
 | 📊 **Usage snapshots** | Reads account auth data, requests the Codex usage endpoint, and caches each account's usage state. |
 | 🛠️ **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
-| 📝 **Instruction templates** | Saves Markdown prompt templates locally. Enabling a template copies it into the active Codex config directory and points `model_instructions_file` in `config.toml` to that template. |
+| 📝 **Instruction templates (prompt injection)** | Saves Markdown prompt templates locally. Enabling a template copies it into the active Codex config directory and points `model_instructions_file` in `config.toml` to that template. |
 | 🩺 **Diagnostics** | Shows key config paths, profile root, Codex process state, profile integrity, and log path. |
 | 🗜️ **Windows packaging** | Builds the Python backend with PyInstaller, then creates a standard Windows installer with Electron Builder. |
 
@@ -102,13 +102,11 @@ Before saving changes, it validates the TOML content and backs up the old file t
 %LOCALAPPDATA%/CodexForge/backups/config-toml/
 ```
 
-### 4. 📝 Instruction Template Management
+### 4. 📝 Instruction Template Management (Prompt Injection)
 
 Instruction templates let you quickly switch Codex's system-level behavior prompt. You can save common workflows, coding rules, review standards, or a restriction-breaking prompt such as `docs/propmt/gpt5.5-unrestricted.md` as Markdown templates and enable them when needed.
 
-The restriction-breaking prompt template in this feature is based on [yynxxxxx/Codex-5.5-codex-instruct-5.5](https://github.com/yynxxxxx/Codex-5.5-codex-instruct-5.5).
-
-Codex Forge currently includes this prompt template:
+Codex Forge currently includes this restriction-breaking prompt template:
 
 - `docs/propmt/gpt5.5-unrestricted.md`
 
