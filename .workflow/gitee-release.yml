@@ -47,9 +47,9 @@ stages:
             target: D:\Python_Work\test
             dependArtifact: DEPLOY_PLACEHOLDER
         script:
-          - bash -lc "set -euo pipefail; repo=/d/gitee_go/codex-forge; if [ ! -d \"\$repo/.git\" ]; then git clone https://gitee.com/llj20010218/codex-forge.git \"\$repo\"; fi; cd \"\$repo\"; git remote set-url origin https://gitee.com/llj20010218/codex-forge.git; git fetch --tags origin; git checkout main; git pull --ff-only origin main"
-          - bash -lc "set -euo pipefail; cd /d/gitee_go/codex-forge; npm config set registry https://registry.npmmirror.com; command -v yarn >/dev/null 2>&1 || npm install -g yarn; yarn config set registry https://registry.npmmirror.com; command -v uv >/dev/null 2>&1 || powershell -NoProfile -ExecutionPolicy Bypass -Command 'irm https://astral.sh/uv/install.ps1 | iex'; export PATH=\"\$HOME/.local/bin:\$HOME/.cargo/bin:\$PATH\"; yarn install --frozen-lockfile --network-timeout 600000; yarn build"
-          - bash -lc "set -euo pipefail; if [ -z \"\${G_TOKEN:-}\" ]; then echo GITEE_TOKEN is required on the Windows host or pipeline environment; exit 1; fi; cd /d/gitee_go/codex-forge; export GITEE_UPLOAD_MAX_TIME=7200; node scripts/publish_gitee_release.js"
+          - bash -lc "set -euo pipefail; if [ ! -d /d/gitee_go/codex-forge/.git ]; then git clone https://gitee.com/llj20010218/codex-forge.git /d/gitee_go/codex-forge; fi; cd /d/gitee_go/codex-forge; git remote set-url origin https://gitee.com/llj20010218/codex-forge.git; git fetch --tags origin; git checkout main; git pull --ff-only origin main"
+          - bash -lc "set -euo pipefail; cd /d/gitee_go/codex-forge; npm config set registry https://registry.npmmirror.com; command -v yarn >/dev/null 2>&1 || npm install -g yarn; yarn config set registry https://registry.npmmirror.com; command -v uv >/dev/null 2>&1 || powershell -NoProfile -ExecutionPolicy Bypass -Command 'irm https://astral.sh/uv/install.ps1 | iex'; export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\"; yarn install --frozen-lockfile --network-timeout 600000; yarn build"
+          - bash -lc "set -euo pipefail; if [ -z \"${G_TOKEN:-}\" ]; then echo G_TOKEN is required on the Windows host or pipeline environment; exit 1; fi; cd /d/gitee_go/codex-forge; export GITEE_TOKEN=\"$G_TOKEN\"; export GITEE_UPLOAD_MAX_TIME=7200; node scripts/publish_gitee_release.js"
         notify: []
         strategy:
           retry: '0'
