@@ -8,6 +8,7 @@ const owner = process.env.GITEE_OWNER || "llj20010218";
 const repo = process.env.GITEE_REPO || "codex-forge";
 const token = process.env.GITEE_TOKEN;
 const dryRun = process.env.GITEE_DRY_RUN === "1";
+const uploadMaxTime = process.env.GITEE_UPLOAD_MAX_TIME || "7200";
 
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const version = pkg.version;
@@ -25,6 +26,10 @@ function requireFile(file) {
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     throw new Error(`Missing release asset: ${path.relative(root, file)}`);
   }
+}
+
+function assetSize(file) {
+  return `${(fs.statSync(file).size / 1024 / 1024).toFixed(2)} MB`;
 }
 
 function releaseNotes() {
@@ -120,18 +125,21 @@ async function uploadAsset(releaseId, file) {
   const curl = process.platform === "win32" ? "curl.exe" : "curl";
   const result = spawnSync(curl, [
     "--fail-with-body",
-    "--silent",
     "--show-error",
+    "--location",
+    "--retry",
+    "2",
+    "--retry-all-errors",
     "--connect-timeout",
     "60",
     "--max-time",
-    "1800",
+    uploadMaxTime,
     "-F",
     `access_token=${token}`,
     "-F",
     `file=@${file};filename=${path.basename(file)}`,
     `${apiBase}${pathname}`,
-  ], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  ], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"] });
 
   if (result.error) {
     throw result.error;
@@ -159,16 +167,21 @@ async function main() {
     throw new Error("GITEE_TOKEN is required");
   }
 
+  console.log(`Finding Gitee release ${tagName}`);
   let release = await findRelease();
+  console.log(release?.id ? `Updating Gitee release ${tagName}` : `Creating Gitee release ${tagName}`);
   release = release?.id ? await updateRelease(release.id, notes) : await createRelease(notes);
 
+  console.log(`Listing Gitee release assets ${tagName}`);
   const assets = await listAssets(release.id).catch(() => []);
   for (const file of files) {
     const fileName = path.basename(file);
     const oldAsset = assets.find((asset) => [asset.name, asset.filename, asset.file_name].includes(fileName));
     if (oldAsset?.id) {
+      console.log(`Deleting old Gitee asset ${fileName}`);
       await deleteAsset(release.id, oldAsset.id);
     }
+    console.log(`Uploading ${fileName} (${assetSize(file)}) to Gitee release ${tagName}`);
     await uploadAsset(release.id, file);
     console.log(`Uploaded ${fileName} to Gitee release ${tagName}`);
   }
