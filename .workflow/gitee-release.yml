@@ -1,4 +1,4 @@
-version: '1.0'
+version: "1.0"
 name: gitee-release
 displayName: Gitee-Release
 triggers:
@@ -28,7 +28,7 @@ stages:
               - gitee-go-placeholder
         notify: []
         strategy:
-          retry: '0'
+          retry: "0"
   - name: build
     displayName: Build and publish on Windows host
     strategy: naturally
@@ -44,7 +44,7 @@ stages:
         deployArtifact:
           - source: build
             name: output
-            target: D:\Python_Work\test
+            target: D:\gitee_go\codex-forge
             dependArtifact: DEPLOY_PLACEHOLDER
         script:
           - bash -lc "set -euo pipefail; if [ ! -d /d/gitee_go/codex-forge/.git ]; then git clone https://gitee.com/llj20010218/codex-forge.git /d/gitee_go/codex-forge; fi; cd /d/gitee_go/codex-forge; git remote set-url origin https://gitee.com/llj20010218/codex-forge.git; git fetch --tags origin; git checkout main; git pull --ff-only origin main"
@@ -52,4 +52,4 @@ stages:
           - bash -lc "set -euo pipefail; if [ -z \"${G_TOKEN:-}\" ]; then echo G_TOKEN is required on the Windows host or pipeline environment; exit 1; fi; cd /d/gitee_go/codex-forge; export GITEE_TOKEN=\"$G_TOKEN\"; export GITEE_UPLOAD_MAX_TIME=7200; node scripts/publish_gitee_release.js"
         notify: []
         strategy:
-          retry: '0'
+          retry: "0"
