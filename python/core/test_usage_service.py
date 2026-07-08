@@ -34,8 +34,8 @@ class UsageUrlTest(unittest.TestCase):
 class UsageCacheTest(unittest.TestCase):
     def test_transient_error_does_not_replace_success_cache(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_path = usage_service.USAGE_CACHE_PATH
-            usage_service.USAGE_CACHE_PATH = Path(temp_dir) / "usage_cache.json"
+            original_db_path = usage_service.db.DB_PATH
+            usage_service.db.DB_PATH = Path(temp_dir) / "codex_forge.db"
             try:
                 cached = {
                     "acct": {
@@ -60,7 +60,7 @@ class UsageCacheTest(unittest.TestCase):
 
                 self.assertEqual(result["acct"], cached["acct"])
             finally:
-                usage_service.USAGE_CACHE_PATH = original_path
+                usage_service.db.DB_PATH = original_db_path
 
 
 if __name__ == "__main__":

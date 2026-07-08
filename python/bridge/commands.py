@@ -13,7 +13,7 @@ from core.codex_source import (
     read_running_codex_processes,
 )
 from core.config_store import load_config, save_config
-from core.constants import CONFIG_LAST_GOOD_PATH, CONFIG_PATH, CONFIG_PREVIOUS_GOOD_PATH, DEFAULT_PROFILE_ROOT, PORTABLE_APP_DIR_NAME
+from core.constants import DB_PATH, DEFAULT_PROFILE_ROOT, PORTABLE_APP_DIR_NAME
 from core.auth_service import auth_tokens, extract_auth
 from core.logger import get_logger
 from core.oauth_service import login_with_browser
@@ -635,9 +635,13 @@ def get_diagnostics(_payload=None):
     profile_items = []
     for profile_name in profiles:
         summary = _build_profile_summary(config, profile_name, running_commands)
-        health = _get_profile_health(config, profile_name)
-        status_text, _ = format_health_status(health)
         disk_usage_bytes = _get_directory_size(_get_profile_dir(config, profile_name))
+        health = {
+            "running": summary["running"],
+            "errors": summary["errors"],
+            "warnings": summary["warnings"],
+        }
+        status_text, _ = format_health_status(health)
         summary.update(
             {
                 "statusText": status_text,
@@ -650,10 +654,10 @@ def get_diagnostics(_payload=None):
         profile_items.append(summary)
     return {
         "basic": {
-            "configPath": str(CONFIG_PATH),
-            "configExists": CONFIG_PATH.exists(),
-            "lastGoodBackupExists": CONFIG_LAST_GOOD_PATH.exists(),
-            "previousGoodBackupExists": CONFIG_PREVIOUS_GOOD_PATH.exists(),
+            "configPath": str(DB_PATH),
+            "configExists": DB_PATH.exists(),
+            "lastGoodBackupExists": False,
+            "previousGoodBackupExists": False,
             "profileRoot": str(profile_root),
             "profileRootWritable": check_directory_writable(profile_root),
             "activeAuthPath": str(get_active_auth_path()),
@@ -679,6 +683,7 @@ def _build_profile_summary(config, profile_name, running_commands):
     active_profile = config.get("active_profile", "")
     running = _is_profile_running(config, profile_name, running_commands)
     target_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
+    portable_codex_size = _get_directory_size(target_app_dir)
     return {
         "name": profile_name,
         "running": running,
@@ -693,8 +698,10 @@ def _build_profile_summary(config, profile_name, running_commands):
         "codexHomeExists": (profile_dir / "CodexHome").exists(),
         "portableCodexPath": str(target_app_dir / "Codex.exe"),
         "portableCodexExists": (target_app_dir / "Codex.exe").exists(),
-        "portableCodexSizeBytes": _get_directory_size(target_app_dir),
-        "portableCodexSizeText": _format_bytes(_get_directory_size(target_app_dir)),
+        "portableCodexSizeBytes": portable_codex_size,
+        "portableCodexSizeText": _format_bytes(portable_codex_size),
+        "errors": status["errors"],
+        "warnings": status["warnings"],
         "usage": get_cached_profile_usage(profile_name),
     }
 
@@ -788,19 +795,6 @@ def _validate_profile_name(config, profile_name, exclude_name=None):
     if exclude_name is None and profile_dir.exists():
         raise FileExistsError("该名称对应的账号资料目录已存在")
     return profile_name
-
-
-def _get_profile_health(config, profile_name):
-    """检查账号资料完整性。"""
-    profile_dir = _get_profile_dir(config, profile_name)
-    status = get_profile_status(
-        profile_dir,
-    )
-    return {
-        "running": _is_profile_running(config, profile_name),
-        "errors": status["errors"],
-        "warnings": status["warnings"],
-    }
 
 
 def _get_launch_mode(config):

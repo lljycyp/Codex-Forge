@@ -6,11 +6,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from pathlib import Path
 
+from core import db
 from core.auth_service import ensure_fresh_auth, extract_auth
-from core.constants import USAGE_CACHE_PATH
+from core.constants import DB_PATH
 from core.profile_service import (
     get_active_config_path,
     resolve_profile_auth_path,
@@ -29,19 +29,13 @@ BACKEND_API_PREFIX = "/backend-api"
 
 
 def load_usage_cache():
-    """读取本地额度缓存；缓存损坏时返回空对象，避免影响账号列表。"""
-    try:
-        return json.loads(USAGE_CACHE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    """读取本地额度缓存。"""
+    return db.load_usage_cache()
 
 
 def save_usage_cache(cache):
-    """保存额度缓存，使用临时文件替换以降低写坏风险。"""
-    USAGE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = USAGE_CACHE_PATH.with_name(f".{USAGE_CACHE_PATH.name}.{uuid.uuid4().hex}.tmp")
-    temp_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
-    temp_path.replace(USAGE_CACHE_PATH)
+    """保存额度缓存到 SQLite。"""
+    db.save_usage_cache(cache)
 
 
 def get_cached_profile_usage(profile_name):
@@ -87,7 +81,7 @@ def refresh_all_profile_usage(profile_dirs, share_system_config=False, use_codex
 
 def _merge_usage_results(results, started_at):
     """合并刷新结果；避免较早启动的后台刷新覆盖较晚完成的手动刷新。"""
-    with _file_lock(USAGE_CACHE_PATH.with_name(f".{USAGE_CACHE_PATH.name}.lock")):
+    with _file_lock(DB_PATH.with_name(f".{DB_PATH.name}.usage.lock")):
         cache = load_usage_cache()
         for profile_name, usage in results.items():
             current = cache.get(profile_name)
