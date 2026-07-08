@@ -9,79 +9,21 @@ triggers:
         - v
 stages:
   - name: build
-    displayName: Build installer
+    displayName: Build and publish on Windows host
     strategy: naturally
     trigger: auto
     steps:
       - step: deploy@agent
-        name: deploy_agent
+        name: build_and_publish
         displayName: 主机部署
         hostGroupID:
           ID: windows-builder
           hostID:
             - e3cc503f-8de3-485f-90ac-5cfa82cea0fd
-        deployArtifact:
-          - source: build
-            name: output
-            target: D:\Python_Work\test
-            dependArtifact: RELEASE_ASSETS
         script:
-          - '# 功能：部署脚本会在部署主机组的每台机器上执行'
-          - '# 使用场景：先将制品包解压缩到指定目录中，再执行启动脚本deploy.sh，脚本示例地址：https://gitee.com/gitee-go/spring-boot-maven-deploy-case/blob/master/deploy.sh'
-          - '# mkdir -p /home/admin/app'
-          - '# tar zxvf ~/gitee_go/deploy/output.tar.gz -C /home/admin/app'
-          - '# sh /home/admin/app/deploy.sh restart'
-          - '# 如果你是php之类的无需制品包的制品方式，可以使用 git clone 或者 git pull 将源代码更新到服务器，再执行其他命令'
-          - '# git clone ***@***.git'
-          - echo 'Hello Gitee Go!'
-        notify: []
-        strategy:
-          retry: '0'
-      - step: build@nodejs
-        name: build_installer
-        displayName: Build installer
-        nodeVersion: 22.22.0
-        commands:
-          - set -e
-          - npm config set registry https://registry.npmmirror.com
-          - yarn config set registry https://registry.npmmirror.com
-          - curl -LsSf https://astral.sh/uv/install.sh | sh
-          - export PATH="$HOME/.local/bin:$PATH"
-          - yarn install --frozen-lockfile --network-timeout 600000
-          - yarn build
-          - echo "APP_VERSION=$(node -p 'require(\"./package.json\").version')" >> GITEE_PARAMS
-          - ls -lh release
-        artifacts:
-          - name: RELEASE_ASSETS
-            path:
-              - release/Codex-Forge-Setup-*.exe
-              - release/latest.yml
-              - release/release-notes.md
-        caches:
-          - ~/.npm
-          - ~/.cache/yarn
-        notify: []
-        strategy:
-          retry: '0'
-        dependsOn: deploy_agent
-  - name: release
-    displayName: Publish Gitee Release
-    strategy: naturally
-    trigger: auto
-    steps:
-      - step: release@gitee
-        name: release_gitee
-        displayName: Gitee Release
-        releaseName: Codex Forge ${APP_VERSION}
-        description: release/release-notes.md
-        tagName: v${APP_VERSION}
-        upstreamArtifact:
-          - RELEASE_ASSETS
-        assertFiles:
-          - release/Codex-Forge-Setup-${APP_VERSION}.exe
-          - release/latest.yml
-        prerelease: false
-        allowUpdate: true
+          - bash -lc 'set -euo pipefail; repo=/d/gitee_go/codex-forge; if [ ! -d "$repo/.git" ]; then git clone git@gitee.com:llj20010218/codex-forge.git "$repo"; fi; cd "$repo"; git fetch --tags origin; git checkout main; git pull --ff-only origin main'
+          - bash -lc 'set -euo pipefail; cd /d/gitee_go/codex-forge; npm config set registry https://registry.npmmirror.com; command -v yarn >/dev/null 2>&1 || npm install -g yarn; yarn config set registry https://registry.npmmirror.com; command -v uv >/dev/null 2>&1 || powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"; yarn install --frozen-lockfile --network-timeout 600000; yarn build'
+          - bash -lc 'set -euo pipefail; test -n "${GITEE_TOKEN:-}" || { echo "GITEE_TOKEN is required on the Windows host or pipeline environment"; exit 1; }; cd /d/gitee_go/codex-forge; export GITEE_UPLOAD_MAX_TIME=7200; node scripts/publish_gitee_release.js'
         notify: []
         strategy:
           retry: '0'
