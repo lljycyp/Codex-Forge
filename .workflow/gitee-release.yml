@@ -1,4 +1,4 @@
-version: '1.0'
+version: "1.0"
 name: gitee-release
 displayName: Gitee-Release
 triggers:
@@ -8,6 +8,25 @@ triggers:
       prefix:
         - v
 stages:
+  - name: prepare
+    displayName: Prepare deploy artifact
+    strategy: naturally
+    trigger: auto
+    steps:
+      - step: build@nodejs
+        name: prepare_deploy_artifact
+        displayName: Prepare deploy artifact
+        nodeVersion: 22.22.0
+        commands:
+          - mkdir -p gitee-go-placeholder
+          - echo ok > gitee-go-placeholder/README.txt
+        artifacts:
+          - name: DEPLOY_PLACEHOLDER
+            path:
+              - gitee-go-placeholder
+        notify: []
+        strategy:
+          retry: "0"
   - name: build
     displayName: Build and publish on Windows host
     strategy: naturally
@@ -20,10 +39,15 @@ stages:
           ID: windows-builder
           hostID:
             - e3cc503f-8de3-485f-90ac-5cfa82cea0fd
+        deployArtifact:
+          - source: build
+            name: output
+            target: D:\Python_Work\test
+            dependArtifact: DEPLOY_PLACEHOLDER
         script:
           - bash -lc 'set -euo pipefail; repo=/d/gitee_go/codex-forge; if [ ! -d "$repo/.git" ]; then git clone git@gitee.com:llj20010218/codex-forge.git "$repo"; fi; cd "$repo"; git fetch --tags origin; git checkout main; git pull --ff-only origin main'
           - bash -lc 'set -euo pipefail; cd /d/gitee_go/codex-forge; npm config set registry https://registry.npmmirror.com; command -v yarn >/dev/null 2>&1 || npm install -g yarn; yarn config set registry https://registry.npmmirror.com; command -v uv >/dev/null 2>&1 || powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"; yarn install --frozen-lockfile --network-timeout 600000; yarn build'
           - bash -lc 'set -euo pipefail; test -n "${GITEE_TOKEN:-}" || { echo "GITEE_TOKEN is required on the Windows host or pipeline environment"; exit 1; }; cd /d/gitee_go/codex-forge; export GITEE_UPLOAD_MAX_TIME=7200; node scripts/publish_gitee_release.js'
         notify: []
         strategy:
-          retry: '0'
+          retry: "0"
