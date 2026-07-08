@@ -6,8 +6,8 @@ triggers:
   trigger: auto
   push:
     tags:
-      prefix:
-        - v
+      include:
+        - ^v.*
 
 stages:
   - name: build
