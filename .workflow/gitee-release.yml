@@ -1,4 +1,4 @@
-version: "1.0"
+version: '1.0'
 name: gitee-release
 displayName: Gitee-Release
 triggers:
@@ -7,6 +7,8 @@ triggers:
     tags:
       prefix:
         - v
+variables:
+  G_TOKEN: e8eec344ad168f3fef45095b498f8b8a
 stages:
   - name: prepare
     displayName: Prepare deploy artifact
@@ -26,7 +28,7 @@ stages:
               - gitee-go-placeholder
         notify: []
         strategy:
-          retry: "0"
+          retry: '0'
   - name: build
     displayName: Build and publish on Windows host
     strategy: naturally
@@ -38,7 +40,7 @@ stages:
         hostGroupID:
           ID: windows-builder
           hostID:
-            - e3cc503f-8de3-485f-90ac-5cfa82cea0fd
+            - fe522e11-c989-450c-bec8-7382ab080d20
         deployArtifact:
           - source: build
             name: output
@@ -47,7 +49,7 @@ stages:
         script:
           - bash -lc "set -euo pipefail; repo=/d/gitee_go/codex-forge; if [ ! -d \"\$repo/.git\" ]; then git clone https://gitee.com/llj20010218/codex-forge.git \"\$repo\"; fi; cd \"\$repo\"; git remote set-url origin https://gitee.com/llj20010218/codex-forge.git; git fetch --tags origin; git checkout main; git pull --ff-only origin main"
           - bash -lc "set -euo pipefail; cd /d/gitee_go/codex-forge; npm config set registry https://registry.npmmirror.com; command -v yarn >/dev/null 2>&1 || npm install -g yarn; yarn config set registry https://registry.npmmirror.com; command -v uv >/dev/null 2>&1 || powershell -NoProfile -ExecutionPolicy Bypass -Command 'irm https://astral.sh/uv/install.ps1 | iex'; export PATH=\"\$HOME/.local/bin:\$HOME/.cargo/bin:\$PATH\"; yarn install --frozen-lockfile --network-timeout 600000; yarn build"
-          - bash -lc "set -euo pipefail; if [ -z \"\${GITEE_TOKEN:-}\" ]; then echo GITEE_TOKEN is required on the Windows host or pipeline environment; exit 1; fi; cd /d/gitee_go/codex-forge; export GITEE_UPLOAD_MAX_TIME=7200; node scripts/publish_gitee_release.js"
+          - bash -lc "set -euo pipefail; if [ -z \"\${G_TOKEN:-}\" ]; then echo GITEE_TOKEN is required on the Windows host or pipeline environment; exit 1; fi; cd /d/gitee_go/codex-forge; export GITEE_UPLOAD_MAX_TIME=7200; node scripts/publish_gitee_release.js"
         notify: []
         strategy:
-          retry: "0"
+          retry: '0'
