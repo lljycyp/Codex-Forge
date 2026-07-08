@@ -38,7 +38,7 @@ stages:
         hostGroupID:
           ID: windows-builder
           hostID:
-            - fe522e11-c989-450c-bec8-7382ab080d20
+            - d1336508-8ce9-4397-9081-3634988d040e
         deployArtifact:
           - source: build
             name: output
