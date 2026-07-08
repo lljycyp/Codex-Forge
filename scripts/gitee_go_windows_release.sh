@@ -29,9 +29,12 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 yarn install --frozen-lockfile --network-timeout 600000
 yarn build
 
-export GITEE_TOKEN="${G_TOKEN}"
-if [ -z "$GITEE_TOKEN" ]; then
-  echo "G_TOKEN is required in Gitee Go variables"
+if [ -z "${GITEE_TOKEN:-}" ]; then
+  export GITEE_TOKEN="${G_TOKEN:-}"
+fi
+
+if [ -z "$GITEE_TOKEN" ] || [ "$GITEE_TOKEN" = '${G_TOKEN}' ]; then
+  echo "G_TOKEN is required in Gitee Go variables or GITEE_TOKEN is required on the Windows host"
   exit 1
 fi
 
