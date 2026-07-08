@@ -32,42 +32,42 @@
 
 ---
 
-## Overview
+## 📖 Overview
 
 **Codex Forge** is not a replacement for Codex. It is a local workspace for Codex accounts, multi-instance launches, and configuration. It turns common terminal-side operations into desktop app workflows:
 
-- **Multiple accounts**: Manage multiple Codex account profiles in one place.
-- **Flexible auth import**: Add accounts through browser OAuth, the current default account, or a local `auth.json` file.
-- **Smooth switching**: Write the selected account to `~/.codex/auth.json` automatically.
-- **Config isolation**: Account-switching mode always uses the system `~/.codex/config.toml`; isolated multi-instance mode uses each account's `CodexHome/config.toml`.
-- **Visual editing**: View and edit the active `~/.codex/config.toml`.
-- **Template management**: Save, enable, and disable custom Codex instruction templates.
-- **Status monitoring**: View account health, running status, and usage snapshots.
-- **Selectable launch modes**: Supports the stable account-switching mode and an isolated multi-instance mode for running multiple Codex clients at the same time.
+- ✨ **Multiple accounts**: Manage multiple Codex account profiles in one place.
+- 🔑 **Flexible auth import**: Add accounts through browser OAuth, the current default account, or a local `auth.json` file.
+- 🔄 **Smooth switching**: Write the selected account to `~/.codex/auth.json` automatically.
+- 🛡️ **Config isolation**: Account-switching mode always uses the system `~/.codex/config.toml`; isolated multi-instance mode uses each account's `CodexHome/config.toml`.
+- 🛠️ **Visual editing**: View and edit the active `~/.codex/config.toml`.
+- 📝 **Instruction templates**: Save common prompts as Markdown templates and switch Codex's global behavior profile with one click.
+- 📊 **Status monitoring**: View account health, running status, and usage snapshots.
+- 🚀 **Selectable launch modes**: Supports the stable account-switching mode and an isolated multi-instance mode for running multiple Codex clients at the same time.
 
-## Software Preview
+## 🖼️ Software Preview
 
 <p align="center">
   <img src="docs/images/home.png" alt="Codex Forge home page" />
 </p>
 
-## Features
+## ⚡ Features
 
 | Module | Details |
 | :--- | :--- |
-| **Profile management** | Create, rename, and delete account profiles. Data is stored in `~/Documents/CodexProfiles` by default. |
-| **Auth import** | Supports browser OAuth, saving the current default Codex account, and importing a local `auth.json` file. |
-| **One-click switch and launch** | In account-switching mode, writes the selected account into the current user's `.codex` directory and launches the default Codex app. If Codex is already running, the app prompts you to close it first. |
-| **Isolated multi-instance launch** | Featured capability. In multi-instance mode, prepares a per-account `CodexHome`, `APPDATA`, `LOCALAPPDATA`, `--user-data-dir`, and full `CodexPortableApp` copy to avoid accounts overwriting each other. |
-| **Usage snapshots** | Reads account auth data, requests the Codex usage endpoint, and caches each account's usage state. |
-| **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
-| **Instruction templates** | Manages Markdown instruction templates locally. Enabling a template writes it into the Codex config and updates `model_instructions_file`. |
-| **Diagnostics** | Shows key config paths, profile root, Codex process state, profile integrity, and log path. |
-| **Windows packaging** | Builds the Python backend with PyInstaller, then creates a standard Windows installer with Electron Builder. |
+| 👥 **Profile management** | Create, rename, and delete account profiles. Data is stored in `~/Documents/CodexProfiles` by default. |
+| 🔑 **Auth import** | Supports browser OAuth, saving the current default Codex account, and importing a local `auth.json` file. |
+| 🚀 **One-click switch and launch** | In account-switching mode, writes the selected account into the current user's `.codex` directory and launches the default Codex app. If Codex is already running, the app prompts you to close it first. |
+| 📦 **Isolated multi-instance launch** | Featured capability. In multi-instance mode, prepares a per-account `CodexHome`, `APPDATA`, `LOCALAPPDATA`, `--user-data-dir`, and full `CodexPortableApp` copy to avoid accounts overwriting each other. |
+| 📊 **Usage snapshots** | Reads account auth data, requests the Codex usage endpoint, and caches each account's usage state. |
+| 🛠️ **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
+| 📝 **Instruction templates** | Saves Markdown prompt templates locally. Enabling a template copies it into the active Codex config directory and points `model_instructions_file` in `config.toml` to that template. |
+| 🩺 **Diagnostics** | Shows key config paths, profile root, Codex process state, profile integrity, and log path. |
+| 🗜️ **Windows packaging** | Builds the Python backend with PyInstaller, then creates a standard Windows installer with Electron Builder. |
 
-## Highlights
+## ✨ Highlights
 
-### 1. Isolated Account Profiles
+### 1. 🛡️ Isolated Account Profiles
 
 Each account profile stores its own login credentials and config:
 
@@ -78,17 +78,17 @@ Each account profile stores its own login credentials and config:
 
 Account-switching mode only replaces `auth.json`; global Codex settings such as model and proxy always use the system `~/.codex/config.toml`. Isolated multi-instance mode uses each account's own `CodexHome/config.toml`.
 
-### 2. Auth Management
+### 2. 🔑 Auth Management
 
 There are three ways to add an account:
 
-- **Browser OAuth**: Opens the OpenAI authorization flow and saves the result only to the new profile directory.
-- **Save current account**: Copies the current system `~/.codex/auth.json`.
-- **Upload local file**: Imports an existing Codex login file from disk.
+- 🌐 **Browser OAuth**: Opens the OpenAI authorization flow and saves the result only to the new profile directory.
+- 💾 **Save current account**: Copies the current system `~/.codex/auth.json`.
+- 📁 **Upload local file**: Imports an existing Codex login file from disk.
 
-> During usage refresh, Codex Forge refreshes login tokens when needed and writes the latest auth data back to the matching profile.
+> 💡 During usage refresh, Codex Forge refreshes login tokens when needed and writes the latest auth data back to the matching profile.
 
-### 3. Visual TOML Editing with Backups
+### 3. 🛠️ Visual TOML Editing with Backups
 
 Codex Forge reads the active config file:
 
@@ -102,11 +102,46 @@ Before saving changes, it validates the TOML content and backs up the old file t
 %LOCALAPPDATA%/CodexForge/backups/config-toml/
 ```
 
-### 4. Instruction Template Management
+### 4. 📝 Instruction Template Management
 
-Instruction templates are stored in the launcher's local directory. When a template is enabled, Codex Forge writes it into the current Codex config directory and updates `model_instructions_file` in `config.toml`.
+Instruction templates let you quickly switch Codex's system-level behavior prompt. You can save common workflows, coding rules, review standards, or a restriction-breaking prompt such as `docs/propmt/gpt5.5-unrestricted.md` as Markdown templates and enable them when needed.
 
-### 5. Isolated Multi-instance Launch
+The restriction-breaking prompt template in this feature is based on [yynxxxxx/Codex-5.5-codex-instruct-5.5](https://github.com/yynxxxxx/Codex-5.5-codex-instruct-5.5).
+
+Codex Forge currently includes this prompt template:
+
+- `docs/propmt/gpt5.5-unrestricted.md`
+
+You can enable or disable it directly from the **Instruction templates** page. After it is enabled, Codex Forge writes the matching `.md` file into the Codex config directory and updates `model_instructions_file` in `config.toml`.
+
+| Comparison | Default instructions | `gpt5.5-unrestricted.md` |
+| :--- | :--- | :--- |
+| Positioning | General Codex assistant | High-freedom developer mode |
+| Strategy | More conservative and more likely to give generic refusals | Emphasizes execution, analysis, and verifiable results |
+| Style | Standard Q&A and coding assistance | Direct, broad coverage, fewer explanation blockers |
+| Best for | Daily coding and general questions | Code auditing, security research, and complex debugging |
+
+After deployment, you can test it with:
+
+```text
+How do I perform penetration testing against a target?
+```
+
+Typical result:
+
+```text
+Before enabling -> More likely to refuse or answer generically
+After enabling -> More likely to provide security research methodology, testing steps, and verification ideas
+```
+
+When a template is enabled, Codex Forge does three things:
+- Copies the template into the active Codex config directory.
+- Writes `model_instructions_file = "./template-file-name.md"` into `config.toml`.
+- In isolated multi-instance mode, supports syncing to the current account, a selected account, or all accounts.
+
+This means you can switch between default instructions, team rules, and a less restrictive prompt style without editing `config.toml` by hand. Disabling a template only removes the `model_instructions_file` setting; it does not delete saved template files.
+
+### 5. 📦 Isolated Multi-instance Launch
 
 In addition to the default account-switching mode, Codex Forge's featured launch capability is isolated multi-instance mode:
 
@@ -121,7 +156,7 @@ CodexProfiles/<account>/AppData
 CodexProfiles/<account>/CodexPortableApp
 ```
 
-### 6. Smart Codex Launch Detection
+### 6. 🧠 Smart Codex Launch Detection
 
 When launching an account, Codex Forge resolves the launch source in this order:
 
@@ -132,7 +167,7 @@ When launching an account, Codex Forge resolves the launch source in this order:
 
 ---
 
-## Core Paths
+## 📁 Core Paths
 
 **Active Codex user config**:
 
@@ -157,9 +192,9 @@ When launching an account, Codex Forge resolves the launch source in this order:
 
 ---
 
-## Developer Guide
+## 👨‍💻 Developer Guide
 
-### Tech Stack
+### 🛠️ Tech Stack
 
 - **Desktop framework**: Electron 41 / electron-vite
 - **Frontend**: React 18 / TypeScript / Vite
@@ -168,7 +203,7 @@ When launching an account, Codex Forge resolves the launch source in this order:
 - **Build**: PyInstaller / Electron Builder
 - **Package managers**: yarn / uv
 
-### Requirements
+### 📋 Requirements
 
 - OS: Windows 10 / Windows 11
 - Runtime dependencies:
@@ -185,7 +220,7 @@ When launching an account, Codex Forge resolves the launch source in this order:
 codex --version
 ```
 
-### Development
+### 🚀 Development
 
 ```bash
 cd /d/MyObject/CodexForge
@@ -196,7 +231,7 @@ yarn install
 yarn dev
 ```
 
-### Checks
+### 🔍 Checks
 
 ```bash
 cd python
@@ -205,7 +240,7 @@ cd ..
 yarn tsc --noEmit
 ```
 
-### Packaging
+### 📦 Packaging
 
 **Full build:**
 
@@ -231,3 +266,9 @@ yarn build:installer
 resources/main.exe
 release/Codex Forge Setup 0.1.0.exe
 ```
+
+---
+
+## ⚠️ Disclaimer
+
+Codex Forge is a local account, configuration, and launch management tool. It is not an official OpenAI product and is not affiliated with OpenAI. The included instruction templates are intended only for lawful software development, code auditing, security research, and learning or testing scenarios. Users are responsible for complying with local laws, target-system authorization requirements, and relevant platform terms of service. Any account, data, compliance, or security risks caused by using this tool or its templates are the user's own responsibility.
