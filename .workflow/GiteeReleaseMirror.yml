@@ -18,7 +18,7 @@ stages:
       - step: build@nodejs
         name: build_installer
         displayName: Build installer
-        nodeVersion: 20.18.1
+        nodeVersion: 22.22.0
         commands:
           - set -e
           - npm config set registry https://registry.npmmirror.com
