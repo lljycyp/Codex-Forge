@@ -1,6 +1,6 @@
-version: '1.0'
+version: "1.0"
 name: gitee-release
-displayName: Gitee Release
+displayName: Gitee-Release
 
 triggers:
   trigger: auto
@@ -39,7 +39,7 @@ stages:
           - ~/.npm
         notify: []
         strategy:
-          retry: '0'
+          retry: "0"
   - name: release
     displayName: Publish Gitee Release
     strategy: naturally
@@ -60,4 +60,4 @@ stages:
         allowUpdate: true
         notify: []
         strategy:
-          retry: '0'
+          retry: "0"
