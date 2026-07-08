@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const root = path.join(__dirname, "..");
 const apiBase = "https://gitee.com/api/v5";
@@ -115,10 +116,29 @@ async function deleteAsset(releaseId, assetId) {
 }
 
 async function uploadAsset(releaseId, file) {
-  const form = new FormData();
-  form.append("access_token", token);
-  form.append("file", new Blob([fs.readFileSync(file)]), path.basename(file));
-  await api(`/repos/${owner}/${repo}/releases/${releaseId}/attach_files`, { method: "POST", body: form });
+  const pathname = `/repos/${owner}/${repo}/releases/${releaseId}/attach_files`;
+  const curl = process.platform === "win32" ? "curl.exe" : "curl";
+  const result = spawnSync(curl, [
+    "--fail-with-body",
+    "--silent",
+    "--show-error",
+    "--connect-timeout",
+    "60",
+    "--max-time",
+    "1800",
+    "-F",
+    `access_token=${token}`,
+    "-F",
+    `file=@${file};filename=${path.basename(file)}`,
+    `${apiBase}${pathname}`,
+  ], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`POST ${pathname} failed: ${result.stderr || result.stdout || `curl exited ${result.status}`}`);
+  }
 }
 
 async function main() {
