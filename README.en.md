@@ -44,6 +44,8 @@
 - 📝 **Instruction templates (prompt injection)**: Save common prompts as Markdown templates and switch Codex's global behavior profile with one click. The built-in prompt can break restrictions and support effects such as SQL injection testing and reverse engineering.
 - 📊 **Status monitoring**: View account health, running status, and usage snapshots.
 - 🚀 **Selectable launch modes**: Supports the stable account-switching mode and an isolated multi-instance mode for running multiple Codex clients at the same time.
+- 🌐 **Bilingual UI**: Built-in Chinese / English switching for different language environments.
+- 🔔 **Version updates**: Check for updates in the app, review release notes, download in the background, and restart to install.
 
 ## 🖼️ Software Preview
 
@@ -62,8 +64,9 @@
 | 📊 **Usage snapshots** | Reads account auth data, requests the Codex usage endpoint, and caches each account's usage state. |
 | 🛠️ **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
 | 📝 **Instruction templates (prompt injection)** | Saves Markdown prompt templates locally. Enabling a template copies it into the active Codex config directory and points `model_instructions_file` in `config.toml` to that template. |
-| 🩺 **Diagnostics** | Shows key config paths, profile root, Codex process state, profile integrity, and log path. |
-| 🗜️ **Windows packaging** | Builds the Python backend with PyInstaller, then creates a standard Windows installer with Electron Builder. |
+| ⚙️ **Launch and directory settings** | Switch launch modes, migrate the account profile root, and enable Codex Forge to start after Windows sign-in. |
+| 🔔 **In-app updates** | Supports silent update checks, manual update checks, release notes, background downloads, and restart-to-install. |
+| 🌐 **Language and project links** | Supports Chinese / English UI switching and provides GitHub and Gitee project links in the About area. |
 
 ## ✨ Highlights
 
@@ -154,7 +157,18 @@ CodexProfiles/<account>/AppData
 CodexProfiles/<account>/CodexPortableApp
 ```
 
-### 6. 🧠 Smart Codex Launch Detection
+### 6. ⚙️ Settings, Updates, and Project Links
+
+The Settings page centralizes Codex Forge's own configuration:
+
+- **Account profile location**: Change the account profile root. The app prompts you to close running Codex instances before migration.
+- **Launch mode**: Switch between account-switching mode and isolated multi-instance mode. Multi-instance mode warns about disk usage.
+- **Auto start**: Start Codex Forge automatically after Windows sign-in.
+- **Language switching**: Switch between Chinese and English UI.
+- **Version updates**: Show the current version and check for updates manually. When a new version is available, you can view release notes, download in the background, and restart to install.
+- **Project links**: The About area provides GitHub and Gitee project links for source code and release information.
+
+### 7. 🧠 Smart Codex Launch Detection
 
 When launching an account, Codex Forge resolves the launch source in this order:
 

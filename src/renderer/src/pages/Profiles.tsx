@@ -20,6 +20,7 @@ import {
   Trash2,
   UserPen,
 } from "lucide-react";
+import { useI18n } from "../i18n";
 import type { ProfileSummary, ProfileUsageWindow, RunCommand } from "../types";
 
 type ProfilesProps = {
@@ -40,6 +41,7 @@ const iconActionButtonClass =
   "flex items-center justify-center text-slate-500 hover:!text-brand-600";
 
 export function Profiles({ profiles, runningCount, launchMode, runCommand, loading }: ProfilesProps) {
+  const { language, t } = useI18n();
   const [createOpen, setCreateOpen] = useState(false);
   const [createMode, setCreateMode] = useState<"oauth" | "current" | "file">("oauth");
   const [authJsonPath, setAuthJsonPath] = useState("");
@@ -65,13 +67,15 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
 
   const confirmDelete = (profile: ProfileSummary) => {
     Modal.confirm({
-      title: "删除账号",
-      content: `确认删除「${profile.name}」？该账号资料目录也会被删除。`,
-      okText: "删除",
+      title: t("删除账号"),
+      content: language === "en-US"
+        ? `Delete "${profile.name}"? Its profile folder will also be deleted.`
+        : `确认删除「${profile.name}」？该账号资料目录也会被删除。`,
+      okText: t("删除"),
       okButtonProps: { danger: true },
-      cancelText: "取消",
+      cancelText: t("取消"),
       onOk: () =>
-        runCommand("delete_profile", { name: profile.name }, "已删除账号"),
+        runCommand("delete_profile", { name: profile.name }, t("已删除账号")),
     });
   };
 
@@ -81,10 +85,10 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
   ) => {
     const hasRunningCodex = launchMode === "switch" && runningCount > 0;
     const pendingText = profile.running
-      ? "停止中"
+      ? t("停止中")
       : hasRunningCodex
-        ? "切换中"
-        : "启动中";
+        ? t("切换中")
+        : t("启动中");
 
     setPendingProfileNames((current) => new Set(current).add(profile.name));
     setPendingProfileTexts((current) => {
@@ -97,10 +101,10 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
         profile.running ? "stop_profile" : "launch_profile",
         { name: profile.name, stopRunningFirst },
         profile.running
-          ? "已关闭 Codex"
+          ? t("已关闭 Codex")
           : hasRunningCodex
-            ? "已切换"
-            : "已启动",
+            ? t("已切换")
+            : t("已启动"),
         { blocking: false },
       );
     } finally {
@@ -124,10 +128,12 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
     }
 
     Modal.confirm({
-      title: "确认切换账号",
-      content: `检测到 Codex 正在运行。确认关闭当前 Codex，并切换启动「${profile.name}」？`,
-      okText: "关闭并启动",
-      cancelText: "取消",
+      title: t("确认切换账号"),
+      content: language === "en-US"
+        ? `Codex is running. Close it and launch "${profile.name}"?`
+        : `检测到 Codex 正在运行。确认关闭当前 Codex，并切换启动「${profile.name}」？`,
+      okText: t("关闭并启动"),
+      cancelText: t("取消"),
       onOk: () => executeProfileToggle(profile, true),
     });
   };
@@ -138,7 +144,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
       await runCommand(
         "refresh_all_profile_usage",
         {},
-        "额度已刷新",
+        t("额度已刷新"),
         { blocking: false },
       );
     } finally {
@@ -152,7 +158,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
       await runCommand(
         "refresh_profile_usage",
         { name: profile.name },
-        "额度已刷新",
+        t("额度已刷新"),
         { blocking: false },
       );
     } finally {
@@ -189,10 +195,10 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
   return (
     <div className="grid gap-4">
       <div className="grid grid-cols-3 gap-3 max-[960px]:grid-cols-1">
-        <StatusTile label="账号总数量" value={accountHealth.total} tone="blue" />
-        <StatusTile label="健康账号数量" value={accountHealth.healthy} tone="green" />
+        <StatusTile label={t("账号总数量")} value={accountHealth.total} tone="blue" />
+        <StatusTile label={t("健康账号数量")} value={accountHealth.healthy} tone="green" />
         <StatusTile
-          label="异常账号数量"
+          label={t("异常账号数量")}
           value={accountHealth.abnormal}
           tone={accountHealth.abnormal > 0 ? "red" : "green"}
         />
@@ -204,7 +210,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
             <span className="text-2xl font-extrabold leading-none text-gray-900">
               {profiles.length}
             </span>
-            <span className="text-sm font-medium text-slate-500">个账号</span>
+            <span className="text-sm font-medium text-slate-500">{t("个账号")}</span>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2.5 max-[960px]:w-full max-[960px]:justify-start">
             <Button
@@ -213,14 +219,14 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
               disabled={pendingUsageProfileNames.size > 0}
               onClick={refreshAllUsage}
             >
-              刷新额度
+              {t("刷新额度")}
             </Button>
             <Button
               type="primary"
               icon={<Plus size={15} />}
               onClick={() => setCreateOpen(true)}
             >
-              新增账号
+              {t("新增账号")}
             </Button>
           </div>
         </div>
@@ -260,23 +266,23 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                           : `${profilePillBaseClass} border-slate-200 bg-slate-50 text-slate-500`
                       }
                     >
-                      {profile.running ? "运行中" : "就绪"}
+                      {profile.running ? t("运行中") : t("就绪")}
                     </span>
                     {!profile.authExists ? (
                       <span className={`${profilePillBaseClass} border-amber-200 bg-amber-50 text-amber-600`}>
-                        认证缺失
+                        {t("认证缺失")}
                       </span>
                     ) : null}
                     {profile.active ? (
                       <span className={`${profilePillBaseClass} border-blue-200 bg-blue-50 text-blue-600`}>
-                        当前账号
+                        {t("当前账号")}
                       </span>
                     ) : null}
                     {launchMode === "multi" ? (
                       <span className={`${profilePillBaseClass} border-purple-200 bg-purple-50 text-purple-600`}>
                         {profile.portableCodexExists
-                          ? `程序副本 ${profile.portableCodexSizeText ?? ""}`
-                          : "程序副本待创建"}
+                          ? `${language === "en-US" ? "App copy" : "程序副本"} ${profile.portableCodexSizeText ?? ""}`
+                          : t("程序副本待创建")}
                       </span>
                     ) : null}
                   </div>
@@ -287,7 +293,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                   </Tooltip>
                   <div className="mt-3 grid max-w-[520px] grid-cols-[max-content_minmax(108px,0.22fr)_minmax(108px,0.22fr)] items-center gap-3 max-[960px]:max-w-none max-[960px]:grid-cols-1">
                     <span className="inline-flex h-6 w-fit items-center justify-center justify-self-start whitespace-nowrap rounded-[6px] border border-blue-200 bg-blue-50 px-2 text-[11.5px] font-bold text-blue-600">
-                      {formatPlanType(profile.usage?.planType)}
+                      {formatPlanType(profile.usage?.planType, t)}
                     </span>
                     {profile.usage?.error ? (
                       <Tooltip title={profile.usage.error}>
@@ -298,11 +304,13 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                     ) : (
                       <>
                         <UsageMeter
-                          label="五小时"
+                          label={t("五小时")}
+                          language={language}
                           window={profile.usage?.fiveHour ?? null}
                         />
                         <UsageMeter
-                          label="一周"
+                          label={t("一周")}
+                          language={language}
                           window={profile.usage?.oneWeek ?? null}
                         />
                       </>
@@ -318,6 +326,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                         profile,
                         runningCount,
                         launchMode,
+                        t,
                       );
 
                       return (
@@ -336,14 +345,14 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                           onClick={() => toggleProfileRunning(profile)}
                         >
                           {isPending
-                            ? pendingText ?? "处理中"
+                            ? pendingText ?? t("处理中")
                             : profile.running
-                              ? "关闭"
+                              ? t("关闭")
                               : launchText}
                         </Button>
                       );
                     })()}
-                    <Tooltip title="刷新额度">
+                    <Tooltip title={t("刷新额度")}>
                       <Button
                         className={iconActionButtonClass}
                         icon={<RefreshCw size={14} />}
@@ -352,7 +361,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                         onClick={() => refreshProfileUsage(profile)}
                       />
                     </Tooltip>
-                    <Tooltip title="改名">
+                    <Tooltip title={t("改名")}>
                       <Button
                         className={iconActionButtonClass}
                         icon={<UserPen size={14} />}
@@ -360,7 +369,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                         onClick={() => setRenameTarget(profile)}
                       />
                     </Tooltip>
-                    <Tooltip title="打开目录">
+                    <Tooltip title={t("打开目录")}>
                       <Button
                         className={iconActionButtonClass}
                         icon={<FolderOpen size={14} />}
@@ -368,13 +377,13 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                           runCommand(
                             "open_path",
                             { path: profile.profileDir },
-                            "已打开目录",
+                            t("已打开目录"),
                             { blocking: false, refreshAfter: false },
                           )
                         }
                       />
                     </Tooltip>
-                    <Tooltip title="删除">
+                    <Tooltip title={t("删除")}>
                       <Button
                         className={`${iconActionButtonClass} !text-red-500 hover:!bg-red-50 hover:!text-red-600 hover:!border-red-200`}
                         icon={<Trash2 size={14} />}
@@ -387,13 +396,13 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
             ))
           ) : (
             <div className="flex min-h-[220px] items-center justify-center px-6 py-8">
-              <Empty description="暂无账号">
+              <Empty description={t("暂无账号")}>
                 <Button
                   type="primary"
                   icon={<Plus size={16} />}
                   onClick={() => setCreateOpen(true)}
                 >
-                  新增第一个账号
+                  {t("新增第一个账号")}
                 </Button>
               </Empty>
             </div>
@@ -402,7 +411,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
       </div>
 
       <Modal
-        title="新增账号"
+        title={t("新增账号")}
         open={createOpen}
         onCancel={() => {
           setCreateOpen(false);
@@ -414,7 +423,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
           const values = await createForm.validateFields();
           if (createMode === "file" && !authJsonPath) {
             createForm.setFields([
-              { name: "authJsonPath", errors: ["请选择 auth.json 文件"] },
+              { name: "authJsonPath", errors: [t("请选择 auth.json 文件")] },
             ]);
             return;
           }
@@ -429,10 +438,10 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
             command,
             createMode === "file" ? { ...values, authJsonPath } : values,
             createMode === "oauth"
-              ? "浏览器授权账号已新增"
+              ? t("浏览器授权账号已新增")
               : createMode === "file"
-                ? "auth.json 已导入"
-                : "当前账号已导入",
+                ? t("auth.json 已导入")
+                : t("当前账号已导入"),
           );
           createForm.resetFields();
           setAuthJsonPath("");
@@ -440,53 +449,53 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
         }}
         okText={
           createMode === "oauth"
-            ? "打开浏览器授权"
+            ? t("打开浏览器授权")
             : createMode === "file"
-              ? "导入文件"
-              : "导入当前账号"
+              ? t("导入文件")
+              : t("导入当前账号")
         }
       >
         <Form form={createForm} layout="vertical">
-          <Form.Item label="新增方式">
+          <Form.Item label={t("新增方式")}>
             <Radio.Group
               value={createMode}
               onChange={(event) => setCreateMode(event.target.value)}
             >
-              <Radio.Button value="oauth">浏览器授权</Radio.Button>
-              <Radio.Button value="current">导入当前账号</Radio.Button>
-              <Radio.Button value="file">上传 auth.json</Radio.Button>
+              <Radio.Button value="oauth">{t("浏览器授权")}</Radio.Button>
+              <Radio.Button value="current">{t("导入当前账号")}</Radio.Button>
+              <Radio.Button value="file">{t("上传 auth.json")}</Radio.Button>
             </Radio.Group>
           </Form.Item>
           {createMode === "oauth" ? (
             <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
-              将打开浏览器完成 OpenAI（开放式人工智能公司）授权，授权结果只保存到新账号资料目录，不会覆盖当前默认 Codex 账号。
+              {language === "en-US" ? "Open a browser to authorize OpenAI. The result is saved only to the new account profile and will not overwrite the default Codex account." : "将打开浏览器完成 OpenAI（开放式人工智能公司）授权，授权结果只保存到新账号资料目录，不会覆盖当前默认 Codex 账号。"}
             </Typography.Paragraph>
           ) : createMode === "file" ? (
             <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
-              将从本地选择 <Typography.Text code>auth.json</Typography.Text>，只保存到新账号资料目录，不会覆盖当前默认 Codex 账号。
+              {language === "en-US" ? "Choose a local " : "将从本地选择 "}<Typography.Text code>auth.json</Typography.Text>{language === "en-US" ? ". It is saved only to the new account profile and will not overwrite the default Codex account." : "，只保存到新账号资料目录，不会覆盖当前默认 Codex 账号。"}
             </Typography.Paragraph>
           ) : (
             <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
-              将保存当前默认 Codex 的 <Typography.Text code>auth.json</Typography.Text>；系统{" "}
-              <Typography.Text code>config.toml</Typography.Text> 会作为多开隔离模式的初始账号配置。
+              {language === "en-US" ? "Save the default Codex " : "将保存当前默认 Codex 的 "}<Typography.Text code>auth.json</Typography.Text>{language === "en-US" ? ". The system " : "；系统 "}
+              <Typography.Text code>config.toml</Typography.Text>{language === "en-US" ? " will be used as the initial isolated-mode config." : " 会作为多开隔离模式的初始账号配置。"}
             </Typography.Paragraph>
           )}
           <Form.Item
             name="name"
-            label="账号名称"
-            rules={[{ required: true, message: "请输入账号名称" }]}
+            label={t("账号名称")}
+            rules={[{ required: true, message: t("请输入账号名称") }]}
           >
-            <Input placeholder="例如：工作号" />
+            <Input placeholder={t("例如：工作号")} />
           </Form.Item>
           {createMode === "file" ? (
             <Form.Item
               name="authJsonPath"
-              label="认证文件"
+              label={t("认证文件")}
             >
               <Space.Compact className="w-full">
-                <Input value={authJsonPath} readOnly placeholder="请选择 auth.json 文件" />
+                <Input value={authJsonPath} readOnly placeholder={t("请选择 auth.json 文件")} />
                 <Button icon={<FolderOpen size={15} />} onClick={chooseAuthJsonFile}>
-                  选择文件
+                  {t("选择文件")}
                 </Button>
               </Space.Compact>
             </Form.Item>
@@ -494,7 +503,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
         </Form>
       </Modal>
       <Modal
-        title="修改账号名称"
+        title={t("修改账号名称")}
         open={Boolean(renameTarget)}
         onCancel={() => setRenameTarget(null)}
         onOk={async () => {
@@ -503,7 +512,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
           await runCommand(
             "rename_profile",
             { oldName, newName: values.name },
-            "已修改账号名称",
+            t("已修改账号名称"),
           );
           setRenameTarget(null);
           renameForm.resetFields();
@@ -512,8 +521,8 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
         <Form form={renameForm} layout="vertical">
           <Form.Item
             name="name"
-            label="新名称"
-            rules={[{ required: true, message: "请输入新名称" }]}
+            label={t("新名称")}
+            rules={[{ required: true, message: t("请输入新名称") }]}
           >
             <Input />
           </Form.Item>
@@ -527,16 +536,21 @@ function isHealthyProfile(profile: ProfileSummary) {
   return profile.profileDirExists && profile.authExists;
 }
 
-function getProfileLaunchText(profile: ProfileSummary, runningCount: number, launchMode: "switch" | "multi") {
+function getProfileLaunchText(
+  profile: ProfileSummary,
+  runningCount: number,
+  launchMode: "switch" | "multi",
+  t: (text: string) => string,
+) {
   if (profile.running) {
-    return "关闭";
+    return t("关闭");
   }
 
   if (launchMode === "multi") {
-    return "启动";
+    return t("启动");
   }
 
-  return runningCount > 0 ? "切换" : "启动";
+  return runningCount > 0 ? t("切换") : t("启动");
 }
 
 function StatusTile({
@@ -571,14 +585,16 @@ function StatusTile({
 
 function UsageMeter({
   label,
+  language,
   window,
 }: {
   label: string;
+  language: "zh-CN" | "en-US";
   window: ProfileUsageWindow | null;
 }) {
   const usedText = formatPercent(window?.usedPercent);
   const remainingText = formatPercent(window?.remainingPercent);
-  const resetText = formatResetAt(window?.resetAt);
+  const resetText = formatResetAt(window?.resetAt, language);
 
   const percent = clampPercent(window?.usedPercent);
   let barColor = "bg-green-500";
@@ -587,7 +603,9 @@ function UsageMeter({
 
   return (
     <Tooltip
-      title={`已用 ${usedText}，剩余 ${remainingText}，重置时间 ${resetText}`}
+      title={language === "en-US"
+        ? `Used ${usedText}, remaining ${remainingText}, resets at ${resetText}`
+        : `已用 ${usedText}，剩余 ${remainingText}，重置时间 ${resetText}`}
     >
       <span className="grid min-w-0 gap-1.5">
         <span className="flex items-center justify-between gap-2 text-[11.5px] leading-none text-slate-500">
@@ -610,15 +628,15 @@ function UsageMeter({
   );
 }
 
-function formatPlanType(planType: string | null | undefined) {
+function formatPlanType(planType: string | null | undefined, t: (text: string) => string) {
   const normalized = planType?.trim().toLowerCase();
-  if (normalized === "free") return "免费版";
-  if (normalized === "plus") return "增强版";
-  if (normalized === "pro") return "专业版";
-  if (normalized === "team") return "团队版";
-  if (normalized === "enterprise") return "企业版";
-  if (normalized === "business") return "商业版";
-  return "套餐未识别";
+  if (normalized === "free") return t("免费版");
+  if (normalized === "plus") return t("增强版");
+  if (normalized === "pro") return t("专业版");
+  if (normalized === "team") return t("团队版");
+  if (normalized === "enterprise") return t("企业版");
+  if (normalized === "business") return t("商业版");
+  return t("套餐未识别");
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -635,9 +653,9 @@ function clampPercent(value: number | null | undefined) {
   return Math.max(0, Math.min(100, value));
 }
 
-function formatResetAt(value: number | null | undefined) {
+function formatResetAt(value: number | null | undefined, language: "zh-CN" | "en-US") {
   if (!value) {
-    return "未返回";
+    return language === "en-US" ? "Not returned" : "未返回";
   }
-  return new Date(value * 1000).toLocaleString("zh-CN");
+  return new Date(value * 1000).toLocaleString(language);
 }

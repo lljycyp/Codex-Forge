@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Layout, Modal, Progress, Typography, message } from "antd";
 import { Code2, FileText, Home, RefreshCw, Settings, ShieldCheck } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
-import { viewMeta } from "./constants/views";
+import { getViewMeta } from "./constants/views";
 import { invokeLauncher } from "./api/launcher";
+import { useI18n } from "./i18n";
 import { HomePage } from "./pages/HomePage";
 import { Profiles } from "./pages/Profiles";
 import { InstructionsPage } from "./pages/InstructionsPage";
@@ -60,13 +61,14 @@ function updateNotes(event: UpdateEvent | null) {
 }
 
 export default function App() {
+  const { t } = useI18n();
   const [activeView, setActiveView] = useState<ViewKey>("home");
   const [appState, setAppState] = useState<AppState>(emptyState);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
   const [refreshingView, setRefreshingView] = useState<ViewKey | null>(null);
   const [commandingView, setCommandingView] = useState<ViewKey | null>(null);
-  const [taskText, setTaskText] = useState("就绪");
+  const [taskText, setTaskText] = useState(t("就绪"));
   const contentRef = useRef<HTMLDivElement | null>(null);
   const activeViewRef = useRef<ViewKey>("home");
   const refreshTokenRef = useRef(0);
@@ -81,6 +83,10 @@ export default function App() {
     activeViewRef.current = activeView;
   }, [activeView]);
 
+  useEffect(() => {
+    setTaskText(t("就绪"));
+  }, [t]);
+
   const refresh = useCallback(async (view?: ViewKey | null) => {
     const refreshToken = view ? ++refreshTokenRef.current : refreshTokenRef.current;
     if (view) {
@@ -93,9 +99,9 @@ export default function App() {
       ]);
       setAppState(stateData);
       setProfiles(profileData.profiles);
-      setTaskText("状态已刷新");
+      setTaskText(t("状态已刷新"));
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "刷新失败");
+      message.error(error instanceof Error ? error.message : t("刷新失败"));
     } finally {
       if (view && refreshTokenRef.current === refreshToken) {
         setRefreshingView(null);
@@ -104,7 +110,7 @@ export default function App() {
         setInitialLoading(false);
       }
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     refresh("home");
@@ -119,7 +125,7 @@ export default function App() {
         showUpdateProgressRef.current = false;
         setShowUpdateProgress(false);
         setUpdateModalOpen(false);
-        message.error(event.message || "更新失败");
+        message.error(event.message || t("更新失败"));
         return;
       }
       if (event.status === "not-available") {
@@ -127,7 +133,7 @@ export default function App() {
         setShowUpdateProgress(false);
         setUpdateModalOpen(false);
         if (event.manual) {
-          message.success("当前已是最新版本");
+          message.success(t("当前已是最新版本"));
         }
         return;
       }
@@ -146,7 +152,7 @@ export default function App() {
       }
       setUpdateModalOpen(showUpdateProgressRef.current);
     });
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     const refreshUsageSilently = async () => {
@@ -177,7 +183,7 @@ export default function App() {
   }, []);
 
   const runCommand = useCallback<RunCommand>(
-    async (command, payload, successText = "操作完成", options) => {
+    async (command, payload, successText = t("操作完成"), options) => {
       const commandToken = ++commandTokenRef.current;
       const sourceView = activeViewRef.current;
       const shouldBlockView = options?.blocking !== false;
@@ -185,7 +191,7 @@ export default function App() {
       if (shouldBlockView) {
         setCommandingView(sourceView);
       }
-      setTaskText("正在执行...");
+      setTaskText(t("正在执行..."));
       try {
         await invokeLauncher(command, payload);
         if (refreshDelayCommands.has(command)) {
@@ -197,7 +203,7 @@ export default function App() {
           await refresh(null);
         }
       } catch (error) {
-        const text = error instanceof Error ? error.message : "操作失败";
+        const text = error instanceof Error ? error.message : t("操作失败");
         setTaskText(text);
         message.error(text);
       } finally {
@@ -206,20 +212,20 @@ export default function App() {
         }
       }
     },
-    [refresh]
+    [refresh, t]
   );
 
   const menuItems = useMemo(
     () => [
-      { key: "home" as const, label: "首页", icon: <Home size={18} /> },
-      { key: "profiles" as const, label: "账号", icon: <ShieldCheck size={18} /> },
-      { key: "instructions" as const, label: "指令模板", icon: <FileText size={18} /> },
+      { key: "home" as const, label: t("首页"), icon: <Home size={18} /> },
+      { key: "profiles" as const, label: t("账号"), icon: <ShieldCheck size={18} /> },
+      { key: "instructions" as const, label: t("指令模板"), icon: <FileText size={18} /> },
       { key: "toml" as const, label: "TOML", icon: <Code2 size={18} /> },
-      { key: "settings" as const, label: "设置", icon: <Settings size={18} /> }
+      { key: "settings" as const, label: t("设置"), icon: <Settings size={18} /> }
     ],
-    []
+    [t]
   );
-  const currentView = viewMeta[activeView];
+  const currentView = useMemo(() => getViewMeta(t), [t])[activeView];
 
   useEffect(() => {
     document.title = `${currentView.title} - Codex Forge`;
@@ -244,30 +250,30 @@ export default function App() {
 
   const startUpdateDownload = useCallback((showProgress: boolean) => {
     if (!window.launcherApi.downloadUpdate) {
-      message.error("当前版本不支持下载更新，请重启后再试");
+      message.error(t("当前版本不支持下载更新，请重启后再试"));
       return;
     }
     showUpdateProgressRef.current = showProgress;
     setShowUpdateProgress(showProgress);
     setUpdateModalOpen(showProgress);
     if (!showProgress) {
-      message.info("更新将在后台下载，完成后会提示安装");
+      message.info(t("更新将在后台下载，完成后会提示安装"));
     }
     void window.launcherApi.downloadUpdate().catch((error) => {
       showUpdateProgressRef.current = false;
       setShowUpdateProgress(false);
       setUpdateModalOpen(false);
-      message.error(error instanceof Error ? error.message : "下载更新失败");
+      message.error(error instanceof Error ? error.message : t("下载更新失败"));
     });
-  }, []);
+  }, [t]);
 
   const installUpdate = useCallback(() => {
     if (!window.launcherApi.installUpdate) {
-      message.error("当前版本不支持安装更新，请重启后再试");
+      message.error(t("当前版本不支持安装更新，请重启后再试"));
       return;
     }
     void window.launcherApi.installUpdate();
-  }, []);
+  }, [t]);
 
   const refreshButton = (
     <Button
@@ -276,22 +282,23 @@ export default function App() {
       loading={refreshingView === activeView}
       onClick={() => refresh(activeView)}
     >
-      刷新
+      {t("刷新")}
     </Button>
   );
   const notes = updateNotes(updateEvent);
   const updateModalTitle =
     updateEvent?.status === "downloaded"
-      ? "更新已下载"
+      ? t("更新已下载")
       : updateEvent?.status === "downloading" && showUpdateProgress
-        ? "正在下载更新"
-        : "发现新版本";
+        ? t("正在下载更新")
+        : t("发现新版本");
 
   return (
     <>
       <AppLayout
         activeView={activeView}
         currentView={currentView}
+        launchMode={appState.launchMode}
         menuItems={menuItems}
         taskText={taskText}
         onChangeView={changeView}
@@ -356,7 +363,7 @@ export default function App() {
             </div>
             <div className="grid gap-1">
               <div className="text-xl font-extrabold text-slate-900">Codex Forge</div>
-              <div className="text-sm font-semibold text-slate-500">正在加载账号数据...</div>
+              <div className="text-sm font-semibold text-slate-500">{t("正在加载账号数据...")}</div>
             </div>
             <div className="h-1.5 w-[210px] overflow-hidden rounded-full bg-slate-200">
               <div className="forge-splash-progress h-full rounded-full bg-brand-gradient" />
@@ -373,19 +380,19 @@ export default function App() {
         footer={
           updateEvent?.status === "downloaded" ? (
             <>
-              <Button onClick={hideUpdateModal}>稍后</Button>
+              <Button onClick={hideUpdateModal}>{t("稍后")}</Button>
               <Button type="primary" onClick={installUpdate}>
-                立即重启安装
+                {t("立即重启安装")}
               </Button>
             </>
           ) : updateEvent?.status === "downloading" && showUpdateProgress ? (
-            <Button onClick={hideUpdateModal}>稍后隐藏</Button>
+            <Button onClick={hideUpdateModal}>{t("稍后隐藏")}</Button>
           ) : (
             <>
-              <Button onClick={hideUpdateModal}>稍后</Button>
-              <Button onClick={() => startUpdateDownload(false)}>后台下载</Button>
+              <Button onClick={hideUpdateModal}>{t("稍后")}</Button>
+              <Button onClick={() => startUpdateDownload(false)}>{t("后台下载")}</Button>
               <Button type="primary" onClick={() => startUpdateDownload(true)}>
-                立即下载
+                {t("立即下载")}
               </Button>
             </>
           )
@@ -399,14 +406,14 @@ export default function App() {
               </div>
               <div className="grid gap-1">
                 <div className="text-[15px] font-semibold text-slate-900">
-                  当前版本 <span className="text-slate-500 font-normal">{updateEvent.currentVersion}</span> <span className="mx-1 text-slate-300">→</span> 最新版本 <span className="text-brand-600">{updateEvent.version}</span>
+                  {t("当前版本")} <span className="text-slate-500 font-normal">{updateEvent.currentVersion}</span> <span className="mx-1 text-slate-300">→</span> {t("最新版本")} <span className="text-brand-600">{updateEvent.version}</span>
                 </div>
                 <div className="text-sm text-slate-500 leading-relaxed">
                   {updateEvent.status === "downloaded"
-                    ? "更新包已下载完成，重启后将自动安装。"
+                    ? t("更新包已下载完成，重启后将自动安装。")
                     : updateEvent.status === "downloading"
-                      ? "更新包正在下载，下载期间可以继续使用 Codex Forge。"
-                      : "新版本已可用。你可以立即下载并查看进度，也可以让它在后台下载。"}
+                      ? t("更新包正在下载，下载期间可以继续使用 Codex Forge。")
+                      : t("新版本已可用。你可以立即下载并查看进度，也可以让它在后台下载。")}
                 </div>
               </div>
             </div>
@@ -423,7 +430,7 @@ export default function App() {
               <div className="grid gap-3 px-1">
                 <div className="flex items-center gap-2">
                   <div className="h-3.5 w-1 rounded-full bg-brand-600" />
-                  <div className="text-[15px] font-bold text-slate-900">更新内容</div>
+                  <div className="text-[15px] font-bold text-slate-900">{t("更新内容")}</div>
                 </div>
                 {notes.length > 0 ? (
                   <ul className="m-0 grid gap-2.5 pl-1 text-[14px] text-slate-600 list-none">
@@ -435,7 +442,7 @@ export default function App() {
                     ))}
                   </ul>
                 ) : (
-                  <div className="text-[14px] text-slate-500">暂无更新说明</div>
+                  <div className="text-[14px] text-slate-500">{t("暂无更新说明")}</div>
                 )}
               </div>
             ) : null}

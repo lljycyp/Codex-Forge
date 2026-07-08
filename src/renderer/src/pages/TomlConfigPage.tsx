@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Alert, Button, Input, Modal, Select, Spin, Tooltip, message } from "antd";
 import { RefreshCw, Save } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
+import { useI18n } from "../i18n";
 import type { AppState, ProfileSummary, TomlConfigState } from "../types";
 
 const { TextArea } = Input;
@@ -14,6 +15,7 @@ type TomlConfigPageProps = {
 };
 
 export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
+  const { t } = useI18n();
   const [state, setState] = useState<TomlConfigState | null>(null);
   const [content, setContent] = useState("");
   const [profileName, setProfileName] = useState(appState.activeProfile || profiles[0]?.name || SYSTEM_PROFILE_NAME);
@@ -26,7 +28,7 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
   const noProfile = multiMode && !profileName;
   const targetPayload = multiMode ? { profileName } : {};
   const profileOptions = [
-    { label: "系统级配置", value: SYSTEM_PROFILE_NAME },
+    { label: t("系统级配置"), value: SYSTEM_PROFILE_NAME },
     ...profiles.map((profile) => ({ label: profile.name, value: profile.name })),
   ];
   const accountOptions = profiles.map((profile) => ({ label: profile.name, value: profile.name }));
@@ -49,7 +51,7 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
       setState(next);
       setContent(next.content);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "读取 TOML 配置失败");
+      message.error(error instanceof Error ? error.message : t("读取 TOML 配置失败"));
     } finally {
       setLoading(false);
     }
@@ -65,9 +67,9 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
       const next = await invokeLauncher<TomlConfigState>("save_toml_config", { ...targetPayload, content });
       setState(next);
       setContent(next.content);
-      message.success(next.backupPath ? "已保存，旧配置已备份" : "已保存");
+      message.success(next.backupPath ? t("已保存，旧配置已备份") : t("已保存"));
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "保存 TOML 配置失败");
+      message.error(error instanceof Error ? error.message : t("保存 TOML 配置失败"));
     } finally {
       setSaving(false);
     }
@@ -78,9 +80,9 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
     try {
       const next = await invokeLauncher<TomlConfigState>("save_toml_config", { content, scope: "all" });
       setState(next);
-      message.success("已同步到所有账号");
+      message.success(t("已同步到所有账号"));
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "同步 TOML 配置失败");
+      message.error(error instanceof Error ? error.message : t("同步 TOML 配置失败"));
     } finally {
       setSaving(false);
     }
@@ -93,11 +95,11 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
     setSaving(true);
     try {
       await invokeLauncher<TomlConfigState>("save_toml_config", { content, profileName: syncTargetProfile });
-      message.success("已同步到指定账号");
+      message.success(t("已复制到指定账号"));
       setSyncOpen(false);
       setSyncTargetProfile("");
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "同步 TOML 配置失败");
+      message.error(error instanceof Error ? error.message : t("同步 TOML 配置失败"));
     } finally {
       setSaving(false);
     }
@@ -108,16 +110,16 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
       <div className="flex flex-wrap items-start justify-between gap-4 rounded-panel border border-shell-line bg-white px-5 py-4 shadow-[0_10px_28px_rgba(15,23,42,0.045)]">
         <div className="min-w-[260px] flex-1">
           <div className="flex flex-wrap items-center gap-2 text-base font-bold text-slate-800">
-            当前 config.toml
+            {t("当前 config.toml")}
             {multiMode ? (
               <span className="rounded-[6px] border border-brand-100 bg-brand-50 px-2 py-0.5 text-[11px] font-bold text-brand-600">
-                多开
+                {t("多开")}
               </span>
             ) : null}
           </div>
           <Tooltip title={state?.path}>
             <div className="mt-1 truncate text-xs text-slate-500">
-              {noProfile ? "请选择账号后查看配置" : state?.path || "读取中"}
+              {noProfile ? t("请选择账号后查看配置") : state?.path || t("读取中")}
             </div>
           </Tooltip>
         </div>
@@ -126,20 +128,20 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
             <Select
               className="w-[292px] max-w-full"
               value={profileName || undefined}
-              placeholder="选择账号"
+              placeholder={t("选择账号")}
               options={profileOptions}
               onChange={setProfileName}
             />
           ) : null}
           <Button type="primary" icon={<Save size={15} />} loading={saving} disabled={noProfile} onClick={save}>
-            保存
+            {t("保存")}
           </Button>
           <Button icon={<RefreshCw size={15} />} loading={loading} onClick={refresh}>
-            刷新
+            {t("刷新")}
           </Button>
           {multiMode ? (
             <Button loading={saving} disabled={noProfile} onClick={syncAll}>
-              同步全部账号
+              {t("同步全部账号")}
             </Button>
           ) : null}
           {multiMode ? (
@@ -151,7 +153,7 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
                 setSyncOpen(true);
               }}
             >
-              同步到账号
+              {t("同步到账号")}
             </Button>
           ) : null}
         </div>
@@ -161,7 +163,7 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
         <Alert
           type="warning"
           showIcon
-          message="当前 config.toml 不存在，保存后会自动创建。"
+          message={t("当前 config.toml 不存在，保存后会自动创建。")}
         />
       ) : null}
 
@@ -172,7 +174,7 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
           </div>
         ) : noProfile ? (
           <div className="flex h-full min-h-0 items-center justify-center text-sm text-slate-500">
-            请选择账号后查看配置
+            {t("请选择账号后查看配置")}
           </div>
         ) : (
           <TextArea
@@ -187,25 +189,25 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
 
       {state?.backupPath ? (
         <Tooltip title={state.backupPath}>
-          <div className="truncate text-xs text-slate-500">最近备份：{state.backupPath}</div>
+          <div className="truncate text-xs text-slate-500">{t("最近备份：")}{state.backupPath}</div>
         </Tooltip>
       ) : null}
       <Modal
-        title="同步到账号"
+        title={t("同步到账号")}
         open={syncOpen}
         onCancel={() => {
           setSyncOpen(false);
           setSyncTargetProfile("");
         }}
         onOk={syncToProfile}
-        okText="同步"
-        cancelText="取消"
+        okText={t("同步")}
+        cancelText={t("取消")}
         okButtonProps={{ disabled: !syncTargetProfile }}
       >
         <Select
           className="w-full"
           value={syncTargetProfile || undefined}
-          placeholder="选择目标账号"
+          placeholder={t("选择目标账号")}
           options={accountOptions}
           onChange={setSyncTargetProfile}
         />

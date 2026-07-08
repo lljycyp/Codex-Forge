@@ -1,14 +1,18 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { ConfigProvider } from "antd";
+import enUS from "antd/locale/en_US";
 import zhCN from "antd/locale/zh_CN";
 import App from "./App";
+import { I18nProvider, useI18n } from "./i18n";
 import "./styles.css";
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
+function Root() {
+  const { language } = useI18n();
+  document.documentElement.lang = language;
+  return (
     <ConfigProvider
-      locale={zhCN}
+      locale={language === "en-US" ? enUS : zhCN}
       theme={{
         token: {
           colorPrimary: "#0d9488",
@@ -25,5 +29,13 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     >
       <App />
     </ConfigProvider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  <React.StrictMode>
+    <I18nProvider>
+      <Root />
+    </I18nProvider>
   </React.StrictMode>,
 );

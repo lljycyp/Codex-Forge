@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { Layout, Typography } from "antd";
 import { Minus, Square, X } from "lucide-react";
-import type { ViewKey, ViewMeta } from "../types";
+import { useI18n } from "../i18n";
+import type { AppState, ViewKey, ViewMeta } from "../types";
 import codexForgeLogo from "../assets/codex-forge-logo.png";
 
 const { Header, Sider } = Layout;
@@ -21,6 +22,7 @@ type MenuItem = {
 type AppLayoutProps = {
   activeView: ViewKey;
   currentView: ViewMeta;
+  launchMode: AppState["launchMode"];
   menuItems: MenuItem[];
   taskText: string;
   topbarAction: ReactNode;
@@ -31,12 +33,14 @@ type AppLayoutProps = {
 export function AppLayout({
   activeView,
   currentView,
+  launchMode,
   menuItems,
   taskText,
   topbarAction,
   children,
   onChangeView,
 }: AppLayoutProps) {
+  const { t } = useI18n();
   return (
     <Layout className="grid h-screen grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-[#e8f4f4] bg-shell-gradient">
       <div className="grid h-12 grid-cols-[auto_minmax(0,1fr)_auto] items-center border-b-0 bg-transparent [-webkit-app-region:drag]">
@@ -55,11 +59,11 @@ export function AppLayout({
                 Codex Forge
               </span>
               <div className="flex items-center gap-2 text-[11px] font-medium text-white/80">
-                <span>多开</span>
+                <span>{t("多开")}</span>
                 <span className="h-[3px] w-[3px] rounded-full bg-white/40" />
-                <span>切换</span>
+                <span>{t("切换")}</span>
                 <span className="h-[3px] w-[3px] rounded-full bg-white/40" />
-                <span>指令</span>
+                <span>{t("指令")}</span>
               </div>
             </div>
           </div>
@@ -68,21 +72,21 @@ export function AppLayout({
         <div className="grid h-12 grid-cols-3 [-webkit-app-region:no-drag]">
           <button
             className={windowButtonClass}
-            title="最小化"
+            title={t("最小化")}
             onClick={() => window.launcherApi.minimizeWindow()}
           >
             <Minus size={14} strokeWidth={2} />
           </button>
           <button
             className={windowButtonClass}
-            title="最大化"
+            title={t("最大化")}
             onClick={() => window.launcherApi.toggleMaximizeWindow()}
           >
             <Square size={14} strokeWidth={2} />
           </button>
           <button
             className={`${windowButtonClass} hover:bg-[#ff4d4f] hover:text-white`}
-            title="关闭"
+            title={t("关闭")}
             onClick={() => window.launcherApi.closeWindow()}
           >
             <X size={14} strokeWidth={2} />
@@ -104,6 +108,7 @@ export function AppLayout({
               />
             ))}
           </nav>
+          <LaunchModeCard launchMode={launchMode} />
         </Sider>
         <Layout className="relative mb-3.5 mr-3.5 h-[calc(100%-14px)] min-w-0 overflow-hidden rounded-panel bg-shell-surface shadow-panel">
           <Header className="flex h-[88px] flex-none items-center justify-between gap-4 overflow-visible border-b border-[#e4ebf3] !bg-white px-[30px] pb-4 pt-5 leading-normal [&>*]:[-webkit-app-region:no-drag]">
@@ -114,6 +119,20 @@ export function AppLayout({
         </Layout>
       </Layout>
     </Layout>
+  );
+}
+
+function LaunchModeCard({ launchMode }: { launchMode: AppState["launchMode"] }) {
+  const { t } = useI18n();
+  const isMulti = launchMode === "multi";
+
+  return (
+    <div className="rounded-[9px] bg-black/10 px-3 py-2.5">
+      <div className="text-[11px] font-medium text-white/60">{t("当前模式")}</div>
+      <div className="mt-0.5 truncate text-[13px] font-semibold text-white/90">
+        {isMulti ? t("多开隔离模式") : t("账号切换模式")}
+      </div>
+    </div>
   );
 }
 
