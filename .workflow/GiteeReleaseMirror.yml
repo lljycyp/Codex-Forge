@@ -1,0 +1,63 @@
+version: '1.0'
+name: gitee-release
+displayName: Gitee Release
+
+triggers:
+  trigger: auto
+  push:
+    tags:
+      prefix:
+        - v
+
+stages:
+  - name: build
+    displayName: Build installer
+    strategy: naturally
+    trigger: auto
+    steps:
+      - step: build@nodejs
+        name: build_installer
+        displayName: Build installer
+        nodeVersion: 16.14.2
+        commands:
+          - set -e
+          - npm config set registry https://registry.npmmirror.com
+          - npm install -g yarn
+          - curl -LsSf https://astral.sh/uv/install.sh | sh
+          - export PATH="$HOME/.local/bin:$PATH"
+          - yarn install --frozen-lockfile
+          - yarn build
+          - echo "APP_VERSION=$(node -p 'require(\"./package.json\").version')" >> GITEE_PARAMS
+          - ls -lh release
+        artifacts:
+          - name: RELEASE_ASSETS
+            path:
+              - release/Codex-Forge-Setup-*.exe
+              - release/latest.yml
+              - release/release-notes.md
+        caches:
+          - ~/.npm
+        notify: []
+        strategy:
+          retry: '0'
+  - name: release
+    displayName: Publish Gitee Release
+    strategy: naturally
+    trigger: auto
+    steps:
+      - step: release@gitee
+        name: release_gitee
+        displayName: Gitee Release
+        releaseName: Codex Forge ${APP_VERSION}
+        description: release/release-notes.md
+        tagName: v${APP_VERSION}
+        upstreamArtifact:
+          - RELEASE_ASSETS
+        assertFiles:
+          - release/Codex-Forge-Setup-${APP_VERSION}.exe
+          - release/latest.yml
+        prerelease: false
+        allowUpdate: true
+        notify: []
+        strategy:
+          retry: '0'
