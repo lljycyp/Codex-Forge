@@ -22,7 +22,7 @@ command -v yarn >/dev/null 2>&1 || npm install -g yarn
 yarn config set registry https://registry.npmmirror.com
 
 if ! command -v uv >/dev/null 2>&1; then
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
+  powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
 fi
 
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
