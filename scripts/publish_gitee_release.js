@@ -4,8 +4,12 @@ const { spawnSync } = require("node:child_process");
 
 const root = path.join(__dirname, "..");
 const apiBase = "https://gitee.com/api/v5";
-const owner = process.env.GITEE_OWNER || "llj20010218";
-const repo = process.env.GITEE_REPO || "codex-forge";
+const repoPath = (process.env.GITEE_REPO || "codex-forge")
+  .replace(/^https?:\/\/gitee\.com\//, "")
+  .replace(/\.git$/, "");
+const repoParts = repoPath.split("/").filter(Boolean);
+const owner = process.env.GITEE_OWNER || repoParts.at(-2) || "llj20010218";
+const repo = repoParts.at(-1) || "codex-forge";
 const token = process.env.GITEE_TOKEN;
 const dryRun = process.env.GITEE_DRY_RUN === "1";
 const uploadMaxTime = process.env.GITEE_UPLOAD_MAX_TIME || "7200";
