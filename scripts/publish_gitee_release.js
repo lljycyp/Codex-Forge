@@ -18,12 +18,11 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"))
 const version = pkg.version;
 const tagName = process.env.GITHUB_REF_NAME || `v${version}`;
 const releaseDir = path.join(root, "release");
+const releaseNotesPath = path.join(releaseDir, "release-notes.md");
 const requiredFiles = [
   path.join(releaseDir, `Codex-Forge-Setup-${version}.exe`),
   path.join(releaseDir, "latest.yml"),
-];
-const optionalFiles = [
-  path.join(releaseDir, `Codex-Forge-Setup-${version}.exe.blockmap`),
+  releaseNotesPath,
 ];
 
 function requireFile(file) {
@@ -37,13 +36,9 @@ function assetSize(file) {
 }
 
 function releaseNotes() {
-  const changelogPath = path.join(root, "CHANGELOG.md");
-  const lines = fs.readFileSync(changelogPath, "utf8").split(/\r?\n/);
-  const start = lines.findIndex((line) => line.trim() === `## ${version}`);
-  const end = lines.findIndex((line, index) => index > start && /^##\s+/.test(line));
-  const notes = start === -1 ? "" : lines.slice(start + 1, end === -1 ? undefined : end).join("\n").trim();
+  const notes = fs.readFileSync(releaseNotesPath, "utf8").trim();
   if (!notes) {
-    throw new Error(`CHANGELOG.md missing notes for version ${version}`);
+    throw new Error(`release/release-notes.md missing notes for version ${version}`);
   }
   return notes;
 }
@@ -155,10 +150,7 @@ async function uploadAsset(releaseId, file) {
 
 async function main() {
   requiredFiles.forEach(requireFile);
-  const files = [
-    ...requiredFiles,
-    ...optionalFiles.filter((file) => fs.existsSync(file) && !fs.statSync(file).isDirectory()),
-  ];
+  const files = requiredFiles.filter((file) => file !== releaseNotesPath);
   const notes = releaseNotes();
 
   if (dryRun) {

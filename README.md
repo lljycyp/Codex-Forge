@@ -250,7 +250,7 @@ yarn dev
 cd python
 uv run python -m py_compile main.py
 cd ..
-yarn tsc --noEmit
+yarn typecheck:all
 ```
 
 ### 📦 项目打包
@@ -267,6 +267,7 @@ yarn build
 yarn build:backend
 yarn build:shell
 yarn build:installer
+yarn clean
 ```
 
 > **打包流程说明**：
@@ -278,7 +279,7 @@ yarn build:installer
 
 ```text
 resources/main.exe
-release/Codex Forge Setup 0.1.0.exe
+release/Codex-Forge-Setup-<version>.exe
 ```
 
 ---

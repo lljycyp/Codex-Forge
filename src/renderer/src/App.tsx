@@ -97,18 +97,22 @@ export default function App() {
     setTaskText(t("就绪"));
   }, [t]);
 
+  const loadShellState = useCallback(async () => {
+    const [stateData, profileData] = await Promise.all([
+      invokeLauncher<AppState>("get_app_state"),
+      invokeLauncher<{ profiles: ProfileSummary[] }>("list_profiles")
+    ]);
+    setAppState(stateData);
+    setProfiles(profileData.profiles);
+  }, []);
+
   const refresh = useCallback(async (view?: ViewKey | null) => {
     const refreshToken = view ? ++refreshTokenRef.current : refreshTokenRef.current;
     if (view) {
       setRefreshingView(view);
     }
     try {
-      const [stateData, profileData] = await Promise.all([
-        invokeLauncher<AppState>("get_app_state"),
-        invokeLauncher<{ profiles: ProfileSummary[] }>("list_profiles")
-      ]);
-      setAppState(stateData);
-      setProfiles(profileData.profiles);
+      await loadShellState();
       setTaskText(t("状态已刷新"));
     } catch (error) {
       message.error(error instanceof Error ? error.message : t("刷新失败"));
@@ -120,7 +124,7 @@ export default function App() {
         setInitialLoading(false);
       }
     }
-  }, [t]);
+  }, [loadShellState, t]);
 
   useEffect(() => {
     refresh("home");
@@ -172,12 +176,7 @@ export default function App() {
       autoUsageRefreshingRef.current = true;
       try {
         await invokeLauncher("refresh_all_profile_usage");
-        const [stateData, profileData] = await Promise.all([
-          invokeLauncher<AppState>("get_app_state"),
-          invokeLauncher<{ profiles: ProfileSummary[] }>("list_profiles")
-        ]);
-        setAppState(stateData);
-        setProfiles(profileData.profiles);
+        await loadShellState();
       } catch {
         // 静默自动刷新不打扰用户，手动刷新仍会展示具体错误。
       } finally {
@@ -190,7 +189,7 @@ export default function App() {
     }, usageAutoRefreshMs);
     void refreshUsageSilently();
     return () => window.clearInterval(timer);
-  }, []);
+  }, [loadShellState]);
 
   const runCommand = useCallback<RunCommand>(
     async (command, payload, successText = t("操作完成"), options) => {

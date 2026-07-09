@@ -249,7 +249,7 @@ yarn dev
 cd python
 uv run python -m py_compile main.py
 cd ..
-yarn tsc --noEmit
+yarn typecheck:all
 ```
 
 ### 📦 Packaging
@@ -266,6 +266,7 @@ yarn build
 yarn build:backend
 yarn build:shell
 yarn build:installer
+yarn clean
 ```
 
 > **Build flow**:
@@ -276,7 +277,7 @@ yarn build:installer
 
 ```text
 resources/main.exe
-release/Codex Forge Setup 0.1.0.exe
+release/Codex-Forge-Setup-<version>.exe
 ```
 
 ---

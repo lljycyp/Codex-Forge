@@ -562,10 +562,12 @@ def _sync_active_auth_to_profile(config, profile_name):
 
 def _is_same_auth_account(left_auth, right_auth):
     """确认两个 auth.json 属于同一登录用户，避免同一 Team 账号下串号。"""
-    left = extract_auth(left_auth)
-    right = extract_auth(right_auth)
-    left_claims = left.get("claims") if isinstance(left.get("claims"), dict) else {}
-    right_claims = right.get("claims") if isinstance(right.get("claims"), dict) else {}
+    left = extract_auth(left_auth) or {}
+    right = extract_auth(right_auth) or {}
+    left_claims_value = left.get("claims")
+    right_claims_value = right.get("claims")
+    left_claims = left_claims_value if isinstance(left_claims_value, dict) else {}
+    right_claims = right_claims_value if isinstance(right_claims_value, dict) else {}
     for key in ("sub", "email"):
         left_value = left_claims.get(key) or left.get(key)
         right_value = right_claims.get(key) or right.get(key)

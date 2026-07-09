@@ -112,7 +112,8 @@ def refresh_chatgpt_auth_tokens(auth_json):
     if not refresh_token:
         raise ValueError("登录信息缺少 refresh_token，无法自动刷新，请重新授权")
 
-    claims = auth.get("claims") if isinstance(auth.get("claims"), dict) else {}
+    claims_value = auth.get("claims")
+    claims = claims_value if isinstance(claims_value, dict) else {}
     issuer = clean_string(claims.get("iss")) or DEFAULT_OAUTH_ISSUER
     token_url = f"{issuer.rstrip('/')}/oauth/token"
     form = {
@@ -154,7 +155,8 @@ def apply_refreshed_tokens(auth_json, payload):
     updated = dict(auth_json) if isinstance(auth_json, dict) else {}
     updated.setdefault("OPENAI_API_KEY", None)
     updated["auth_mode"] = updated.get("auth_mode") or "chatgpt"
-    tokens = dict(updated.get("tokens") if isinstance(updated.get("tokens"), dict) else {})
+    raw_tokens = updated.get("tokens")
+    tokens: dict[str, object] = raw_tokens.copy() if isinstance(raw_tokens, dict) else {}
     tokens["access_token"] = access_token
     tokens["id_token"] = id_token
     if clean_string(payload.get("refresh_token")):

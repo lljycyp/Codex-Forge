@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import cast
 
 
 OAUTH_ISSUER = "https://auth.openai.com"
@@ -48,7 +49,7 @@ def _build_oauth_request():
     state = secrets.token_hex(16)
     code_verifier = f"{secrets.token_hex(32)}{secrets.token_hex(32)}"
     code_challenge = _base64_url(hashlib.sha256(code_verifier.encode("utf-8")).digest())
-    redirect_uri = f"http://localhost:{OAUTH_REDIRECT_PORT}/auth/callback"
+    redirect_uri = f"http://127.0.0.1:{OAUTH_REDIRECT_PORT}/auth/callback"
     params = {
         "response_type": "code",
         "client_id": OAUTH_CLIENT_ID,
@@ -176,33 +177,37 @@ def _rfc3339_now():
 
 class _CallbackServer(ThreadingHTTPServer):
     allow_reuse_address = True
+    expected_state: str
+    callback_error: str | None
+    callback_code: str | None
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         """处理浏览器回跳到本地端口的授权结果。"""
+        server = cast(_CallbackServer, self.server)
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
         state = query.get("state", [""])[0]
-        if state != self.server.expected_state:
-            self.server.callback_error = "授权回调校验失败，请重新新增账号"
+        if state != server.expected_state:
+            server.callback_error = "授权回调校验失败，请重新新增账号"
             self._send_page("授权失败，请关闭此页面后重试。", status=400)
             return
 
         error = query.get("error", [""])[0]
         if error:
             description = query.get("error_description", [error])[0]
-            self.server.callback_error = f"授权失败：{description}"
+            server.callback_error = f"授权失败：{description}"
             self._send_page("授权失败，请关闭此页面后重试。", status=400)
             return
 
         code = query.get("code", [""])[0]
         if not code:
-            self.server.callback_error = "授权回调缺少 code 参数"
+            server.callback_error = "授权回调缺少 code 参数"
             self._send_page("授权失败，请关闭此页面后重试。", status=400)
             return
 
-        self.server.callback_code = code
+        server.callback_code = code
         self._send_page("授权完成，可以回到 Codex Forge。")
 
     def log_message(self, _format, *_args):

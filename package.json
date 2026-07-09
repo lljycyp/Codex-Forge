@@ -1,28 +1,30 @@
 {
   "name": "codex-forge-desktop",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "description": "Windows desktop workspace for Codex profiles, config, and instructions.",
   "author": "Codex Forge",
   "private": true,
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "bash ./scripts/build.sh",
-    "build:backend": "bash ./scripts/build_backend.sh",
-    "build:shell": "bash ./scripts/build_shell.sh",
-    "build:installer": "bash ./scripts/build_installer.sh",
-    "build:win": "yarn build",
+    "build": "node scripts/build.js",
+    "build:backend": "node scripts/build.js backend",
+    "build:shell": "node scripts/build.js shell",
+    "build:installer": "node scripts/build.js installer",
+    "clean": "node scripts/clean.js",
+    "typecheck": "tsc --noEmit",
+    "typecheck:py": "cd python && .venv/Scripts/python.exe -m basedpyright",
+    "typecheck:all": "yarn typecheck && yarn typecheck:py",
     "preview": "electron-vite preview"
   },
   "dependencies": {
-    "electron-store": "^10.0.1",
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
     "antd": "^5.22.7",
     "autoprefixer": "^10.5.2",
     "electron": "41.7.0",
