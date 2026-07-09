@@ -8,6 +8,8 @@ directories:
   output: release
 publish:
   provider: github
+  owner: lljycyp
+  repo: Codex-Forge
 files:
   - out/**
   - assets/**
