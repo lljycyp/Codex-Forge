@@ -4,11 +4,11 @@ export function getViewMeta(t: (text: string) => string): Record<ViewKey, ViewMe
   return {
   home: {
     title: t("首页"),
-    description: t("查看账号、运行模式和当前配置状态")
+    description: t("查看运行状态与当前工作环境")
   },
   profiles: {
     title: t("账号管理"),
-    description: t("保存当前账号资料、切换账号、改名、删除和打开目录")
+    description: t("查看运行实例、选择账号并管理账号环境")
   },
   instructions: {
     title: t("指令模板"),

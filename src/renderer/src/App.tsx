@@ -274,6 +274,18 @@ export default function App() {
     []
   );
 
+  const launchProfileFromHome = useCallback(
+    (profile: ProfileSummary) => {
+      void runCommand(
+        "launch_profile",
+        { name: profile.name },
+        t("已启动"),
+        { blocking: false },
+      );
+    },
+    [runCommand, t],
+  );
+
   const hideUpdateModal = useCallback(() => {
     showUpdateProgressRef.current = false;
     setShowUpdateProgress(false);
@@ -356,7 +368,8 @@ export default function App() {
             <HomePage
               appState={appState}
               profiles={profiles}
-              onOpenProfiles={() => setActiveView("profiles")}
+              onOpenView={changeView}
+              onLaunchProfile={launchProfileFromHome}
             />
           ) : null}
           {activeView === "profiles" ? (
