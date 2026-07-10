@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  面向 Windows 桌面端 Codex 的本地多账号与多开管理工具。它将多个 Codex 登录资料、<code>auth.json</code>、<code>config.toml</code>、指令模板和额度快照集中到一个桌面界面中，既可切换账号后启动 Codex，也可用隔离环境同时多开多个 Codex 客户端。
+  面向 Windows ChatGPT 桌面应用中 Codex 能力的本地多账号与多开管理工具。它将多个登录资料、<code>auth.json</code>、<code>config.toml</code>、指令模板和额度快照集中到一个桌面界面中，既可切换账号后启动 ChatGPT，也可用隔离环境同时多开多个 ChatGPT 客户端。
 </p>
 
 <p align="center">
@@ -43,7 +43,7 @@
 - 🛠️ **可视化编辑**：提供查看和编辑当前生效的 `~/.codex/config.toml` 的可视化界面。
 - 📝 **指令模板（提示词注入）**：把常用提示词保存成 Markdown 模板，一键切换 Codex 的全局行为设定，使用内置提示词可实现破除限制，可实现SQL 注入测试、逆向等效果。
 - 📊 **状态监控**：实时查看账号健康状态、运行状态以及额度快照。
-- 🚀 **可选启动模式**：支持稳定的账号切换模式，也支持多开隔离模式并发启动多个 Codex 客户端。
+- 🚀 **可选启动模式**：支持稳定的账号切换模式，也支持多开隔离模式并发启动多个 ChatGPT 客户端。
 - 🌐 **双语界面**：内置中文 / English 切换，适合不同语言环境下使用。
 - 🔔 **版本更新**：支持应用内检查更新、查看更新内容、后台下载并重启安装。
 
@@ -58,10 +58,10 @@
 | 功能模块                      | 详细说明                                                                                                                                              |
 | :---------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 👥 **账号资料管理**           | 新增、重命名、删除账号资料，数据默认保存在 `~/Documents/CodexProfiles`。                                                                              |
-| 🔑 **授权导入**               | 支持浏览器 OAuth（开放授权）授权、保存当前默认 Codex 账号、导入本地 `auth.json` 文件。                                                                |
-| 🚀 **一键切换启动**           | 账号切换模式下自动写入当前用户 `.codex` 目录并启动默认 Codex。若检测到 Codex 正在运行会提示先关闭。                                                   |
+| 🔑 **授权导入**               | 通过官方 Codex App Server 完成 ChatGPT 浏览器登录，也支持保存当前账号或导入本地 `auth.json`。                                                        |
+| 🚀 **一键切换启动**           | 账号切换模式下自动写入当前用户 `.codex` 目录并启动 ChatGPT。若检测到 ChatGPT 正在运行会提示先关闭。                                                  |
 | 📦 **多开隔离启动**           | 特色功能。多开隔离模式下为账号准备独立 `CodexHome`、`APPDATA`、`LOCALAPPDATA`、`--user-data-dir` 和完整 `CodexPortableApp` 副本，避免多账号互相覆盖。 |
-| 📊 **额度快照**               | 读取账号认证信息并请求 Codex 额度接口，缓存并直观显示各账号的额度状态。                                                                               |
+| 📊 **额度快照**               | 通过官方 Codex App Server 读取并缓存 ChatGPT 账号的 Codex 额度状态。                                                                                  |
 | 🛠️ **TOML 编辑**              | 直接查看和保存当前生效的 `config.toml`，且在保存前自动进行文件备份。                                                                                  |
 | 📝 **指令模板（提示词注入）** | 本地保存 Markdown（标记语言）提示词模板，启用后复制到当前 Codex 配置目录，并把 `config.toml` 的 `model_instructions_file` 指向该模板。                |
 | ⚙️ **启动与目录设置**         | 支持切换启动模式、迁移账号资料根目录，并可开启 Windows 登录后自动启动 Codex Forge。                                                                   |
@@ -85,11 +85,11 @@
 
 提供三种便捷的新增账号方式：
 
-- 🌐 **浏览器授权**：打开 OpenAI 授权流程，授权结果仅保存至新账号资料目录。
+- 🌐 **浏览器授权**：通过 ChatGPT 内置 Codex App Server 打开官方授权流程，授权结果仅保存至新账号资料目录。
 - 💾 **保存当前账号**：一键复制当前系统中的 `~/.codex/auth.json`。
 - 📁 **上传本地文件**：从本地选择已有的 Codex 登录文件进行导入。
 
-> 💡 额度刷新时，系统会在必要时自动刷新登录令牌（Token），并将最新的认证信息回写至对应的账号资料中。
+> 💡 额度刷新通过官方 App Server 完成；如果认证被刷新，最新信息会回写至对应账号资料。
 
 ### 3. 🛠️ TOML 可视化编辑与安全备份
 
@@ -147,8 +147,8 @@ Codex Forge 当前内置破除限制提示词模板：
 
 除默认的账号切换模式外，Codex Forge 的特色启动能力是多开隔离：
 
-- **账号切换模式**：默认模式。切换账号时写入系统 `~/.codex`，同一时间只建议运行一个 Codex。
-- **多开隔离模式**：特色模式。每个账号使用独立环境并复制一份完整 `CodexPortableApp`，可同时运行多个 Codex 客户端。
+- **账号切换模式**：默认模式。切换账号时写入系统 `~/.codex`，同一时间只建议运行一个 ChatGPT 客户端。
+- **多开隔离模式**：特色模式。每个账号使用独立环境并复制一份完整 ChatGPT 客户端，可同时运行多个 ChatGPT 客户端。
 
 多开隔离模式会隔离 `CodexHome`、`APPDATA`、`LOCALAPPDATA` 和浏览器 `--user-data-dir`，账号目录会额外包含：
 
@@ -162,21 +162,20 @@ CodexProfiles/<账号名>/CodexPortableApp
 
 设置页集中管理启动器自身配置：
 
-- **账号资料位置**：可更改账号资料根目录，迁移前会提示关闭正在运行的 Codex。
+- **账号资料位置**：可更改账号资料根目录，迁移前会提示关闭正在运行的 ChatGPT。
 - **启动模式**：可在账号切换模式和多开隔离模式之间切换，多开模式会提示磁盘占用风险。
 - **开机自启**：支持登录 Windows 后自动启动 Codex Forge。
 - **语言切换**：支持中文 / English 界面切换。
 - **版本更新**：显示当前版本，支持手动检查更新；发现新版本后可查看更新内容、后台下载并重启安装。
 - **项目入口**：关于区域提供 GitHub 与 Gitee 项目入口，方便查看源码和发布信息。
 
-### 7. 🧠 Codex 启动来源智能识别
+### 7. 🧠 ChatGPT 启动来源智能识别
 
 在启动账号时，系统会按以下优先级顺序智能识别启动路径：
 
-1. 已保存的 Codex 桌面程序自定义路径。
-2. 正在运行的 Codex 或 Microsoft Store（微软应用商店）版本的 Codex。
-3. Windows Store（微软应用商店）应用的默认启动标识。
-4. 系统环境变量（PATH）中的 `codex` 命令（执行 `codex app`）。
+1. 已保存的 ChatGPT 桌面主程序路径。
+2. 当前运行中的 ChatGPT 主进程。
+3. `OpenAI.Codex` / `OpenAI.ChatGPT` AppX Manifest 中的主程序与应用标识。
 
 ---
 
@@ -192,9 +191,8 @@ CodexProfiles/<账号名>/CodexPortableApp
 **Codex Forge 自身配置、日志与缓存**：
 
 ```text
-%LOCALAPPDATA%/CodexForge/config.json
+%LOCALAPPDATA%/CodexForge/codex_forge.db
 %LOCALAPPDATA%/CodexForge/logs/launcher.log
-%LOCALAPPDATA%/CodexForge/usage_cache.json
 ```
 
 **账号资料存储目录**：
@@ -225,12 +223,12 @@ CodexProfiles/<账号名>/CodexPortableApp
   - uv (Python 包管理器)
   - yarn
   - Bash 环境 (Windows 推荐使用 Git Bash)
-- 软件依赖：已安装 Codex 桌面端，或系统环境变量中包含可执行的 `codex` 命令。
+- 软件依赖：已从 Microsoft Store 安装支持 Codex 的 ChatGPT 桌面应用。
 
-_验证 Codex 命令是否可用：_
+_验证内置 Codex App Server（可选）：_
 
-```bash
-codex --version
+```powershell
+winget list Codex -s msstore
 ```
 
 ### 🚀 开发运行

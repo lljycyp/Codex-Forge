@@ -1,7 +1,9 @@
 import json
 import os
+import re
 import shutil
 import time
+import tomllib
 import uuid
 from pathlib import Path
 
@@ -72,9 +74,11 @@ def prepare_profile_codex_home(profile_dir, share_system_config=False):
 
     codex_home_dir = profile_dir / "CodexHome"
     codex_home_dir.mkdir(parents=True, exist_ok=True)
+    config_path = ensure_profile_config_path(profile_dir)
+    sanitize_profile_config_file(config_path)
+    require_file_auth_store(config_path)
     ensure_profile_env_file(codex_home_dir)
     shutil.copy2(source_auth_path, codex_home_dir / "auth.json")
-    ensure_profile_config_path(profile_dir)
 
 
 def sync_codex_home_to_profile(profile_dir, share_system_config=False):
@@ -117,10 +121,58 @@ def ensure_profile_config_path(profile_dir):
     active_config_path = get_active_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
     if active_config_path.exists():
-        shutil.copy2(active_config_path, config_path)
+        config_path.write_text(
+            sanitize_profile_config_text(active_config_path.read_text(encoding="utf-8")),
+            encoding="utf-8",
+        )
     else:
-        config_path.write_text("", encoding="utf-8")
+        config_path.write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
     return config_path
+
+
+def sanitize_profile_config_file(config_path):
+    """移除不能跨 ChatGPT 实例复制的动态配置。"""
+    config_path = Path(config_path)
+    current = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    sanitized = sanitize_profile_config_text(current)
+    if sanitized != current:
+        config_path.write_text(sanitized, encoding="utf-8")
+
+
+def sanitize_profile_config_text(text):
+    """保留用户配置，同时过滤应用生成的管道、缓存和运行时路径。"""
+    dynamic_sections = (
+        "mcp_servers.node_repl",
+        "marketplaces.openai-bundled",
+        "hooks.state",
+    )
+    output = []
+    skip_section = False
+    section_name = ""
+    credential_store_pattern = re.compile(r"^\s*cli_auth_credentials_store\s*=")
+    notify_pattern = re.compile(r"^\s*notify\s*=")
+
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section_name = stripped.strip("[]").replace('"', "").replace("'", "")
+            skip_section = any(
+                section_name == prefix or section_name.startswith(f"{prefix}.")
+                for prefix in dynamic_sections
+            )
+        if skip_section:
+            continue
+        if not section_name and credential_store_pattern.match(line):
+            continue
+        if not section_name and notify_pattern.match(line):
+            normalized = line.lower().replace("/", "\\")
+            if "\\openai\\codex\\runtimes\\" in normalized or "codex-computer-use" in normalized:
+                continue
+        output.append(line)
+
+    while output and not output[-1].strip():
+        output.pop()
+    return 'cli_auth_credentials_store = "file"\n' + "\n".join(output).lstrip() + "\n"
 
 
 def apply_profile(profile_dir, share_system_config=False):
@@ -132,8 +184,32 @@ def apply_profile(profile_dir, share_system_config=False):
 
     active_dir = get_active_codex_dir()
     active_dir.mkdir(parents=True, exist_ok=True)
+    require_file_auth_store(get_active_config_path())
     backup_active_files(active_dir)
     shutil.copy2(source_auth_path, get_active_auth_path())
+
+
+def get_auth_credentials_store(config_path):
+    """读取认证缓存位置；未配置时保持现有 auth.json 行为。"""
+    config_path = Path(config_path)
+    if not config_path.exists():
+        return "file"
+    try:
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"config.toml 语法错误：{exc}") from exc
+    value = str(config.get("cli_auth_credentials_store") or "file").strip().lower()
+    return value if value in ("file", "keyring", "auto") else "file"
+
+
+def require_file_auth_store(config_path):
+    """Forge 通过 auth.json 切换账号，拒绝可能忽略该文件的凭据库模式。"""
+    store = get_auth_credentials_store(config_path)
+    if store != "file":
+        raise RuntimeError(
+            f"当前认证存储为 {store}，账号切换需要在 config.toml 中设置 "
+            'cli_auth_credentials_store = "file"'
+        )
 
 
 def backup_active_files(active_dir):

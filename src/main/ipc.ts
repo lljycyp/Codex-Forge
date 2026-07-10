@@ -3,7 +3,9 @@ import { invokeBackend } from "./python/launcherBackend";
 
 export function registerIpcHandlers(): void {
   ipcMain.handle("launcher:invoke", async (_event, command: string, payload: unknown) => {
-    return invokeBackend(command, payload);
+    return invokeBackend(command, payload, (progress) => {
+      _event.sender.send("launcher:backend-progress", progress);
+    });
   });
   ipcMain.handle("launcher:select-directory", async (event, defaultPath?: string) => {
     const window = BrowserWindow.fromWebContents(event.sender);

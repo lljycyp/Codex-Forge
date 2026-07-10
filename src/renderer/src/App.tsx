@@ -30,7 +30,8 @@ const emptyState: AppState = {
   profileRoot: "",
   profileRootExists: false,
   profileCount: 0,
-  runningCount: 0
+  runningCount: 0,
+  authCredentialStore: "file"
 };
 
 const refreshDelayCommands = new Set(["launch_profile", "stop_profile"]);
@@ -102,6 +103,21 @@ export default function App() {
 
   useEffect(() => {
     setTaskText(t("就绪"));
+  }, [t]);
+
+  useEffect(() => {
+    if (!window.launcherApi.onBackendProgress) {
+      return undefined;
+    }
+    return window.launcherApi.onBackendProgress((progress) => {
+      if (progress.operation !== "portable-client-copy") {
+        return;
+      }
+      const sizeText = progress.totalBytes
+        ? ` · ${formatBytes(progress.copiedBytes ?? 0)} / ${formatBytes(progress.totalBytes)}`
+        : "";
+      setTaskText(`${t("正在复制 ChatGPT 客户端")} ${progress.percent}%${sizeText}`);
+    });
   }, [t]);
 
   const loadShellState = useCallback(async () => {

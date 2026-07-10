@@ -216,7 +216,7 @@ async function refreshTrayMenu(): Promise<void> {
         },
       },
       {
-        label: "停止所有 Codex",
+        label: "停止所有 ChatGPT 客户端",
         click: async () => {
           await invokeBackend("stop_profile", {});
           await refreshTrayMenu();

@@ -1,7 +1,10 @@
 import json
+import hashlib
+import hmac
 import os
 import shutil
 import subprocess
+import sys
 import time
 import zipfile
 from pathlib import Path
@@ -10,12 +13,15 @@ from core.codex_source import (
     find_running_codex_path,
     find_windowsapps_codex_path,
     prepare_portable_codex_path,
+    request_process_close,
+    read_source_signature,
     read_running_codex_commands,
     read_running_codex_processes,
+    write_source_signature,
 )
 from core.config_store import load_config, save_config
 from core.constants import DB_PATH, DEFAULT_PROFILE_ROOT, PORTABLE_APP_DIR_NAME
-from core.auth_service import auth_tokens, extract_auth
+from core.auth_service import auth_kind, auth_tokens, extract_auth
 from core.logger import get_logger
 from core.oauth_service import login_with_browser
 from core.path_utils import check_directory_writable, format_health_status, is_reparse_point, normalize_path_for_match, remove_readonly_path, sanitize_profile_name
@@ -24,6 +30,7 @@ from core.profile_service import (
     get_active_auth_path,
     get_active_codex_dir,
     get_active_config_path,
+    get_auth_credentials_store,
     get_profile_status,
     import_auth_json_profile,
     import_active_profile,
@@ -130,6 +137,7 @@ def get_app_state(_payload=None):
         "profileRootExists": profile_root.exists(),
         "profileCount": len(profiles),
         "runningCount": running_count,
+        "authCredentialStore": get_auth_credentials_store(get_active_config_path()),
     }
 
 
@@ -188,8 +196,8 @@ def create_auth_file_profile(payload):
         auth_json = json.loads(auth_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError("auth.json 内容不是有效的 JSON") from exc
-    if not isinstance(auth_json, dict) or not auth_tokens(auth_json):
-        raise ValueError("auth.json 内容不是有效的 Codex 登录信息")
+    if not auth_kind(auth_json):
+        raise ValueError("auth.json 内容不是有效的 ChatGPT 或 API Key 登录信息")
     profile_dir = _get_profile_dir(config, name)
     import_auth_json_profile(profile_dir, auth_json)
     profiles = config.setdefault("profiles", [])
@@ -274,12 +282,53 @@ def export_profile_backup(payload):
 
     backup_path = target_dir / f"{sanitize_profile_name(name)}-backup-{time.strftime('%Y%m%d-%H%M%S')}.zip"
     with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("codex-forge-profile.json", json.dumps({"name": name}, ensure_ascii=False, indent=2))
-        for file_path in profile_dir.rglob("*"):
-            if file_path.is_dir() or is_reparse_point(file_path):
-                continue
+        archive.writestr(
+            "codex-forge-profile.json",
+            json.dumps(
+                {"name": name, "formatVersion": 2, "containsSensitiveAuth": True},
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        included_files = list(_iter_profile_backup_files(profile_dir))
+        for file_path in included_files:
             archive.write(file_path, file_path.relative_to(profile_dir).as_posix())
-    return {"name": name, "backupPath": str(backup_path)}
+    return {
+        "name": name,
+        "backupPath": str(backup_path),
+        "includedFileCount": len(included_files),
+        "containsSensitiveAuth": True,
+    }
+
+
+def _iter_profile_backup_files(profile_dir):
+    """只备份可恢复账号所需文件，排除会话、日志、缓存和客户端副本。"""
+    profile_dir = Path(profile_dir)
+    direct_files = (
+        profile_dir / "auth.json",
+        profile_dir / "CodexHome" / "auth.json",
+        profile_dir / "CodexHome" / "config.toml",
+        profile_dir / "CodexHome" / ".env",
+    )
+    seen = set()
+    for file_path in direct_files:
+        if file_path.is_file() and not is_reparse_point(file_path):
+            seen.add(file_path.resolve())
+            yield file_path
+
+    template_dir = profile_dir / "instruction_templates"
+    if template_dir.is_dir() and not is_reparse_point(template_dir):
+        for file_path in template_dir.rglob("*.md"):
+            if file_path.is_file() and not is_reparse_point(file_path) and file_path.resolve() not in seen:
+                seen.add(file_path.resolve())
+                yield file_path
+
+    codex_home = profile_dir / "CodexHome"
+    if codex_home.is_dir() and not is_reparse_point(codex_home):
+        for file_path in codex_home.glob("*.md"):
+            if file_path.is_file() and not is_reparse_point(file_path) and file_path.resolve() not in seen:
+                seen.add(file_path.resolve())
+                yield file_path
 
 
 def import_profile_backup(payload):
@@ -325,9 +374,8 @@ def launch_profile(payload):
     logger.info("账号启动开始 名称=%s 是否先关闭运行中实例=%s", name, stop_running_first)
     if _running_codex_count() > 0:
         if not stop_running_first:
-            raise RuntimeError("检测到 Codex 正在运行，请先关闭后再切换账号")
+            raise RuntimeError("检测到 ChatGPT 正在运行，请先关闭后再切换账号")
         _stop_running_codex_processes()
-        time.sleep(0.5)
 
     profile_dir = _get_profile_dir(config, name)
     apply_profile(
@@ -366,7 +414,19 @@ def _launch_profile_multi(config, name):
         directory.mkdir(parents=True, exist_ok=True)
 
     prepare_profile_codex_home(profile_dir)
-    portable_codex_path = prepare_portable_codex_path(codex_path, profile_dir)
+    portable_codex_path = prepare_portable_codex_path(
+        codex_path,
+        profile_dir,
+        progress_callback=lambda percent, copied, total: _emit_backend_progress(
+            {
+                "operation": "portable-client-copy",
+                "profileName": name,
+                "percent": percent,
+                "copiedBytes": copied,
+                "totalBytes": total,
+            }
+        ),
+    )
 
     env = os.environ.copy()
     env["APPDATA"] = str(appdata_dir)
@@ -399,34 +459,43 @@ def _stop_profile_multi(config, payload):
     if name not in config.get("profiles", []):
         raise ValueError("账号不存在")
     match_targets = _get_profile_running_match_targets(config, name)
-    matched_pids = [
-        process["pid"]
+    matched_processes = [
+        process
         for process in read_running_codex_processes()
         if any(target in normalize_path_for_match(process["command_line"]) for target in match_targets)
     ]
-    logger.info("多开账号关闭开始 名称=%s 匹配进程=%s", name, len(matched_pids))
-    for pid in matched_pids:
-        subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
+    if _get_legacy_system_running_profile(config) == name:
+        matched_processes.extend(_get_unisolated_codex_processes(config))
+    logger.info("多开账号关闭开始 名称=%s 匹配进程=%s", name, len(matched_processes))
+    stopped = _stop_client_processes(matched_processes)
     sync_codex_home_to_profile(_get_profile_dir(config, name))
-    logger.info("多开账号关闭成功 名称=%s 已关闭=%s", name, len(matched_pids))
-    return {"name": name, "stopped": len(matched_pids)}
+    logger.info("多开账号关闭成功 名称=%s 已关闭=%s", name, stopped)
+    return {"name": name, "stopped": stopped}
 
 
 def _stop_running_codex_processes():
-    """关闭当前运行的 Codex 进程，并返回实际发起关闭的数量。"""
+    """关闭当前运行的 ChatGPT/Codex 客户端主进程。"""
     processes = read_running_codex_processes()
-    stopped = 0
     logger.info("关闭 Codex 进程开始 数量=%s", len(processes))
-    for process in processes:
-        pid = process.get("pid")
-        if not pid:
-            continue
+    stopped = _stop_client_processes(processes)
+    logger.info("关闭 Codex 进程成功 已关闭=%s", stopped)
+    return {"stopped": stopped}
+
+
+def _stop_client_processes(processes):
+    """先请求客户端正常退出，超时后再强制结束。"""
+    pids = {process.get("pid") for process in processes if process.get("pid")}
+    for pid in pids:
+        request_process_close(pid)
+
+    deadline = time.monotonic() + 5
+    remaining = pids
+    while remaining and time.monotonic() < deadline:
+        time.sleep(0.25)
+        running_pids = {process.get("pid") for process in read_running_codex_processes()}
+        remaining &= running_pids
+
+    for pid in remaining:
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
@@ -434,9 +503,16 @@ def _stop_running_codex_processes():
             timeout=10,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        stopped += 1
-    logger.info("关闭 Codex 进程成功 已关闭=%s", stopped)
-    return {"stopped": stopped}
+    return len(pids)
+
+
+def _emit_backend_progress(payload):
+    """通过桥接进程 stderr 向 Electron 壳发送结构化进度。"""
+    print(
+        f"CODEX_FORGE_PROGRESS:{json.dumps(payload, ensure_ascii=False)}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def refresh_codex_source(_payload=None):
@@ -636,6 +712,17 @@ def _sync_active_auth_to_profile(config, profile_name):
 
 def _is_same_auth_account(left_auth, right_auth):
     """确认两个 auth.json 属于同一登录用户，避免同一 Team 账号下串号。"""
+    left_kind = auth_kind(left_auth)
+    right_kind = auth_kind(right_auth)
+    if left_kind != right_kind or not left_kind:
+        return False
+    if left_kind == "api":
+        left_key = str(left_auth.get("OPENAI_API_KEY") or "").strip()
+        right_key = str(right_auth.get("OPENAI_API_KEY") or "").strip()
+        left_digest = hashlib.sha256(left_key.encode("utf-8")).digest()
+        right_digest = hashlib.sha256(right_key.encode("utf-8")).digest()
+        return bool(left_key and right_key and hmac.compare_digest(left_digest, right_digest))
+
     left = extract_auth(left_auth) or {}
     right = extract_auth(right_auth) or {}
     left_claims_value = left.get("claims")
@@ -754,6 +841,7 @@ def _read_profile_auth_meta(auth_path):
     """提取账号认证元数据，令牌只返回状态和过期时间。"""
     result = {
         "exists": auth_path.exists(),
+        "authMode": "",
         "email": "",
         "accountId": "",
         "planType": "",
@@ -765,6 +853,10 @@ def _read_profile_auth_meta(auth_path):
         return result
     try:
         auth_json = json.loads(auth_path.read_text(encoding="utf-8"))
+        mode = auth_kind(auth_json)
+        result["authMode"] = mode
+        if mode == "api":
+            return result
         auth = extract_auth(auth_json)
         tokens = auth_tokens(auth_json) or {}
         result.update(
@@ -822,7 +914,16 @@ def _build_profile_summary(config, profile_name, running_commands):
     active_profile = config.get("active_profile", "")
     running = _is_profile_running(config, profile_name, running_commands)
     target_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
-    portable_codex_size = _get_directory_size(target_app_dir)
+    portable_client_path = target_app_dir / "ChatGPT.exe"
+    if not portable_client_path.exists():
+        portable_client_path = target_app_dir / "Codex.exe"
+    source_signature = read_source_signature(target_app_dir)
+    portable_codex_size = source_signature.get("directory_size")
+    if not isinstance(portable_codex_size, int):
+        portable_codex_size = _get_directory_size(target_app_dir)
+        if source_signature:
+            source_signature["directory_size"] = portable_codex_size
+            write_source_signature(target_app_dir, source_signature)
     return {
         "name": profile_name,
         "running": running,
@@ -835,8 +936,8 @@ def _build_profile_summary(config, profile_name, running_commands):
         "configExists": status["configExists"],
         "codexHome": str(profile_dir / "CodexHome"),
         "codexHomeExists": (profile_dir / "CodexHome").exists(),
-        "portableCodexPath": str(target_app_dir / "Codex.exe"),
-        "portableCodexExists": (target_app_dir / "Codex.exe").exists(),
+        "portableCodexPath": str(portable_client_path),
+        "portableCodexExists": portable_client_path.exists(),
         "portableCodexSizeBytes": portable_codex_size,
         "portableCodexSizeText": _format_bytes(portable_codex_size),
         "errors": status["errors"],
@@ -945,8 +1046,12 @@ def _is_profile_running(config, profile_name, running_commands=None):
     """判断指定账号是否为当前正在运行的账号。"""
     if _get_launch_mode(config) == "multi":
         running_commands = running_commands if running_commands is not None else read_running_codex_commands()
-        return any(target in running_commands for target in _get_profile_running_match_targets(config, profile_name))
-    return profile_name == config.get("active_profile", "") and _running_codex_count() > 0
+        if any(target in running_commands for target in _get_profile_running_match_targets(config, profile_name)):
+            return True
+        return _get_legacy_system_running_profile(config) == profile_name
+    if running_commands is None:
+        running_commands = read_running_codex_commands()
+    return profile_name == config.get("active_profile", "") and bool(running_commands)
 
 
 def _running_count_for_mode(config):
@@ -964,11 +1069,54 @@ def _running_count_for_mode(config):
 def _running_multi_profile_names(config):
     """列出当前仍在多开隔离环境中运行的账号。"""
     running_commands = read_running_codex_commands()
-    return [
+    running_profiles = [
         profile_name
         for profile_name in config.get("profiles", [])
         if any(target in running_commands for target in _get_profile_running_match_targets(config, profile_name))
     ]
+    legacy_profile = _get_legacy_system_running_profile(config)
+    if legacy_profile and legacy_profile not in running_profiles:
+        running_profiles.append(legacy_profile)
+    return running_profiles
+
+
+def _get_unisolated_codex_processes(config):
+    """返回不属于任何账号隔离目录的系统客户端主进程。"""
+    profile_targets = [
+        target
+        for profile_name in config.get("profiles", [])
+        for target in _get_profile_running_match_targets(config, profile_name)
+    ]
+    return [
+        process
+        for process in read_running_codex_processes()
+        if not any(target in normalize_path_for_match(process["command_line"]) for target in profile_targets)
+    ]
+
+
+def _get_legacy_system_running_profile(config):
+    """识别从账号切换模式直接带入多开模式的系统客户端。"""
+    if _get_launch_mode(config) != "multi" or not _get_unisolated_codex_processes(config):
+        return ""
+    active_auth_path = get_active_auth_path()
+    if not active_auth_path.exists():
+        return ""
+    try:
+        active_auth = json.loads(active_auth_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    matching_profiles = []
+    for profile_name in config.get("profiles", []):
+        profile_auth_path = resolve_profile_auth_path(_get_profile_dir(config, profile_name))
+        if not profile_auth_path.exists():
+            continue
+        try:
+            profile_auth = json.loads(profile_auth_path.read_text(encoding="utf-8"))
+            if _is_same_auth_account(active_auth, profile_auth):
+                matching_profiles.append(profile_name)
+        except Exception:
+            continue
+    return matching_profiles[0] if len(matching_profiles) == 1 else ""
 
 
 def _get_user_data_dir(config, profile_name):
@@ -1000,10 +1148,13 @@ def _is_codex_command_available():
 
 
 def _resolve_codex_launch_spec(config):
-    """参考 Codex Tools：优先桌面程序，其次商店应用标识，最后命令行。"""
+    """优先使用桌面程序，其次使用微软商店应用标识。"""
     configured_path = str(config.get("codex_path") or "").strip()
     configured_app_path = _resolve_configured_codex_app_path(configured_path)
     if configured_app_path:
+        if str(configured_app_path) != configured_path:
+            config["codex_path"] = str(configured_app_path)
+            save_config(config)
         logger.info("Codex 启动来源已识别 来源=已配置桌面程序 路径=%s", configured_app_path)
         return _build_app_launch_spec(configured_app_path)
 
@@ -1023,17 +1174,7 @@ def _resolve_codex_launch_spec(config):
             "display": store_app_id,
         }
 
-    cli_path = _find_codex_cli_path(configured_path)
-    if cli_path:
-        logger.info("Codex 启动来源已识别 来源=命令行 路径=%s", cli_path)
-        return {
-            "kind": "cli",
-            "command": [str(cli_path), "app"],
-            "display": str(cli_path),
-            "path_for_env": cli_path,
-        }
-
-    raise FileNotFoundError("未找到 Codex 程序，请在设置中重新识别或确认 Codex 已安装")
+    raise FileNotFoundError("未找到 ChatGPT 桌面客户端，请在设置中重新识别或确认已安装")
 
 
 def _resolve_codex_app_source_path(config):
@@ -1041,6 +1182,9 @@ def _resolve_codex_app_source_path(config):
     configured_path = str(config.get("codex_path") or "").strip()
     configured_app_path = _resolve_configured_codex_app_path(configured_path)
     if configured_app_path:
+        if str(configured_app_path) != configured_path:
+            config["codex_path"] = str(configured_app_path)
+            save_config(config)
         return configured_app_path
 
     detected_path = find_windowsapps_codex_path() or find_running_codex_path()
@@ -1049,20 +1193,23 @@ def _resolve_codex_app_source_path(config):
         save_config(config)
         return Path(detected_path)
 
-    raise FileNotFoundError("多开隔离模式需要可识别的 Codex 桌面程序路径，请先刷新 Codex 来源或安装桌面版 Codex")
+    raise FileNotFoundError("多开隔离模式需要可识别的 ChatGPT 桌面客户端，请先刷新来源或安装客户端")
 
 
 def _resolve_configured_codex_app_path(configured_path):
-    """把用户保存的文件或目录解析为可启动的 Codex 桌面程序。"""
+    """把用户保存的文件或目录解析为客户端主程序。"""
     if not configured_path:
         return None
     path = Path(configured_path)
-    if path.is_file() and path.name.lower() in ("codex.exe", "codex desktop.exe"):
-        return path
+    if path.is_file() and path.name.lower() in ("chatgpt.exe", "codex.exe", "codex desktop.exe"):
+        for chatgpt_path in (path.with_name("ChatGPT.exe"), path.parent.parent / "ChatGPT.exe"):
+            if chatgpt_path.exists():
+                return chatgpt_path
+        return None if path.parent.name.lower() == "resources" else path
     if not path.is_dir():
         return None
     for candidate_dir in (path, path / "current", path / "app", path / "Application"):
-        for file_name in ("Codex.exe", "Codex Desktop.exe"):
+        for file_name in ("ChatGPT.exe", "Codex.exe", "Codex Desktop.exe"):
             candidate = candidate_dir / file_name
             if candidate.exists():
                 return candidate
@@ -1089,9 +1236,12 @@ def _build_app_launch_spec(codex_path):
 
 
 def _is_windows_store_codex_path(path):
-    """判断路径是否指向微软商店版 Codex 安装目录。"""
+    """判断路径是否指向微软商店版客户端安装目录。"""
     normalized = normalize_path_for_match(path)
-    return "\\windowsapps\\openai.codex_" in normalized or "/windowsapps/openai.codex_" in normalized
+    return any(
+        marker in normalized
+        for marker in ("\\windowsapps\\openai.codex_", "\\windowsapps\\openai.chatgpt_")
+    )
 
 
 def _find_windows_store_codex_app_id():
@@ -1100,15 +1250,17 @@ def _find_windows_store_codex_app_id():
         return ""
     script = r"""
 $ErrorActionPreference = 'SilentlyContinue'
-$pattern = '^OpenAI\.Codex_[^!]+![^!]+$'
+$pattern = '^OpenAI\.(Codex|ChatGPT)_[^!]+![^!]+$'
 $matches = @()
 $matches += Get-StartApps | Where-Object { $_.AppID -match $pattern } | Select-Object -ExpandProperty AppID
-$pkg = Get-AppxPackage -Name 'OpenAI.Codex' | Select-Object -First 1
-if ($null -ne $pkg) {
-  $manifest = $pkg | Get-AppxPackageManifest
-  foreach ($app in @($manifest.Package.Applications.Application)) {
-    if ($null -ne $app -and $app.Id) {
-      $matches += ('{0}!{1}' -f $pkg.PackageFamilyName, $app.Id)
+foreach ($packageName in @('OpenAI.Codex', 'OpenAI.ChatGPT')) {
+  $pkg = Get-AppxPackage -Name $packageName | Select-Object -First 1
+  if ($null -ne $pkg) {
+    $manifest = $pkg | Get-AppxPackageManifest
+    foreach ($app in @($manifest.Package.Applications.Application)) {
+      if ($null -ne $app -and $app.Id) {
+        $matches += ('{0}!{1}' -f $pkg.PackageFamilyName, $app.Id)
+      }
     }
   }
 }
@@ -1129,73 +1281,24 @@ $matches | Where-Object { $_ -match $pattern } | Sort-Object @{Expression = { $_
     return next((line.strip() for line in result.stdout.splitlines() if line.strip()), "")
 
 
-def _find_codex_cli_path(configured_path=""):
-    """查找 codex 命令行入口，补充桌面进程常见缺失的路径。"""
-    candidates = []
-    configured = Path(configured_path) if configured_path else None
-    if configured and configured.is_file() and configured.name.lower() in ("codex", "codex.exe", "codex.cmd"):
-        candidates.append(configured)
-    if configured and configured.is_dir():
-        for candidate_dir in (configured, configured / "bin", configured / "resources", configured / "resources" / "bin"):
-            _append_codex_cli_candidates(candidates, candidate_dir)
-
-    found = shutil.which("codex")
-    if found:
-        candidates.append(Path(found))
-
-    for env_name in ("LOCALAPPDATA", "USERPROFILE"):
-        base = os.environ.get(env_name)
-        if not base:
-            continue
-        base_path = Path(base)
-        search_dirs = [
-            base_path / "Microsoft" / "WindowsApps",
-            base_path / "AppData" / "Local" / "Microsoft" / "WindowsApps",
-            base_path / "AppData" / "Local" / "Microsoft" / "WinGet" / "Links",
-        ]
-        for search_dir in search_dirs:
-            _append_codex_cli_candidates(candidates, search_dir)
-
-    seen = set()
-    for candidate in candidates:
-        normalized = normalize_path_for_match(candidate)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        if candidate.exists() and candidate.is_file():
-            return candidate
-    return None
-
-
-def _append_codex_cli_candidates(candidates, directory):
-    """追加目录下可能存在的 codex 命令行文件。"""
-    for file_name in ("codex.exe", "codex.cmd", "codex"):
-        candidates.append(Path(directory) / file_name)
-
-
 def _launch_default_codex():
     """启动默认安装的 Codex 桌面端。"""
     config = load_config()
     launch_spec = _resolve_codex_launch_spec(config)
     command = launch_spec["command"]
     logger.info("Codex 启动开始 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
-    env = os.environ.copy()
-    path_for_env = launch_spec.get("path_for_env")
-    if path_for_env:
-        parent = str(Path(path_for_env).parent)
-        env["PATH"] = parent + os.pathsep + env.get("PATH", "")
     try:
         subprocess.Popen(
             command,
             cwd=launch_spec.get("cwd"),
-            env=env,
+            env=os.environ.copy(),
             close_fds=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         logger.info("Codex 启动成功 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
     except FileNotFoundError as exc:
         logger.exception("Codex 启动失败 显示=%s 错误=%s", launch_spec["display"], exc)
-        raise FileNotFoundError("未找到 Codex 程序，请在设置中重新识别或确认 Codex 已安装") from exc
+        raise FileNotFoundError("未找到 ChatGPT 桌面客户端，请在设置中重新识别或确认已安装") from exc
 
 
 def _get_directory_size(directory):

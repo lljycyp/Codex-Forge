@@ -27,7 +27,7 @@ export function HomePage({ appState, profiles, onOpenProfiles }: HomePageProps) 
     <div className="grid gap-4">
       <div className="grid grid-cols-4 gap-3 max-[1120px]:grid-cols-2 max-[720px]:grid-cols-1">
         <Metric title={t("账号总数")} value={profiles.length || appState.profileCount} note={t("已保存账号")} />
-        <Metric title={t("运行中")} value={appState.runningCount} note={t("当前 Codex 实例")} statusText={appState.runningCount > 0 ? t("活跃") : t("空闲")} />
+        <Metric title={t("运行中")} value={appState.runningCount} note={t("当前 ChatGPT 实例")} statusText={appState.runningCount > 0 ? t("活跃") : t("空闲")} />
         <Metric title={t("健康账号")} value={healthyCount} note={t("资料目录和认证文件正常")} statusText={t("正常")} />
         <Metric
           title={t("异常账号")}
@@ -45,7 +45,12 @@ export function HomePage({ appState, profiles, onOpenProfiles }: HomePageProps) 
             <InfoRow label={t("启动模式")} value={formatLaunchMode(appState.launchMode, t)} />
             <InfoRow label={t("配置模式")} value={appState.launchMode === "multi" ? t("账号 CodexHome 配置") : t("系统配置")} />
             <InfoRow label={t("当前账号")} value={appState.activeProfile || t("未选择")} />
-            <InfoRow label={t("Codex 命令")} value={appState.codexCommandAvailable ? t("可用") : t("不可用")} tone={appState.codexCommandAvailable ? "green" : "amber"} />
+            <InfoRow
+              label={t("认证存储")}
+              value={appState.authCredentialStore === "file" ? "auth.json" : appState.authCredentialStore}
+              tone={appState.authCredentialStore === "file" ? "green" : "amber"}
+            />
+            <InfoRow label={t("ChatGPT 客户端")} value={appState.codexCommandAvailable ? t("可用") : t("不可用")} tone={appState.codexCommandAvailable ? "green" : "amber"} />
           </div>
         </section>
 

@@ -123,7 +123,7 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
     }
     Modal.confirm({
       title: t("更改账号资料位置"),
-      content: t("将迁移整个账号资料根目录。迁移期间请先关闭正在运行的 Codex。"),
+      content: t("将迁移整个账号资料根目录。迁移期间请先关闭正在运行的 ChatGPT。"),
       okText: t("开始迁移"),
       cancelText: t("取消"),
       onOk: async () => {
@@ -159,8 +159,8 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
       Modal.confirm({
         title: t("切换到多开隔离模式"),
         content: appState.runningCount > 0
-          ? (language === "en-US" ? "Codex is running. Close it first if possible. Isolated multi-instance mode copies a full CodexPortableApp for each account, so disk usage is roughly Codex app size times account count." : "检测到 Codex 正在运行。建议先关闭当前 Codex；多开隔离模式会为每个账号复制一整份 CodexPortableApp，磁盘占用约等于 Codex 程序大小 × 多开账号数。")
-          : (language === "en-US" ? "Isolated multi-instance mode copies a full CodexPortableApp for each account, so disk usage is roughly Codex app size times account count." : "多开隔离模式会为每个账号复制一整份 CodexPortableApp，磁盘占用约等于 Codex 程序大小 × 多开账号数。"),
+          ? (language === "en-US" ? "ChatGPT is running. Close it first if possible. Isolated multi-instance mode copies the full ChatGPT client for each account, so disk usage is roughly the client size times account count." : "检测到 ChatGPT 正在运行。建议先关闭当前 ChatGPT；多开隔离模式会为每个账号复制一整份 ChatGPT 客户端，磁盘占用约等于客户端大小 × 多开账号数。")
+          : (language === "en-US" ? "Isolated multi-instance mode copies the full ChatGPT client for each account, so disk usage is roughly the client size times account count." : "多开隔离模式会为每个账号复制一整份 ChatGPT 客户端，磁盘占用约等于客户端大小 × 多开账号数。"),
         okText: t("切换"),
         cancelText: t("取消"),
         onOk: () => saveLaunchMode(mode),
@@ -255,14 +255,14 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
               <Radio.Button value="multi">{t("多开隔离模式")}</Radio.Button>
             </Radio.Group>
             <div className="mt-3 text-sm leading-6 text-slate-500">
-              {t("账号切换模式共用系统 .codex；多开隔离模式为每个账号使用独立环境，可同时运行多个 Codex。")}
+              {t("账号切换模式共用系统 .codex；多开隔离模式为每个账号使用独立环境，可同时运行多个 ChatGPT 客户端。")}
             </div>
             {appState.launchMode === "multi" ? (
               <Alert
                 className="mt-3"
                 type="warning"
                 showIcon
-                message={t("多开模式会复制完整 CodexPortableApp")}
+                message={t("多开模式会复制完整 ChatGPT 客户端")}
                 description={t("如果账号较多，磁盘占用会随账号数量增长。运行中的多开实例需要先关闭，才能切回账号切换模式。")}
               />
             ) : null}

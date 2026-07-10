@@ -17,6 +17,7 @@ export type AppState = {
   profileRootExists: boolean;
   profileCount: number;
   runningCount: number;
+  authCredentialStore: "file" | "keyring" | "auto";
 };
 
 export type ViewKey = "home" | "profiles" | "instructions" | "toml" | "settings";
@@ -69,6 +70,11 @@ export type ProfileUsage = {
   planType: string | null;
   fiveHour: ProfileUsageWindow | null;
   oneWeek: ProfileUsageWindow | null;
+  resetCredits?: number | null;
+  hasCredits?: boolean;
+  creditsUnlimited?: boolean;
+  spendControlReached?: boolean;
+  rateLimitReachedType?: string | null;
   error: string | null;
 };
 
@@ -108,6 +114,14 @@ export type UpdateEvent =
   | { status: "not-available"; currentVersion: string; version: string; manual: boolean }
   | { status: "error"; message: string };
 
+export type BackendProgress = {
+  operation: string;
+  profileName?: string;
+  percent: number;
+  copiedBytes?: number;
+  totalBytes?: number;
+};
+
 export type LauncherApi = {
   invoke: <T>(command: string, payload?: unknown) => Promise<BackendResponse<T>>;
   selectDirectory: (defaultPath?: string) => Promise<string>;
@@ -118,6 +132,7 @@ export type LauncherApi = {
   openProjectGitHub?: () => Promise<void>;
   openProjectGitee?: () => Promise<void>;
   setAutoStartEnabled?: (enabled: boolean) => Promise<boolean>;
+  onBackendProgress?: (callback: (progress: BackendProgress) => void) => () => void;
   onUpdateEvent?: (callback: (event: UpdateEvent) => void) => () => void;
   checkForUpdates?: () => Promise<void>;
   downloadUpdate?: () => Promise<void>;

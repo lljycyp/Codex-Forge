@@ -18,6 +18,8 @@ def extract_auth(auth_json):
     """从 Codex auth.json 提取额度接口和令牌刷新需要的身份信息。"""
     tokens = auth_tokens(auth_json)
     if not tokens:
+        if auth_kind(auth_json) == "api":
+            raise ValueError("API Key 账号不提供 ChatGPT 套餐额度")
         mode = str(auth_json.get("auth_mode") or "").lower() if isinstance(auth_json, dict) else ""
         if mode and mode not in ("chatgpt", "chatgpt_auth_tokens"):
             raise ValueError("当前账号不是 ChatGPT 登录模式，无法读取额度")
@@ -61,6 +63,15 @@ def auth_tokens(auth_json):
     if "access_token" in auth_json and "id_token" in auth_json:
         return auth_json
     return None
+
+
+def auth_kind(auth_json):
+    """识别 Forge 支持的 ChatGPT 或 API Key 认证。"""
+    if auth_tokens(auth_json):
+        return "chatgpt"
+    if isinstance(auth_json, dict) and clean_string(auth_json.get("OPENAI_API_KEY")):
+        return "api"
+    return ""
 
 
 def ensure_fresh_auth(auth_json, force=False):

@@ -46,6 +46,7 @@ type ProfilesProps = {
 type ProfileDetail = ProfileSummary & {
   auth: {
     exists: boolean;
+    authMode: "chatgpt" | "api" | "";
     email: string;
     accountId: string;
     planType: string;
@@ -130,7 +131,7 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
         profile.running ? "stop_profile" : "launch_profile",
         { name: profile.name, stopRunningFirst },
         profile.running
-          ? t("已关闭 Codex")
+          ? t("已关闭 ChatGPT")
           : hasRunningCodex
             ? t("已切换")
             : t("已启动"),
@@ -159,8 +160,8 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
     Modal.confirm({
       title: t("确认切换账号"),
       content: language === "en-US"
-        ? `Codex is running. Close it and launch "${profile.name}"?`
-        : `检测到 Codex 正在运行。确认关闭当前 Codex，并切换启动「${profile.name}」？`,
+        ? `ChatGPT is running. Close it and launch "${profile.name}"?`
+        : `检测到 ChatGPT 正在运行。确认关闭当前 ChatGPT，并切换启动「${profile.name}」？`,
       okText: t("关闭并启动"),
       cancelText: t("取消"),
       onOk: () => executeProfileToggle(profile, true),
@@ -237,16 +238,24 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
   };
 
   const exportBackup = async (profile: ProfileSummary) => {
-    const targetDir = await window.launcherApi.selectDirectory(profile.profileDir || undefined);
-    if (!targetDir) {
-      return;
-    }
-    await runCommand(
-      "export_profile_backup",
-      { name: profile.name, targetDir },
-      t("账号备份已导出"),
-      { blocking: false, refreshAfter: false },
-    );
+    Modal.confirm({
+      title: t("导出敏感账号备份"),
+      content: t("备份包含 auth.json 和账号配置，请像密码一样妥善保管。会话、日志、缓存和客户端程序不会导出。"),
+      okText: t("继续导出"),
+      cancelText: t("取消"),
+      onOk: async () => {
+        const targetDir = await window.launcherApi.selectDirectory(profile.profileDir || undefined);
+        if (!targetDir) {
+          return;
+        }
+        await runCommand(
+          "export_profile_backup",
+          { name: profile.name, targetDir },
+          t("账号备份已导出"),
+          { blocking: false, refreshAfter: false },
+        );
+      },
+    });
   };
 
   const refreshDetailUsage = async (profile: ProfileDetail) => {
@@ -575,15 +584,15 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
           </Form.Item>
           {createMode === "oauth" ? (
             <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
-              {language === "en-US" ? "Open a browser to authorize OpenAI. The result is saved only to the new account profile and will not overwrite the default Codex account." : "将打开浏览器完成 OpenAI（开放式人工智能公司）授权，授权结果只保存到新账号资料目录，不会覆盖当前默认 Codex 账号。"}
+              {language === "en-US" ? "Open the official ChatGPT browser sign-in. The result is saved only to the new account profile and will not overwrite the current ChatGPT account." : "将打开 ChatGPT 官方浏览器登录，授权结果只保存到新账号资料目录，不会覆盖当前 ChatGPT 账号。"}
             </Typography.Paragraph>
           ) : createMode === "file" ? (
             <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
-              {language === "en-US" ? "Choose a local " : "将从本地选择 "}<Typography.Text code>auth.json</Typography.Text>{language === "en-US" ? ". It is saved only to the new account profile and will not overwrite the default Codex account." : "，只保存到新账号资料目录，不会覆盖当前默认 Codex 账号。"}
+              {language === "en-US" ? "Choose a local " : "将从本地选择 "}<Typography.Text code>auth.json</Typography.Text>{language === "en-US" ? ". It is saved only to the new account profile and will not overwrite the current ChatGPT account." : "，只保存到新账号资料目录，不会覆盖当前 ChatGPT 账号。"}
             </Typography.Paragraph>
           ) : (
             <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
-              {language === "en-US" ? "Save the default Codex " : "将保存当前默认 Codex 的 "}<Typography.Text code>auth.json</Typography.Text>{language === "en-US" ? ". The system " : "；系统 "}
+              {language === "en-US" ? "Save the current ChatGPT " : "将保存当前 ChatGPT 的 "}<Typography.Text code>auth.json</Typography.Text>{language === "en-US" ? ". The system " : "；系统 "}
               <Typography.Text code>config.toml</Typography.Text>{language === "en-US" ? " will be used as the initial isolated-mode config." : " 会作为多开隔离模式的初始账号配置。"}
             </Typography.Paragraph>
           )}
@@ -725,7 +734,9 @@ function ProfileDetailPanel({
 }) {
   const authOk = detail.auth.exists && !detail.auth.error;
   const healthTone = authOk && detail.profileDirExists ? "green" : "amber";
-  const planText = formatPlanType(detail.auth.planType || detail.usage?.planType, t);
+  const planText = detail.auth.authMode === "api"
+    ? "API Key"
+    : formatPlanType(detail.auth.planType || detail.usage?.planType, t);
   const accountId = maskSensitive(detail.auth.accountId || "-", privacyMode);
   const email = maskSensitive(detail.auth.email || "-", privacyMode);
 
@@ -760,7 +771,11 @@ function ProfileDetailPanel({
             >
               {detail.running ? t("关闭") : t("启动")}
             </Button>
-            <Button icon={<RefreshCw size={15} />} onClick={() => void onRefreshUsage(detail)}>
+            <Button
+              icon={<RefreshCw size={15} />}
+              disabled={detail.auth.authMode === "api"}
+              onClick={() => void onRefreshUsage(detail)}
+            >
               {t("刷新额度")}
             </Button>
             <Button icon={<Download size={15} />} disabled={detail.running} onClick={() => void onExportBackup(detail)}>
@@ -814,6 +829,9 @@ function ProfileDetailPanel({
                     <InfoGrid
                       rows={[
                         [t("最后刷新"), detail.usage?.fetchedAt ? formatTimestamp(detail.usage.fetchedAt, language) : "-"],
+                        [t("可用额度重置"), detail.usage?.resetCredits == null ? "-" : String(detail.usage.resetCredits)],
+                        [t("额度模式"), detail.usage?.creditsUnlimited ? t("无限额度") : detail.usage?.hasCredits ? t("有可用额度") : t("无额外额度")],
+                        [t("限制状态"), detail.usage?.rateLimitReachedType ? t("已触发") : t("未触发")],
                         [t("当前账号"), detail.active ? t("是") : t("否")],
                         [t("运行状态"), detail.running ? t("运行中") : t("就绪")],
                         [t("账号目录"), maskPath(detail.profileDir, privacyMode)],
@@ -829,6 +847,7 @@ function ProfileDetailPanel({
                   <div className="grid gap-4">
                     <InfoGrid
                       rows={[
+                        [t("认证方式"), detail.auth.authMode === "api" ? "API Key" : t("ChatGPT 登录")],
                         ["Email", email],
                         ["Account ID", accountId],
                         [t("套餐"), planText],

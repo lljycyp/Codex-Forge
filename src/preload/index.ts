@@ -8,6 +8,11 @@ contextBridge.exposeInMainWorld("launcherApi", {
   selectDirectory: (defaultPath?: string) => ipcRenderer.invoke("launcher:select-directory", defaultPath),
   selectAuthJsonFile: () => ipcRenderer.invoke("launcher:select-auth-json-file"),
   selectProfileBackupFile: () => ipcRenderer.invoke("launcher:select-profile-backup-file"),
+  onBackendProgress: (callback: (progress: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: unknown) => callback(progress);
+    ipcRenderer.on("launcher:backend-progress", listener);
+    return () => ipcRenderer.removeListener("launcher:backend-progress", listener);
+  },
   getAutoStartEnabled: () => ipcRenderer.invoke("app:get-auto-start-enabled"),
   getAppVersion: () => ipcRenderer.invoke("app:get-version"),
   openProjectGitHub: () => ipcRenderer.invoke("app:open-external", projectGitHubUrl),
