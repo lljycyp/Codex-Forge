@@ -28,6 +28,12 @@ button {
   cursor: pointer;
 }
 
+.ant-drawer,
+.ant-drawer-mask,
+.ant-modal-root {
+  -webkit-app-region: no-drag;
+}
+
 .forge-splash-logo-wrap {
   position: relative;
   display: grid;

@@ -15,6 +15,7 @@ import type { AppState, ProfileSummary, RunCommand, UpdateEvent, ViewKey } from 
 
 const { Content } = Layout;
 const usageAutoRefreshMs = 5 * 60 * 1000;
+const privacyModeStorageKey = "codexForgePrivacyMode";
 type UpdateModalEvent = Exclude<UpdateEvent, { status: "error" } | { status: "not-available" }>;
 
 const emptyState: AppState = {
@@ -88,6 +89,12 @@ export default function App() {
   const [updateEvent, setUpdateEvent] = useState<UpdateModalEvent | null>(null);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [showUpdateProgress, setShowUpdateProgress] = useState(false);
+  const [privacyMode, setPrivacyModeState] = useState(() => localStorage.getItem(privacyModeStorageKey) === "1");
+
+  const setPrivacyMode = useCallback((enabled: boolean) => {
+    localStorage.setItem(privacyModeStorageKey, enabled ? "1" : "0");
+    setPrivacyModeState(enabled);
+  }, []);
 
   useEffect(() => {
     activeViewRef.current = activeView;
@@ -341,6 +348,7 @@ export default function App() {
               profiles={profiles}
               runningCount={appState.runningCount}
               launchMode={appState.launchMode}
+              privacyMode={privacyMode}
               runCommand={runCommand}
               loading={commandingView === "profiles" || refreshingView === "profiles"}
             />
@@ -352,7 +360,12 @@ export default function App() {
             <TomlConfigPage appState={appState} profiles={profiles} />
           ) : null}
           {activeView === "settings" ? (
-            <SettingsPage appState={appState} runCommand={runCommand} />
+            <SettingsPage
+              appState={appState}
+              privacyMode={privacyMode}
+              runCommand={runCommand}
+              onPrivacyModeChange={setPrivacyMode}
+            />
           ) : null}
         </Content>
       </AppLayout>

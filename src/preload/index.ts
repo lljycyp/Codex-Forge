@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("launcherApi", {
   invoke: (command: string, payload?: unknown) => ipcRenderer.invoke("launcher:invoke", command, payload ?? {}),
   selectDirectory: (defaultPath?: string) => ipcRenderer.invoke("launcher:select-directory", defaultPath),
   selectAuthJsonFile: () => ipcRenderer.invoke("launcher:select-auth-json-file"),
+  selectProfileBackupFile: () => ipcRenderer.invoke("launcher:select-profile-backup-file"),
   getAutoStartEnabled: () => ipcRenderer.invoke("app:get-auto-start-enabled"),
   getAppVersion: () => ipcRenderer.invoke("app:get-version"),
   openProjectGitHub: () => ipcRenderer.invoke("app:open-external", projectGitHubUrl),

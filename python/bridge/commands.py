@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import time
+import zipfile
 from pathlib import Path
 
 from core.codex_source import (
@@ -71,8 +72,11 @@ def invoke(command, payload=None):
         "create_oauth_profile": create_oauth_profile,
         "create_auth_file_profile": create_auth_file_profile,
         "delete_profile": delete_profile,
+        "export_profile_backup": export_profile_backup,
         "get_app_state": get_app_state,
         "get_diagnostics": get_diagnostics,
+        "get_profile_detail": get_profile_detail,
+        "import_profile_backup": import_profile_backup,
         "list_instruction_templates": list_instruction_templates,
         "save_instruction_template": save_instruction_template,
         "delete_instruction_template": delete_instruction_template,
@@ -243,6 +247,71 @@ def delete_profile(payload):
     return {"name": name}
 
 
+def get_profile_detail(payload):
+    """读取账号详情，只返回可展示的认证元数据，不泄露原始令牌。"""
+    name = payload.get("name", "")
+    config = load_config()
+    if name not in config.get("profiles", []):
+        raise ValueError("账号不存在")
+    summary = _build_profile_summary(config, name, read_running_codex_commands())
+    auth_meta = _read_profile_auth_meta(Path(summary["authPath"]))
+    return {**summary, "auth": auth_meta}
+
+
+def export_profile_backup(payload):
+    """导出单个账号资料为 zip 备份。"""
+    name = payload.get("name", "")
+    target_dir = Path(payload.get("targetDir", ""))
+    config = load_config()
+    if name not in config.get("profiles", []):
+        raise ValueError("账号不存在")
+    if not target_dir:
+        raise ValueError("请选择导出目录")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    profile_dir = _get_profile_dir(config, name)
+    if not profile_dir.exists():
+        raise FileNotFoundError("账号资料目录不存在")
+
+    backup_path = target_dir / f"{sanitize_profile_name(name)}-backup-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+    with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("codex-forge-profile.json", json.dumps({"name": name}, ensure_ascii=False, indent=2))
+        for file_path in profile_dir.rglob("*"):
+            if file_path.is_dir() or is_reparse_point(file_path):
+                continue
+            archive.write(file_path, file_path.relative_to(profile_dir).as_posix())
+    return {"name": name, "backupPath": str(backup_path)}
+
+
+def import_profile_backup(payload):
+    """从 zip 备份恢复账号资料。"""
+    backup_path = Path(payload.get("backupPath", ""))
+    config = load_config()
+    if not backup_path.is_file() or backup_path.suffix.lower() != ".zip":
+        raise ValueError("请选择有效的账号备份 zip")
+    with zipfile.ZipFile(backup_path, "r") as archive:
+        meta = _read_backup_meta(archive)
+        name = _validate_profile_name(config, payload.get("name") or meta.get("name") or backup_path.stem)
+        profile_dir = _get_profile_dir(config, name)
+        profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT).resolve()
+        profile_dir_resolved = profile_dir.resolve()
+        try:
+            profile_dir_resolved.relative_to(profile_root)
+        except ValueError as exc:
+            raise ValueError("备份恢复目标不在账号根目录内") from exc
+        profile_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            archive.extractall(profile_dir)
+        except Exception:
+            shutil.rmtree(profile_dir, onerror=remove_readonly_path)
+            raise
+    (profile_dir / "codex-forge-profile.json").unlink(missing_ok=True)
+    ensure_profile_config_path(profile_dir)
+    profiles = config.setdefault("profiles", [])
+    profiles.append(name)
+    save_config(config)
+    return _build_profile_summary(config, name, read_running_codex_commands())
+
+
 def launch_profile(payload):
     """切换到指定账号资料，并启动默认安装的 Codex。"""
     name = payload.get("name", "")
@@ -322,6 +391,11 @@ def _launch_profile_multi(config, name):
 def _stop_profile_multi(config, payload):
     """关闭指定账号对应的 Codex 进程。"""
     name = payload.get("name", "")
+    if not name:
+        stopped = 0
+        for profile_name in _running_multi_profile_names(config):
+            stopped += _stop_profile_multi(config, {"name": profile_name}).get("stopped", 0)
+        return {"stopped": stopped}
     if name not in config.get("profiles", []):
         raise ValueError("账号不存在")
     match_targets = _get_profile_running_match_targets(config, name)
@@ -674,6 +748,69 @@ def get_diagnostics(_payload=None):
         },
         "profiles": profile_items,
     }
+
+
+def _read_profile_auth_meta(auth_path):
+    """提取账号认证元数据，令牌只返回状态和过期时间。"""
+    result = {
+        "exists": auth_path.exists(),
+        "email": "",
+        "accountId": "",
+        "planType": "",
+        "accessTokenExpiresAt": None,
+        "hasRefreshToken": False,
+        "error": "",
+    }
+    if not auth_path.exists():
+        return result
+    try:
+        auth_json = json.loads(auth_path.read_text(encoding="utf-8"))
+        auth = extract_auth(auth_json)
+        tokens = auth_tokens(auth_json) or {}
+        result.update(
+            {
+                "email": auth.get("email") or "",
+                "accountId": auth.get("accountId") or "",
+                "planType": auth.get("planType") or "",
+                "accessTokenExpiresAt": _jwt_expiration(tokens.get("access_token")),
+                "hasRefreshToken": bool(tokens.get("refresh_token")),
+            }
+        )
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
+
+
+def _read_backup_meta(archive):
+    """读取备份元数据，并拒绝危险 zip 路径。"""
+    for member in archive.infolist():
+        path = Path(member.filename)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("备份文件包含不安全路径")
+    try:
+        with archive.open("codex-forge-profile.json") as meta_file:
+            meta = json.loads(meta_file.read().decode("utf-8"))
+            return meta if isinstance(meta, dict) else {}
+    except KeyError:
+        return {}
+
+
+def _jwt_expiration(token):
+    if not isinstance(token, str) or not token:
+        return None
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    import base64
+
+    payload = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8")
+        claims = json.loads(decoded)
+    except Exception:
+        return None
+    exp = claims.get("exp") if isinstance(claims, dict) else None
+    return int(exp) if isinstance(exp, (int, float)) else None
 
 
 def _build_profile_summary(config, profile_name, running_commands):

@@ -112,6 +112,7 @@ export type LauncherApi = {
   invoke: <T>(command: string, payload?: unknown) => Promise<BackendResponse<T>>;
   selectDirectory: (defaultPath?: string) => Promise<string>;
   selectAuthJsonFile: () => Promise<string>;
+  selectProfileBackupFile?: () => Promise<string>;
   getAutoStartEnabled?: () => Promise<boolean>;
   getAppVersion?: () => Promise<string>;
   openProjectGitHub?: () => Promise<void>;

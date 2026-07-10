@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Form, Input, message, Modal, Radio, Space, Switch } from "antd";
-import { FolderOpen, Github, HardDrive, Info, Power, RefreshCw } from "lucide-react";
+import { ClipboardCopy, EyeOff, FolderOpen, Github, HardDrive, Info, Power, RefreshCw } from "lucide-react";
+import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
 import type { AppState, RunCommand } from "../types";
 
 type SettingsPageProps = {
   appState: AppState;
+  privacyMode: boolean;
   runCommand: RunCommand;
+  onPrivacyModeChange: (enabled: boolean) => void;
 };
 
 function GiteeIcon({ size = 16 }: { size?: number }) {
@@ -28,7 +31,7 @@ function GiteeIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
+export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeChange }: SettingsPageProps) {
   const { language, setLanguage, t } = useI18n();
   const [form] = Form.useForm();
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
@@ -36,6 +39,7 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
   const [autoStartLoading, setAutoStartLoading] = useState(false);
   const [checkUpdateLoading, setCheckUpdateLoading] = useState(false);
   const [launchModeLoading, setLaunchModeLoading] = useState(false);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
 
   useEffect(() => {
     form.setFieldsValue({
@@ -166,6 +170,19 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
     void saveLaunchMode(mode);
   };
 
+  const copyDiagnostics = async () => {
+    setDiagnosticsLoading(true);
+    try {
+      const diagnostics = await invokeLauncher("get_diagnostics");
+      await navigator.clipboard.writeText(JSON.stringify(redactDiagnostics(diagnostics), null, 2));
+      message.success(t("诊断报告已复制"));
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : t("复制诊断报告失败"));
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-[800px] pb-8 pt-2">
       <Form form={form} layout="vertical">
@@ -286,6 +303,21 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
           </div>
         </div>
 
+        <div className="mb-4 rounded-xl border border-[#e4ebf3] bg-slate-50/50 p-6">
+          <div className="flex items-center justify-between gap-6">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 font-semibold text-slate-700">
+                <EyeOff size={16} />
+                {t("隐私模式")}
+              </div>
+              <div className="mt-1 text-sm leading-6 text-slate-500">
+                {t("隐藏账号邮箱、账号编号和系统用户名，便于截图或屏幕共享。")}
+              </div>
+            </div>
+            <Switch checked={privacyMode} onChange={onPrivacyModeChange} />
+          </div>
+        </div>
+
         <div className="rounded-xl border border-[#e4ebf3] bg-slate-50/50 p-6">
           <div className="flex items-center justify-between gap-6">
             <div className="min-w-0">
@@ -304,6 +336,13 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
                 onClick={checkForUpdates}
               >
                 {t("检查更新")}
+              </Button>
+              <Button
+                icon={<ClipboardCopy size={16} />}
+                loading={diagnosticsLoading}
+                onClick={copyDiagnostics}
+              >
+                {t("复制诊断报告")}
               </Button>
               <Button
                 aria-label={t("打开 GitHub 项目")}
@@ -325,4 +364,29 @@ export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
       </Form>
     </div>
   );
+}
+
+function redactDiagnostics(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactDiagnostics);
+  }
+  if (!value || typeof value !== "object") {
+    return redactPath(value);
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => {
+      const lowered = key.toLowerCase();
+      if (lowered.includes("token") || lowered.includes("auth") || lowered.includes("key")) {
+        return [key, typeof entry === "boolean" ? entry : redactPath(entry)];
+      }
+      return [key, redactDiagnostics(entry)];
+    }),
+  );
+}
+
+function redactPath(value: unknown) {
+  if (typeof value !== "string") {
+    return value;
+  }
+  return value.replace(/C:\\Users\\[^\\/]+/gi, "C:\\Users\\<user>");
 }

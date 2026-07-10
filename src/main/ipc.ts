@@ -25,6 +25,16 @@ export function registerIpcHandlers(): void {
     const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
     return result.canceled ? "" : result.filePaths[0] ?? "";
   });
+  ipcMain.handle("launcher:select-profile-backup-file", async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options: OpenDialogOptions = {
+      title: "选择账号备份文件",
+      filters: [{ name: "Codex Forge profile backup", extensions: ["zip"] }],
+      properties: ["openFile"]
+    };
+    const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    return result.canceled ? "" : result.filePaths[0] ?? "";
+  });
   ipcMain.handle("app:get-auto-start-enabled", () => {
     return app.getLoginItemSettings().openAtLogin;
   });

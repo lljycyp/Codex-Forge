@@ -1,34 +1,58 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Button,
+  Drawer,
   Empty,
   Form,
   Input,
+  message,
   Modal,
   Radio,
   Space,
   Spin,
+  Tabs,
   Tooltip,
   Typography,
 } from "antd";
 import {
+  Archive,
+  Download,
   FolderOpen,
+  Info,
+  KeyRound,
   Play,
   Plus,
   RefreshCw,
+  ShieldAlert,
   Square,
   Trash2,
+  Upload,
   UserPen,
+  WalletCards,
 } from "lucide-react";
+import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
-import type { ProfileSummary, ProfileUsageWindow, RunCommand } from "../types";
+import type { ProfileSummary, ProfileUsage, ProfileUsageWindow, RunCommand } from "../types";
 
 type ProfilesProps = {
   profiles: ProfileSummary[];
   runningCount: number;
   launchMode: "switch" | "multi";
+  privacyMode: boolean;
   runCommand: RunCommand;
   loading: boolean;
+};
+
+type ProfileDetail = ProfileSummary & {
+  auth: {
+    exists: boolean;
+    email: string;
+    accountId: string;
+    planType: string;
+    accessTokenExpiresAt: number | null;
+    hasRefreshToken: boolean;
+    error: string;
+  };
 };
 
 const profileRowBaseClass =
@@ -40,7 +64,7 @@ const profilePillBaseClass =
 const iconActionButtonClass =
   "flex items-center justify-center text-slate-500 hover:!text-brand-600";
 
-export function Profiles({ profiles, runningCount, launchMode, runCommand, loading }: ProfilesProps) {
+export function Profiles({ profiles, runningCount, launchMode, privacyMode, runCommand, loading }: ProfilesProps) {
   const { language, t } = useI18n();
   const [createOpen, setCreateOpen] = useState(false);
   const [createMode, setCreateMode] = useState<"oauth" | "current" | "file">("oauth");
@@ -56,8 +80,13 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
     Set<string>
   >(() => new Set());
   const [refreshingAllUsage, setRefreshingAllUsage] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [profileDetail, setProfileDetail] = useState<ProfileDetail | null>(null);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [backupPath, setBackupPath] = useState("");
   const [createForm] = Form.useForm();
   const [renameForm] = Form.useForm();
+  const [restoreForm] = Form.useForm();
 
   useEffect(() => {
     if (renameTarget) {
@@ -180,6 +209,51 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
     }
   };
 
+  const chooseBackupFile = async () => {
+    const selectedPath = await window.launcherApi.selectProfileBackupFile?.();
+    if (selectedPath) {
+      setBackupPath(selectedPath);
+      restoreForm.setFields([{ name: "backupPath", value: selectedPath, errors: [] }]);
+    }
+  };
+
+  const loadProfileDetail = async (name: string, silent = false) => {
+    if (!silent) {
+      setDetailLoading(true);
+    }
+    try {
+      setProfileDetail(await invokeLauncher<ProfileDetail>("get_profile_detail", { name }));
+    } catch (error) {
+      Modal.error({ title: t("读取账号详情失败"), content: error instanceof Error ? error.message : t("操作失败") });
+    } finally {
+      if (!silent) {
+        setDetailLoading(false);
+      }
+    }
+  };
+
+  const openDetail = (profile: ProfileSummary) => {
+    void loadProfileDetail(profile.name);
+  };
+
+  const exportBackup = async (profile: ProfileSummary) => {
+    const targetDir = await window.launcherApi.selectDirectory(profile.profileDir || undefined);
+    if (!targetDir) {
+      return;
+    }
+    await runCommand(
+      "export_profile_backup",
+      { name: profile.name, targetDir },
+      t("账号备份已导出"),
+      { blocking: false, refreshAfter: false },
+    );
+  };
+
+  const refreshDetailUsage = async (profile: ProfileDetail) => {
+    await refreshProfileUsage(profile);
+    await loadProfileDetail(profile.name, true);
+  };
+
   const accountHealth = profiles.reduce(
     (summary, profile) => {
       if (isHealthyProfile(profile)) {
@@ -191,6 +265,7 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
     },
     { total: profiles.length, healthy: 0, abnormal: 0 },
   );
+  const recommendedProfileName = getRecommendedProfileName(profiles);
 
   return (
     <div className="grid gap-4">
@@ -220,6 +295,12 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
               onClick={refreshAllUsage}
             >
               {t("刷新额度")}
+            </Button>
+            <Button
+              icon={<Upload size={15} />}
+              onClick={() => setRestoreOpen(true)}
+            >
+              {t("恢复备份")}
             </Button>
             <Button
               type="primary"
@@ -259,6 +340,11 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                     <span className="text-[15px] font-bold leading-snug text-gray-900">
                       {profile.name}
                     </span>
+                    {profile.name === recommendedProfileName ? (
+                      <span className={`${profilePillBaseClass} border-emerald-200 bg-emerald-50 text-emerald-600`}>
+                        {t("推荐使用")}
+                      </span>
+                    ) : null}
                     <span
                       className={
                         profile.running
@@ -286,9 +372,9 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                       </span>
                     ) : null}
                   </div>
-                  <Tooltip title={profile.profileDir} placement="topLeft">
+                  <Tooltip title={maskPath(profile.profileDir, privacyMode)} placement="topLeft">
                     <div className="truncate font-mono text-xs leading-normal text-slate-400">
-                      {profile.profileDir}
+                      {maskPath(profile.profileDir, privacyMode)}
                     </div>
                   </Tooltip>
                   <div className="mt-3 grid max-w-[520px] grid-cols-[max-content_minmax(108px,0.22fr)_minmax(108px,0.22fr)] items-center gap-3 max-[960px]:max-w-none max-[960px]:grid-cols-1">
@@ -316,6 +402,11 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                       </>
                     )}
                   </div>
+                  {profile.usage?.fetchedAt ? (
+                    <div className="mt-2 text-[11.5px] text-slate-400">
+                      {t("最后刷新")}：{formatTimestamp(profile.usage.fetchedAt, language)}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex shrink-0 items-center max-[960px]:items-end max-[960px]:flex-col">
                   <Space.Compact>
@@ -359,6 +450,22 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
                         loading={pendingUsageProfileNames.has(profile.name)}
                         disabled={refreshingAllUsage}
                         onClick={() => refreshProfileUsage(profile)}
+                      />
+                    </Tooltip>
+                    <Tooltip title={t("账号详情")}>
+                      <Button
+                        className={iconActionButtonClass}
+                        icon={<Info size={14} />}
+                        loading={detailLoading && profileDetail?.name === profile.name}
+                        onClick={() => openDetail(profile)}
+                      />
+                    </Tooltip>
+                    <Tooltip title={t("导出备份")}>
+                      <Button
+                        className={iconActionButtonClass}
+                        icon={<Download size={14} />}
+                        disabled={profile.running}
+                        onClick={() => exportBackup(profile)}
                       />
                     </Tooltip>
                     <Tooltip title={t("改名")}>
@@ -528,6 +635,349 @@ export function Profiles({ profiles, runningCount, launchMode, runCommand, loadi
           </Form.Item>
         </Form>
       </Modal>
+      <Modal
+        title={t("恢复账号备份")}
+        open={restoreOpen}
+        onCancel={() => {
+          setRestoreOpen(false);
+          setBackupPath("");
+          restoreForm.resetFields();
+        }}
+        onOk={async () => {
+          const values = await restoreForm.validateFields();
+          if (!backupPath) {
+            restoreForm.setFields([{ name: "backupPath", errors: [t("请选择账号备份文件")] }]);
+            return;
+          }
+          setRestoreOpen(false);
+          await runCommand(
+            "import_profile_backup",
+            { backupPath, name: values.name },
+            t("账号备份已恢复"),
+          );
+          setBackupPath("");
+          restoreForm.resetFields();
+        }}
+      >
+        <Form form={restoreForm} layout="vertical">
+          <Form.Item name="backupPath" label={t("备份文件")}>
+            <Space.Compact className="w-full">
+              <Input value={backupPath} readOnly placeholder={t("请选择账号备份文件")} />
+              <Button icon={<Archive size={15} />} onClick={chooseBackupFile}>
+                {t("选择文件")}
+              </Button>
+            </Space.Compact>
+          </Form.Item>
+          <Form.Item name="name" label={t("账号名称")} extra={t("留空则使用备份中的账号名称")}>
+            <Input placeholder={t("例如：工作号")} />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Drawer
+        title={null}
+        open={Boolean(profileDetail)}
+        width={760}
+        onClose={() => setProfileDetail(null)}
+        styles={{ body: { padding: 0 } }}
+      >
+        {profileDetail ? (
+          <ProfileDetailPanel
+            detail={profileDetail}
+            language={language}
+            privacyMode={privacyMode}
+            t={t}
+            onToggleRunning={toggleProfileRunning}
+            onRefreshUsage={refreshDetailUsage}
+            onExportBackup={exportBackup}
+            onOpenPath={(path) =>
+              runCommand(
+                "open_path",
+                { path },
+                t("已打开目录"),
+                { blocking: false, refreshAfter: false },
+              )
+            }
+          />
+        ) : null}
+      </Drawer>
+    </div>
+  );
+}
+
+function ProfileDetailPanel({
+  detail,
+  language,
+  privacyMode,
+  t,
+  onToggleRunning,
+  onRefreshUsage,
+  onExportBackup,
+  onOpenPath,
+}: {
+  detail: ProfileDetail;
+  language: "zh-CN" | "en-US";
+  privacyMode: boolean;
+  t: (text: string) => string;
+  onToggleRunning: (profile: ProfileSummary) => void;
+  onRefreshUsage: (profile: ProfileDetail) => Promise<void>;
+  onExportBackup: (profile: ProfileSummary) => Promise<void>;
+  onOpenPath: (path: string) => void;
+}) {
+  const authOk = detail.auth.exists && !detail.auth.error;
+  const healthTone = authOk && detail.profileDirExists ? "green" : "amber";
+  const planText = formatPlanType(detail.auth.planType || detail.usage?.planType, t);
+  const accountId = maskSensitive(detail.auth.accountId || "-", privacyMode);
+  const email = maskSensitive(detail.auth.email || "-", privacyMode);
+
+  return (
+    <div className="min-h-full bg-[#f7f9fc]">
+      <div className="border-b border-slate-200 bg-white px-6 pb-5 pt-6">
+        <div className="flex items-start justify-between gap-5">
+          <div className="flex min-w-0 items-start gap-4">
+            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-[14px] bg-slate-900 text-xl font-black text-white shadow-[0_12px_30px_rgba(15,23,42,0.22)]">
+              {detail.name.slice(0, 1).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <h2 className="m-0 truncate text-xl font-extrabold leading-tight text-slate-950">
+                  {detail.name}
+                </h2>
+                <StatusPill tone={healthTone} text={authOk ? t("认证正常") : t("需要处理")} />
+                {detail.running ? <StatusPill tone="blue" text={t("运行中")} /> : null}
+              </div>
+              <div className="grid gap-1 text-sm text-slate-500">
+                <span>{email}</span>
+                <span className="font-mono text-xs">{accountId}</span>
+              </div>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <Button
+              type="primary"
+              danger={detail.running}
+              icon={detail.running ? <Square size={15} /> : <Play size={15} />}
+              onClick={() => onToggleRunning(detail)}
+            >
+              {detail.running ? t("关闭") : t("启动")}
+            </Button>
+            <Button icon={<RefreshCw size={15} />} onClick={() => void onRefreshUsage(detail)}>
+              {t("刷新额度")}
+            </Button>
+            <Button icon={<Download size={15} />} disabled={detail.running} onClick={() => void onExportBackup(detail)}>
+              {t("导出备份")}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 p-6">
+        <div className="grid grid-cols-3 gap-3 max-[960px]:grid-cols-1">
+          <DetailMetric
+            icon={<KeyRound size={17} />}
+            label={t("认证状态")}
+            value={authOk ? t("认证正常") : t("需要重新授权")}
+            tone={authOk ? "green" : "amber"}
+          />
+          <DetailMetric
+            icon={<WalletCards size={17} />}
+            label={t("套餐")}
+            value={planText}
+            tone="blue"
+          />
+          <DetailMetric
+            icon={<Archive size={17} />}
+            label={t("程序副本")}
+            value={detail.portableCodexExists ? detail.portableCodexSizeText || "0 B" : t("待创建")}
+            tone={detail.portableCodexExists ? "green" : "slate"}
+          />
+        </div>
+
+        <div className="rounded-[10px] border border-slate-200 bg-white px-5 py-4 shadow-sm">
+          <Tabs
+            defaultActiveKey="overview"
+            items={[
+              {
+                key: "overview",
+                label: t("概览"),
+                children: (
+                  <div className="grid gap-4">
+                    {detail.auth.error ? (
+                      <div className="flex gap-3 rounded-[8px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+                        <ShieldAlert size={18} className="mt-0.5 shrink-0" />
+                        <span>{detail.auth.error}</span>
+                      </div>
+                    ) : null}
+                    <div className="grid grid-cols-2 gap-3 max-[960px]:grid-cols-1">
+                      <DetailUsageCard title={t("五小时额度")} language={language} window={detail.usage?.fiveHour ?? null} />
+                      <DetailUsageCard title={t("一周额度")} language={language} window={detail.usage?.oneWeek ?? null} />
+                    </div>
+                    <InfoGrid
+                      rows={[
+                        [t("最后刷新"), detail.usage?.fetchedAt ? formatTimestamp(detail.usage.fetchedAt, language) : "-"],
+                        [t("当前账号"), detail.active ? t("是") : t("否")],
+                        [t("运行状态"), detail.running ? t("运行中") : t("就绪")],
+                        [t("账号目录"), maskPath(detail.profileDir, privacyMode)],
+                      ]}
+                    />
+                  </div>
+                ),
+              },
+              {
+                key: "auth",
+                label: t("认证与额度"),
+                children: (
+                  <div className="grid gap-4">
+                    <InfoGrid
+                      rows={[
+                        ["Email", email],
+                        ["Account ID", accountId],
+                        [t("套餐"), planText],
+                        ["Access token", detail.auth.accessTokenExpiresAt ? `${t("过期时间")}：${formatTimestamp(detail.auth.accessTokenExpiresAt, language)}` : t("未返回")],
+                        ["Refresh token", detail.auth.hasRefreshToken ? t("存在") : t("缺失")],
+                      ]}
+                    />
+                    <div className="rounded-[8px] border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                      {t("账号详情只展示认证元数据，不展示原始 token。")}
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                key: "files",
+                label: t("文件位置"),
+                children: (
+                  <div className="grid gap-3">
+                    <PathRow label={t("账号目录")} path={detail.profileDir} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
+                    <PathRow label="auth.json" path={detail.authPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
+                    <PathRow label="config.toml" path={detail.configPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
+                    {detail.codexHome ? (
+                      <PathRow label="CodexHome" path={detail.codexHome} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
+                    ) : null}
+                    {detail.portableCodexPath ? (
+                      <PathRow label={t("程序副本")} path={detail.portableCodexPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
+                    ) : null}
+                  </div>
+                ),
+              },
+            ]}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DetailMetric({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  tone: "green" | "amber" | "blue" | "slate";
+}) {
+  const toneClass =
+    tone === "green"
+      ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
+      : tone === "amber"
+        ? "bg-amber-50 text-amber-700 ring-amber-100"
+        : tone === "blue"
+          ? "bg-blue-50 text-blue-700 ring-blue-100"
+          : "bg-slate-50 text-slate-600 ring-slate-100";
+  return (
+    <div className="rounded-[10px] border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="mb-3 flex items-center gap-2 text-[12px] font-semibold text-slate-500">
+        <span className={`grid h-8 w-8 place-items-center rounded-[8px] ring-1 ${toneClass}`}>{icon}</span>
+        {label}
+      </div>
+      <div className="truncate text-[15px] font-extrabold text-slate-900">{value}</div>
+    </div>
+  );
+}
+
+function StatusPill({ tone, text }: { tone: "green" | "amber" | "blue"; text: string }) {
+  const toneClass =
+    tone === "green"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : tone === "amber"
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : "border-blue-200 bg-blue-50 text-blue-700";
+  return <span className={`inline-flex h-6 items-center rounded-[7px] border px-2 text-[12px] font-bold ${toneClass}`}>{text}</span>;
+}
+
+function DetailUsageCard({
+  title,
+  language,
+  window,
+}: {
+  title: string;
+  language: "zh-CN" | "en-US";
+  window: ProfileUsageWindow | null;
+}) {
+  const used = clampPercent(window?.usedPercent);
+  const remainingText = formatPercent(window?.remainingPercent);
+  const resetCountdown = formatResetCountdown(window?.resetAt, language);
+  const barColor = used > 80 ? "bg-red-500" : used > 50 ? "bg-amber-500" : "bg-emerald-500";
+  return (
+    <div className="rounded-[9px] border border-slate-200 bg-white p-4">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="font-bold text-slate-800">{title}</div>
+        <div className="rounded-[7px] bg-slate-100 px-2 py-1 text-[12px] font-bold text-slate-700">{remainingText}</div>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+        <div className={`h-full rounded-full ${barColor}`} style={{ width: `${used}%` }} />
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2 text-[12px] text-slate-500">
+        <span>{formatPercent(window?.usedPercent)}</span>
+        <span>{resetCountdown}</span>
+      </div>
+    </div>
+  );
+}
+
+function InfoGrid({ rows }: { rows: Array<[string, string]> }) {
+  return (
+    <div className="grid overflow-hidden rounded-[9px] border border-slate-200 bg-white">
+      {rows.map(([label, value]) => (
+        <div key={label} className="grid grid-cols-[140px_minmax(0,1fr)] border-b border-slate-100 px-4 py-3 text-sm last:border-b-0 max-[720px]:grid-cols-1 max-[720px]:gap-1">
+          <div className="font-semibold text-slate-500">{label}</div>
+          <div className="min-w-0 break-words font-medium text-slate-800">{value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PathRow({
+  label,
+  path,
+  privacyMode,
+  t,
+  onOpenPath,
+}: {
+  label: string;
+  path: string;
+  privacyMode: boolean;
+  t: (text: string) => string;
+  onOpenPath: (path: string) => void;
+}) {
+  const visiblePath = maskPath(path, privacyMode);
+  const copyPath = async () => {
+    await navigator.clipboard.writeText(path);
+    message.success(t("路径已复制"));
+  };
+  return (
+    <div className="grid grid-cols-[120px_minmax(0,1fr)_auto] items-center gap-3 rounded-[9px] border border-slate-200 bg-white px-4 py-3 max-[720px]:grid-cols-1">
+      <div className="text-sm font-bold text-slate-600">{label}</div>
+      <Tooltip title={visiblePath}>
+        <div className="min-w-0 truncate font-mono text-xs text-slate-500">{visiblePath}</div>
+      </Tooltip>
+      <Space.Compact>
+        <Button size="small" onClick={() => void copyPath()}>{t("复制")}</Button>
+        <Button size="small" icon={<FolderOpen size={13} />} onClick={() => onOpenPath(path)}>{t("打开")}</Button>
+      </Space.Compact>
     </div>
   );
 }
@@ -595,6 +1045,7 @@ function UsageMeter({
   const usedText = formatPercent(window?.usedPercent);
   const remainingText = formatPercent(window?.remainingPercent);
   const resetText = formatResetAt(window?.resetAt, language);
+  const countdownText = formatResetCountdown(window?.resetAt, language);
 
   const percent = clampPercent(window?.usedPercent);
   let barColor = "bg-green-500";
@@ -604,8 +1055,8 @@ function UsageMeter({
   return (
     <Tooltip
       title={language === "en-US"
-        ? `Used ${usedText}, remaining ${remainingText}, resets at ${resetText}`
-        : `已用 ${usedText}，剩余 ${remainingText}，重置时间 ${resetText}`}
+        ? `Used ${usedText}, remaining ${remainingText}, resets ${countdownText} (${resetText})`
+        : `已用 ${usedText}，剩余 ${remainingText}，${countdownText}重置（${resetText}）`}
     >
       <span className="grid min-w-0 gap-1.5">
         <span className="flex items-center justify-between gap-2 text-[11.5px] leading-none text-slate-500">
@@ -658,4 +1109,66 @@ function formatResetAt(value: number | null | undefined, language: "zh-CN" | "en
     return language === "en-US" ? "Not returned" : "未返回";
   }
   return new Date(value * 1000).toLocaleString(language);
+}
+
+function formatTimestamp(value: number | null | undefined, language: "zh-CN" | "en-US") {
+  if (!value) {
+    return "-";
+  }
+  return new Date(value * 1000).toLocaleString(language);
+}
+
+function formatResetCountdown(value: number | null | undefined, language: "zh-CN" | "en-US") {
+  if (!value) {
+    return language === "en-US" ? "at unknown time" : "未知时间";
+  }
+  const seconds = Math.max(0, value - Math.floor(Date.now() / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (language === "en-US") {
+    return hours > 0 ? `in ${hours}h ${minutes}m` : `in ${minutes}m`;
+  }
+  return hours > 0 ? `${hours}小时${minutes}分钟后` : `${minutes}分钟后`;
+}
+
+function getRecommendedProfileName(profiles: ProfileSummary[]) {
+  let best: { name: string; score: number } | null = null;
+  for (const profile of profiles) {
+    if (!profile.authExists || profile.usage?.error) {
+      continue;
+    }
+    const score = usageScore(profile.usage);
+    if (!best || score > best.score) {
+      best = { name: profile.name, score };
+    }
+  }
+  return best?.name ?? "";
+}
+
+function usageScore(usage: ProfileUsage | null) {
+  if (!usage) {
+    return -1;
+  }
+  return Math.min(
+    usage.fiveHour?.remainingPercent ?? 0,
+    usage.oneWeek?.remainingPercent ?? 0,
+  );
+}
+
+function maskSensitive(value: string, enabled: boolean) {
+  if (!enabled || !value || value === "-") {
+    return value;
+  }
+  if (value.includes("@")) {
+    const [name, domain] = value.split("@");
+    return `${name.slice(0, 2)}***@${domain}`;
+  }
+  return value.length <= 8 ? "***" : `${value.slice(0, 4)}***${value.slice(-4)}`;
+}
+
+function maskPath(value: string, enabled: boolean) {
+  if (!enabled) {
+    return value;
+  }
+  return value.replace(/C:\\Users\\[^\\/]+/gi, "C:\\Users\\<user>");
 }

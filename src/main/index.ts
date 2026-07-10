@@ -7,6 +7,7 @@ import {
 } from "electron-updater";
 import { join } from "node:path";
 import { registerIpcHandlers } from "./ipc";
+import { invokeBackend } from "./python/launcherBackend";
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -179,12 +180,55 @@ function createTray(): void {
   }
   tray = new Tray(getAppIconPath());
   tray.setToolTip("Codex Forge");
+  void refreshTrayMenu();
+  tray.on("click", showMainWindow);
+  tray.on("double-click", showMainWindow);
+}
+
+async function refreshTrayMenu(): Promise<void> {
+  if (!tray) {
+    return;
+  }
+  let activeProfile = "未选择";
+  let runningCount = 0;
+  try {
+    const response = await invokeBackend("get_app_state", {});
+    const data = response.ok ? response.data as { activeProfile?: string; runningCount?: number } : {};
+    activeProfile = data.activeProfile || "未选择";
+    runningCount = data.runningCount || 0;
+  } catch {
+    // 托盘状态是辅助入口，读取失败时保持基础菜单。
+  }
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      { label: `当前账号：${activeProfile}`, enabled: false },
+      { label: `运行实例：${runningCount}`, enabled: false },
+      { type: "separator" },
       {
         label: "打开主窗口",
         click: showMainWindow,
       },
+      {
+        label: "刷新额度",
+        click: async () => {
+          await invokeBackend("refresh_all_profile_usage", {});
+          await refreshTrayMenu();
+        },
+      },
+      {
+        label: "停止所有 Codex",
+        click: async () => {
+          await invokeBackend("stop_profile", {});
+          await refreshTrayMenu();
+        },
+      },
+      {
+        label: "刷新托盘状态",
+        click: () => {
+          void refreshTrayMenu();
+        },
+      },
+      { type: "separator" },
       {
         label: "退出",
         click: () => {
@@ -194,8 +238,6 @@ function createTray(): void {
       },
     ]),
   );
-  tray.on("click", showMainWindow);
-  tray.on("double-click", showMainWindow);
 }
 
 if (!gotSingleInstanceLock) {
