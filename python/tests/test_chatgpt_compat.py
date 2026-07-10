@@ -28,6 +28,7 @@ from core.codex_source import (
     write_source_signature,
 )
 from core.auth_service import auth_kind
+from core.app_server_service import _remove_temporary_directory
 from core.profile_service import (
     get_auth_credentials_store,
     require_file_auth_store,
@@ -147,6 +148,18 @@ class ChatGptCompatibilityTest(unittest.TestCase):
         self.assertEqual(usage["planType"], "team")
         self.assertEqual(usage["fiveHour"]["remainingPercent"], 75)
         self.assertEqual(usage["oneWeek"]["remainingPercent"], 92)
+
+    def test_app_server_temp_cleanup_retries_marketplace_race(self):
+        path = Path(tempfile.gettempdir()) / "codex-forge-account-test"
+        directory_not_empty = OSError(145, "目录不是空的", str(path / ".git"))
+        with (
+            patch("core.app_server_service.shutil.rmtree", side_effect=(directory_not_empty, None)) as rmtree,
+            patch("core.app_server_service.time.sleep") as sleep,
+        ):
+            _remove_temporary_directory(path)
+
+        self.assertEqual(rmtree.call_count, 2)
+        sleep.assert_called_once()
 
     def test_profile_config_removes_chatgpt_runtime_state(self):
         source = """model = "gpt-test"

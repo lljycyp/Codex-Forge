@@ -11,11 +11,13 @@ from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 
+from core.path_utils import remove_readonly_path
 from core.profile_service import sanitize_profile_config_text, write_profile_auth_json
 
 
 APP_SERVER_REQUEST_TIMEOUT_SECONDS = 30
 APP_SERVER_LOGIN_TIMEOUT_SECONDS = 300
+TEMP_DIRECTORY_CLEANUP_ATTEMPTS = 20
 CLIENT_INFO = {
     "name": "codex_forge",
     "title": "Codex Forge",
@@ -44,8 +46,7 @@ def read_account_and_rate_limits(profile_dir, auth_path, config_path):
 
 def login_with_chatgpt_browser():
     """使用官方 App Server 完成 ChatGPT 浏览器登录并返回 auth.json。"""
-    with tempfile.TemporaryDirectory(prefix="codex-forge-login-") as temp_dir:
-        codex_home = Path(temp_dir)
+    with _managed_temporary_directory(prefix="codex-forge-login-") as codex_home:
         (codex_home / "config.toml").write_text(
             'cli_auth_credentials_store = "file"\n',
             encoding="utf-8",
@@ -121,8 +122,7 @@ def find_codex_cli_path(profile_dir=None):
 @contextmanager
 def temporary_app_server_home(auth_path, config_path):
     """为一次账号查询创建最小、隔离且可自动清理的 CODEX_HOME。"""
-    with tempfile.TemporaryDirectory(prefix="codex-forge-account-") as temp_dir:
-        codex_home = Path(temp_dir)
+    with _managed_temporary_directory(prefix="codex-forge-account-") as codex_home:
         shutil.copy2(auth_path, codex_home / "auth.json")
         config_text = ""
         if config_path and Path(config_path).exists():
@@ -132,6 +132,30 @@ def temporary_app_server_home(auth_path, config_path):
             encoding="utf-8",
         )
         yield codex_home
+
+
+@contextmanager
+def _managed_temporary_directory(prefix):
+    """等待 App Server 的 marketplace 子进程释放文件后再清理目录。"""
+    path = Path(tempfile.mkdtemp(prefix=prefix))
+    try:
+        yield path
+    finally:
+        _remove_temporary_directory(path)
+
+
+def _remove_temporary_directory(path):
+    path = Path(path)
+    for attempt in range(TEMP_DIRECTORY_CLEANUP_ATTEMPTS):
+        try:
+            shutil.rmtree(path, onerror=remove_readonly_path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt + 1 >= TEMP_DIRECTORY_CLEANUP_ATTEMPTS:
+                raise
+            time.sleep(min(0.1 * (attempt + 1), 0.5))
 
 
 def _sync_temporary_auth(source_path, target_path):
@@ -221,12 +245,23 @@ class AppServerClient:
             except OSError:
                 pass
         if process.poll() is None:
-            process.terminate()
             try:
-                process.wait(timeout=3)
+                process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        check=False,
+                        capture_output=True,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                else:
+                    process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
 
     def request(self, method, params=None, timeout=APP_SERVER_REQUEST_TIMEOUT_SECONDS):
         request_id = self.next_id
