@@ -19,7 +19,7 @@ APP_SERVER_REQUEST_TIMEOUT_SECONDS = 30
 APP_SERVER_LOGIN_TIMEOUT_SECONDS = 300
 TEMP_DIRECTORY_CLEANUP_ATTEMPTS = 20
 CLIENT_INFO = {
-    "name": "codex_forge",
+    "name": "chatgpt_forge",
     "title": "ChatGPT Forge",
     "version": "0.2.0",
 }
@@ -46,7 +46,7 @@ def read_account_and_rate_limits(profile_dir, auth_path, config_path):
 
 def login_with_chatgpt_browser():
     """使用官方 App Server 完成 ChatGPT 浏览器登录并返回 auth.json。"""
-    with _managed_temporary_directory(prefix="codex-forge-login-") as codex_home:
+    with _managed_temporary_directory(prefix="chatgpt-forge-login-") as codex_home:
         (codex_home / "config.toml").write_text(
             'cli_auth_credentials_store = "file"\n',
             encoding="utf-8",
@@ -108,7 +108,7 @@ def find_codex_cli_path(profile_dir=None):
             pass
 
     if profile_dir:
-        candidates.append(Path(profile_dir) / "CodexPortableApp" / "resources" / "codex.exe")
+        candidates.append(Path(profile_dir) / "ChatGPTPortableApp" / "resources" / "codex.exe")
 
     command_path = shutil.which("codex")
     if command_path:
@@ -122,7 +122,7 @@ def find_codex_cli_path(profile_dir=None):
 @contextmanager
 def temporary_app_server_home(auth_path, config_path):
     """为一次账号查询创建最小、隔离且可自动清理的 CODEX_HOME。"""
-    with _managed_temporary_directory(prefix="codex-forge-account-") as codex_home:
+    with _managed_temporary_directory(prefix="chatgpt-forge-account-") as codex_home:
         shutil.copy2(auth_path, codex_home / "auth.json")
         config_text = ""
         if config_path and Path(config_path).exists():

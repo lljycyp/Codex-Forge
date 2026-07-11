@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useMemo, useState, type ReactNo
 
 export type Language = "zh-CN" | "en-US";
 
-const storageKey = "codexForgeLanguage";
+const storageKey = "chatgptForgeLanguage";
 
 const en: Record<string, string> = {
   "首页": "Home",

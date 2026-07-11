@@ -283,7 +283,7 @@ def export_profile_backup(payload):
     backup_path = target_dir / f"{sanitize_profile_name(name)}-backup-{time.strftime('%Y%m%d-%H%M%S')}.zip"
     with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
-            "codex-forge-profile.json",
+            "chatgpt-forge-profile.json",
             json.dumps(
                 {"name": name, "formatVersion": 2, "containsSensitiveAuth": True},
                 ensure_ascii=False,
@@ -353,7 +353,7 @@ def import_profile_backup(payload):
         except Exception:
             shutil.rmtree(profile_dir, onerror=remove_readonly_path)
             raise
-    (profile_dir / "codex-forge-profile.json").unlink(missing_ok=True)
+    (profile_dir / "chatgpt-forge-profile.json").unlink(missing_ok=True)
     ensure_profile_config_path(profile_dir)
     profiles = config.setdefault("profiles", [])
     profiles.append(name)
@@ -509,7 +509,7 @@ def _stop_client_processes(processes):
 def _emit_backend_progress(payload):
     """通过桥接进程 stderr 向 Electron 壳发送结构化进度。"""
     print(
-        f"CODEX_FORGE_PROGRESS:{json.dumps(payload, ensure_ascii=False)}",
+        f"CHATGPT_FORGE_PROGRESS:{json.dumps(payload, ensure_ascii=False)}",
         file=sys.stderr,
         flush=True,
     )
@@ -880,7 +880,7 @@ def _read_backup_meta(archive):
         if path.is_absolute() or ".." in path.parts:
             raise ValueError("备份文件包含不安全路径")
     try:
-        with archive.open("codex-forge-profile.json") as meta_file:
+        with archive.open("chatgpt-forge-profile.json") as meta_file:
             meta = json.loads(meta_file.read().decode("utf-8"))
             return meta if isinstance(meta, dict) else {}
     except KeyError:

@@ -10,12 +10,12 @@ import { Profiles } from "./pages/Profiles";
 import { InstructionsPage } from "./pages/InstructionsPage";
 import { TomlConfigPage } from "./pages/TomlConfigPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import codexForgeLogo from "./assets/codex-forge-logo.png";
+import chatgptForgeLogo from "./assets/chatgpt-forge-logo.png";
 import type { AppState, ProfileSummary, RunCommand, UpdateEvent, ViewKey } from "./types";
 
 const { Content } = Layout;
 const usageAutoRefreshMs = 5 * 60 * 1000;
-const privacyModeStorageKey = "codexForgePrivacyMode";
+const privacyModeStorageKey = "chatgptForgePrivacyMode";
 type UpdateModalEvent = Exclude<UpdateEvent, { status: "error" } | { status: "not-available" }>;
 
 const emptyState: AppState = {
@@ -385,7 +385,7 @@ export default function App() {
               <div className="forge-splash-ring" />
               <div className="grid h-[76px] w-[76px] place-items-center rounded-[20px] bg-white shadow-[0_18px_46px_rgba(15,118,110,0.22)]">
                 <img
-                  src={codexForgeLogo}
+                  src={chatgptForgeLogo}
                   alt=""
                   className="h-[54px] w-[54px] object-contain"
                   draggable={false}
@@ -433,7 +433,7 @@ export default function App() {
           <div className="grid gap-5">
             <div className="flex items-center gap-4 rounded-xl bg-slate-50 p-4">
               <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-white shadow-sm ring-1 ring-slate-900/5">
-                <img src={codexForgeLogo} alt="" className="h-8 w-8 object-contain" draggable={false} />
+                <img src={chatgptForgeLogo} alt="" className="h-8 w-8 object-contain" draggable={false} />
               </div>
               <div className="grid gap-1">
                 <div className="text-[15px] font-semibold text-slate-900">

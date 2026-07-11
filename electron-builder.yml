@@ -1,6 +1,6 @@
-appId: com.codex.forge
+appId: com.chatgpt.forge
 productName: ChatGPT Forge
-artifactName: Codex-Forge-Setup-${version}.${ext}
+artifactName: ChatGPT-Forge-Setup-${version}.${ext}
 compression: maximum
 electronLanguages:
   - zh-CN
@@ -9,7 +9,7 @@ directories:
 publish:
   provider: github
   owner: lljycyp
-  repo: Codex-Forge
+  repo: ChatGPT-Forge
 files:
   - out/**
   - assets/**

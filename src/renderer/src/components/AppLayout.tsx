@@ -3,7 +3,7 @@ import { Layout } from "antd";
 import { Minus, Square, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { AppState, ViewKey } from "../types";
-import codexForgeLogo from "../assets/codex-forge-logo.png";
+import chatgptForgeLogo from "../assets/chatgpt-forge-logo.png";
 
 const { Sider } = Layout;
 
@@ -44,7 +44,7 @@ export function AppLayout({
           <div className="absolute left-[20px] top-[14px] flex items-center z-10">
             <div className="grid h-12 w-12 place-items-center rounded-[14px] bg-white shadow-[0_8px_20px_rgba(15,118,110,0.2)]">
               <img
-                src={codexForgeLogo}
+                src={chatgptForgeLogo}
                 alt=""
                 className="h-[36px] w-[36px] object-contain"
                 draggable={false}

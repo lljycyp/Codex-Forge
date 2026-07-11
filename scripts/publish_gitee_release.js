@@ -20,7 +20,7 @@ const tagName = process.env.GITHUB_REF_NAME || `v${version}`;
 const releaseDir = path.join(root, "release");
 const releaseNotesPath = path.join(releaseDir, "release-notes.md");
 const requiredFiles = [
-  path.join(releaseDir, `Codex-Forge-Setup-${version}.exe`),
+  path.join(releaseDir, `ChatGPT-Forge-Setup-${version}.exe`),
   path.join(releaseDir, "latest.yml"),
   releaseNotesPath,
 ];

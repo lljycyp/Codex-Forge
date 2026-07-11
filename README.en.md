@@ -4,7 +4,7 @@
 </p>
 
 <p align="center">
-  <img src="src/renderer/src/assets/codex-forge-logo.png" alt="ChatGPT Forge Logo" width="150" />
+  <img src="src/renderer/src/assets/chatgpt-forge-logo.png" alt="ChatGPT Forge Logo" width="150" />
 </p>
 
 <h1 align="center">ChatGPT Forge</h1>
@@ -61,7 +61,7 @@
 | 👥 **Profile management** | Search, filter, and sort accounts, then use the profile inspector to launch or close an account, refresh usage, view details, export a backup, rename, or delete it. Data is stored in `~/Documents/CodexProfiles` by default. |
 | 🔑 **Auth import** | Uses the official Codex App Server for ChatGPT browser sign-in, and supports saving the current account or importing `auth.json`. |
 | 🚀 **One-click switch and launch** | Writes the selected account into the current user's `.codex` directory and launches ChatGPT. If ChatGPT is running, the app prompts you to close it first. |
-| 📦 **Isolated multi-instance launch** | Featured capability. In multi-instance mode, prepares a per-account `CodexHome`, `APPDATA`, `LOCALAPPDATA`, `--user-data-dir`, and full `CodexPortableApp` copy to avoid accounts overwriting each other. |
+| 📦 **Isolated multi-instance launch** | Featured capability. In multi-instance mode, prepares a per-account `CodexHome`, `APPDATA`, `LOCALAPPDATA`, `--user-data-dir`, and full `ChatGPTPortableApp` copy to avoid accounts overwriting each other. |
 | 📊 **Usage snapshots** | Uses the official Codex App Server to read and cache remaining ChatGPT usage, reset times, and limit status. |
 | 🛠️ **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
 | 📝 **Instruction templates (prompt injection)** | Saves Markdown prompt templates locally. Enabling a template copies it into the active ChatGPT config directory and points `model_instructions_file` in `config.toml` to that template. |
@@ -113,7 +113,7 @@ ChatGPT Forge reads the active config file:
 Before saving changes, it validates the TOML content and backs up the old file to:
 
 ```text
-%LOCALAPPDATA%/CodexForge/backups/config-toml/
+%LOCALAPPDATA%/ChatGPTForge/backups/config-toml/
 ```
 
 ### 5. 📝 Instruction Template Management (Prompt Injection)
@@ -165,7 +165,7 @@ Isolated multi-instance mode separates `CodexHome`, `APPDATA`, `LOCALAPPDATA`, a
 ```text
 CodexProfiles/<account>/CodexHome
 CodexProfiles/<account>/AppData
-CodexProfiles/<account>/CodexPortableApp
+CodexProfiles/<account>/ChatGPTPortableApp
 ```
 
 ### 7. ⚙️ Settings, Updates, and Project Links
@@ -201,8 +201,8 @@ When launching an account, ChatGPT Forge resolves the launch source in this orde
 **ChatGPT Forge config, logs, and cache**:
 
 ```text
-%LOCALAPPDATA%/CodexForge/codex_forge.db
-%LOCALAPPDATA%/CodexForge/logs/launcher.log
+%LOCALAPPDATA%/ChatGPTForge/chatgpt_forge.db
+%LOCALAPPDATA%/ChatGPTForge/logs/launcher.log
 ```
 
 **Account profile storage**:
@@ -244,7 +244,7 @@ winget list ChatGPT -s msstore
 ### 🚀 Development
 
 ```bash
-cd /d/MyObject/CodexForge
+cd /d/MyObject/ChatGPTForge
 cd python
 uv sync --dev
 cd ..
@@ -286,7 +286,7 @@ yarn clean
 
 ```text
 resources/main.exe
-release/Codex-Forge-Setup-<version>.exe
+release/ChatGPT-Forge-Setup-<version>.exe
 ```
 
 ---

@@ -24,7 +24,7 @@ wheels = [
 ]
 
 [[package]]
-name = "codex-forge"
+name = "chatgpt-forge"
 version = "0.1.0"
 source = { editable = "." }
 

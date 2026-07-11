@@ -4,7 +4,7 @@
 </p>
 
 <p align="center">
-  <img src="src/renderer/src/assets/codex-forge-logo.png" alt="ChatGPT Forge Logo" width="150" />
+  <img src="src/renderer/src/assets/chatgpt-forge-logo.png" alt="ChatGPT Forge Logo" width="150" />
 </p>
 
 <h1 align="center">ChatGPT Forge</h1>
@@ -61,7 +61,7 @@
 | 👥 **账号资料管理**           | 支持搜索、筛选和排序账号，并通过账号检查器集中完成启动、关闭、额度刷新、详情查看、备份、改名和删除，数据默认保存在 `~/Documents/CodexProfiles`。       |
 | 🔑 **授权导入**               | 通过官方 Codex App Server 完成 ChatGPT 浏览器登录，也支持保存当前账号或导入本地 `auth.json`。                                                        |
 | 🚀 **一键切换启动**           | 账号切换模式下自动写入当前用户 `.codex` 目录并启动 ChatGPT。若检测到 ChatGPT 正在运行会提示先关闭。                                                  |
-| 📦 **多开隔离启动**           | 特色功能。多开隔离模式下为账号准备独立 `CodexHome`、`APPDATA`、`LOCALAPPDATA`、`--user-data-dir` 和完整 `CodexPortableApp` 副本，避免多账号互相覆盖。 |
+| 📦 **多开隔离启动**           | 特色功能。多开隔离模式下为账号准备独立 `CodexHome`、`APPDATA`、`LOCALAPPDATA`、`--user-data-dir` 和完整 `ChatGPTPortableApp` 副本，避免多账号互相覆盖。 |
 | 📊 **额度快照**               | 通过官方 Codex App Server 读取并缓存 ChatGPT 账号的剩余额度、重置时间与限制状态。                                                                    |
 | 🛠️ **TOML 编辑**              | 直接查看和保存当前生效的 `config.toml`，且在保存前自动进行文件备份。                                                                                  |
 | 📝 **指令模板（提示词注入）** | 本地保存 Markdown（标记语言）提示词模板，启用后复制到当前 ChatGPT 配置目录，并把 `config.toml` 的 `model_instructions_file` 指向该模板。              |
@@ -113,7 +113,7 @@ ChatGPT Forge 会读取当前生效的配置文件：
 在保存任何修改前，系统会自动校验 TOML 内容的合法性，并将旧文件安全备份至：
 
 ```text
-%LOCALAPPDATA%/CodexForge/backups/config-toml/
+%LOCALAPPDATA%/ChatGPTForge/backups/config-toml/
 ```
 
 ### 5. 📝 指令模板管理（提示词注入）
@@ -166,7 +166,7 @@ ChatGPT Forge 当前内置破除限制提示词模板：
 ```text
 CodexProfiles/<账号名>/CodexHome
 CodexProfiles/<账号名>/AppData
-CodexProfiles/<账号名>/CodexPortableApp
+CodexProfiles/<账号名>/ChatGPTPortableApp
 ```
 
 ### 7. ⚙️ 设置、更新与项目入口
@@ -202,8 +202,8 @@ CodexProfiles/<账号名>/CodexPortableApp
 **ChatGPT Forge 自身配置、日志与缓存**：
 
 ```text
-%LOCALAPPDATA%/CodexForge/codex_forge.db
-%LOCALAPPDATA%/CodexForge/logs/launcher.log
+%LOCALAPPDATA%/ChatGPTForge/chatgpt_forge.db
+%LOCALAPPDATA%/ChatGPTForge/logs/launcher.log
 ```
 
 **账号资料存储目录**：
@@ -245,7 +245,7 @@ winget list ChatGPT -s msstore
 ### 🚀 开发运行
 
 ```bash
-cd /d/MyObject/CodexForge
+cd /d/MyObject/ChatGPTForge
 cd python
 uv sync --dev
 cd ..
@@ -288,7 +288,7 @@ yarn clean
 
 ```text
 resources/main.exe
-release/Codex-Forge-Setup-<version>.exe
+release/ChatGPT-Forge-Setup-<version>.exe
 ```
 
 ---
