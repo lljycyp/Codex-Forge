@@ -12,7 +12,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { Edit3, FileText, Plus, Power, RefreshCw, Trash2 } from "lucide-react";
+import { Edit3, FileText, Plus, Power, Trash2 } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
 import type { AppState, InstructionTemplate, InstructionTemplateState, ProfileSummary } from "../types";
@@ -222,9 +222,6 @@ export function InstructionsPage({ appState, profiles }: InstructionsPageProps) 
           ) : null}
           <Button type="primary" icon={<Plus size={15} />} onClick={openCreate}>
             {t("新增模板")}
-          </Button>
-          <Button icon={<RefreshCw size={15} />} loading={loading} onClick={refresh}>
-            {t("刷新")}
           </Button>
           <Button
             icon={<Power size={15} />}

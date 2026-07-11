@@ -1,5 +1,5 @@
 appId: com.codex.forge
-productName: Codex Forge
+productName: ChatGPT Forge
 artifactName: Codex-Forge-Setup-${version}.${ext}
 compression: maximum
 electronLanguages:

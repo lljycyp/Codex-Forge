@@ -20,7 +20,7 @@ APP_SERVER_LOGIN_TIMEOUT_SECONDS = 300
 TEMP_DIRECTORY_CLEANUP_ATTEMPTS = 20
 CLIENT_INFO = {
     "name": "codex_forge",
-    "title": "Codex Forge",
+    "title": "ChatGPT Forge",
     "version": "0.2.0",
 }
 

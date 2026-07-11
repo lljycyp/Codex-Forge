@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Input, Modal, Select, Spin, Tooltip, message } from "antd";
-import { RefreshCw, Save } from "lucide-react";
+import { Save } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
 import type { AppState, ProfileSummary, TomlConfigState } from "../types";
@@ -135,9 +135,6 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
           ) : null}
           <Button type="primary" icon={<Save size={15} />} loading={saving} disabled={noProfile} onClick={save}>
             {t("保存")}
-          </Button>
-          <Button icon={<RefreshCw size={15} />} loading={loading} onClick={refresh}>
-            {t("刷新")}
           </Button>
           {multiMode ? (
             <Button loading={saving} disabled={noProfile} onClick={syncAll}>

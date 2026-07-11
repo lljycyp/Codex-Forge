@@ -1,8 +1,8 @@
 {
   "name": "codex-forge-desktop",
-  "version": "0.2.1",
-  "description": "Windows profile and multi-instance manager for Codex in the ChatGPT desktop app.",
-  "author": "Codex Forge",
+  "version": "0.2.2",
+  "description": "Windows profile and multi-instance manager for the ChatGPT desktop app.",
+  "author": "ChatGPT Forge",
   "private": true,
   "main": "out/main/index.js",
   "scripts": {

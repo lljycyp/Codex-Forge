@@ -137,7 +137,7 @@ function createMainWindow(): void {
     height: 760,
     minWidth: 980,
     minHeight: 640,
-    title: "Codex Forge",
+    title: "ChatGPT Forge",
     icon: getAppIconPath(),
     frame: false,
     titleBarStyle: "hidden",
@@ -179,7 +179,7 @@ function createTray(): void {
     return;
   }
   tray = new Tray(getAppIconPath());
-  tray.setToolTip("Codex Forge");
+  tray.setToolTip("ChatGPT Forge");
   void refreshTrayMenu();
   tray.on("click", showMainWindow);
   tray.on("double-click", showMainWindow);

@@ -84,7 +84,7 @@ async function createRelease(notes) {
   const params = {
     access_token: token,
     tag_name: tagName,
-    name: `Codex Forge ${version}`,
+    name: `ChatGPT Forge ${version}`,
     body: notes,
     target_commitish: "main",
     prerelease: "false",
@@ -100,7 +100,7 @@ async function updateRelease(id, notes) {
   const params = {
     access_token: token,
     tag_name: tagName,
-    name: `Codex Forge ${version}`,
+    name: `ChatGPT Forge ${version}`,
     body: notes,
     prerelease: "false",
   };

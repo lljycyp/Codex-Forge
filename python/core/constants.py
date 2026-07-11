@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 
-APP_NAME = "Codex Forge"
+APP_NAME = "ChatGPT Forge"
 ICON_FILE_NAME = "app.ico"
 _LOCAL_APPDATA = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
 CONFIG_DIR = _LOCAL_APPDATA / "CodexForge"

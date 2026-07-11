@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Layout, Modal, Progress, Typography, message } from "antd";
-import { Code2, FileText, Home, RefreshCw, Settings, ShieldCheck } from "lucide-react";
+import { Button, Layout, Modal, Progress, message } from "antd";
+import { Code2, FileText, Home, Settings, ShieldCheck } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
 import { getViewMeta } from "./constants/views";
 import { invokeLauncher } from "./api/launcher";
@@ -260,7 +260,7 @@ export default function App() {
   const currentView = useMemo(() => getViewMeta(t), [t])[activeView];
 
   useEffect(() => {
-    document.title = `${currentView.title} - Codex Forge`;
+    document.title = `${currentView.title} - ChatGPT Forge`;
   }, [currentView.title]);
 
   useEffect(() => {
@@ -319,16 +319,6 @@ export default function App() {
     void window.launcherApi.installUpdate();
   }, [t]);
 
-  const refreshButton = (
-    <Button
-      className="shrink-0 rounded-card border-shell-line font-bold text-[#344054] hover:!border-brand-600 hover:!text-brand-600"
-      icon={<RefreshCw size={16} />}
-      loading={refreshingView === activeView}
-      onClick={() => refresh(activeView)}
-    >
-      {t("刷新")}
-    </Button>
-  );
   const notes = updateNotes(updateEvent, language);
   const updateModalTitle =
     updateEvent?.status === "downloaded"
@@ -341,14 +331,10 @@ export default function App() {
     <>
       <AppLayout
         activeView={activeView}
-        currentView={currentView}
         launchMode={appState.launchMode}
         menuItems={menuItems}
         taskText={taskText}
         onChangeView={changeView}
-        topbarAction={
-          activeView === "home" || activeView === "profiles" ? refreshButton : null
-        }
       >
         <Content
           ref={contentRef}
@@ -358,12 +344,6 @@ export default function App() {
               : "m-0 min-h-0 flex-auto overflow-auto rounded-none border-0 bg-white px-[30px] py-[22px] shadow-none"
           }
         >
-          {activeView !== "toml" ? (
-            <div className="mb-4 hidden max-[960px]:block [&_h3]:!mb-1 [&_h3]:!leading-tight">
-              <Typography.Title level={3}>{currentView.title}</Typography.Title>
-              <Typography.Text type="secondary">{currentView.description}</Typography.Text>
-            </div>
-          ) : null}
           {activeView === "home" ? (
             <HomePage
               appState={appState}
@@ -413,7 +393,7 @@ export default function App() {
               </div>
             </div>
             <div className="grid gap-1">
-              <div className="text-xl font-extrabold text-slate-900">Codex Forge</div>
+              <div className="text-xl font-extrabold text-slate-900">ChatGPT Forge</div>
               <div className="text-sm font-semibold text-slate-500">{t("正在加载账号数据...")}</div>
             </div>
             <div className="h-1.5 w-[210px] overflow-hidden rounded-full bg-slate-200">
@@ -463,7 +443,7 @@ export default function App() {
                   {updateEvent.status === "downloaded"
                     ? t("更新包已下载完成，重启后将自动安装。")
                     : updateEvent.status === "downloading"
-                      ? t("更新包正在下载，下载期间可以继续使用 Codex Forge。")
+                      ? t("更新包正在下载，下载期间可以继续使用 ChatGPT Forge。")
                       : t("新版本已可用。你可以立即下载并查看进度，也可以让它在后台下载。")}
                 </div>
               </div>

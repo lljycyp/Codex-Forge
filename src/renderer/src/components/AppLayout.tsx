@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
-import { Layout, Typography } from "antd";
+import { Layout } from "antd";
 import { Minus, Square, X } from "lucide-react";
 import { useI18n } from "../i18n";
-import type { AppState, ViewKey, ViewMeta } from "../types";
+import type { AppState, ViewKey } from "../types";
 import codexForgeLogo from "../assets/codex-forge-logo.png";
 
-const { Header, Sider } = Layout;
+const { Sider } = Layout;
 
 const windowButtonClass =
   "flex h-12 w-[46px] items-center justify-center border-0 bg-transparent text-[#263647] transition-colors duration-200 hover:bg-white/30 hover:text-slate-900";
@@ -21,22 +21,18 @@ type MenuItem = {
 
 type AppLayoutProps = {
   activeView: ViewKey;
-  currentView: ViewMeta;
   launchMode: AppState["launchMode"];
   menuItems: MenuItem[];
   taskText: string;
-  topbarAction: ReactNode;
   children: ReactNode;
   onChangeView: (view: ViewKey) => void;
 };
 
 export function AppLayout({
   activeView,
-  currentView,
   launchMode,
   menuItems,
   taskText,
-  topbarAction,
   children,
   onChangeView,
 }: AppLayoutProps) {
@@ -56,7 +52,7 @@ export function AppLayout({
             </div>
             <div className="ml-3.5 flex min-w-0 flex-col gap-0.5">
               <span className="whitespace-nowrap text-[16px] font-extrabold tracking-wide text-white">
-                Codex Forge
+                ChatGPT Forge
               </span>
               <div className="flex items-center gap-2 text-[11px] font-medium text-white/80">
                 <span>{t("多开")}</span>
@@ -111,17 +107,12 @@ export function AppLayout({
           <LaunchModeCard launchMode={launchMode} />
         </Sider>
         <Layout className="relative mb-3.5 mr-3.5 h-[calc(100%-14px)] min-w-0 overflow-hidden rounded-panel bg-shell-surface shadow-panel">
-          <Header className="flex h-[88px] flex-none items-center justify-between gap-4 overflow-visible border-b border-[#e4ebf3] !bg-white px-[30px] pb-4 pt-5 leading-normal [&>*]:[-webkit-app-region:no-drag]">
-            <PageHeading currentView={currentView} />
-            {topbarAction}
-          </Header>
           {children}
         </Layout>
       </Layout>
     </Layout>
   );
 }
-
 function LaunchModeCard({ launchMode }: { launchMode: AppState["launchMode"] }) {
   const { t } = useI18n();
   const isMulti = launchMode === "multi";
@@ -157,16 +148,5 @@ function NavButton({
       {item.icon}
       <span>{item.label}</span>
     </button>
-  );
-}
-
-function PageHeading({ currentView }: { currentView: ViewMeta }) {
-  return (
-    <div className="flex min-w-0 flex-col justify-center gap-0.5 max-[960px]:hidden [&_h2]:!mb-1 [&_h2]:!text-2xl [&_h2]:!font-extrabold [&_h2]:!leading-tight [&_h2]:!tracking-normal">
-      <Typography.Title level={2}>{currentView.title}</Typography.Title>
-      <Typography.Text type="secondary">
-        {currentView.description}
-      </Typography.Text>
-    </div>
   );
 }
