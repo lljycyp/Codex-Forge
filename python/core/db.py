@@ -2,6 +2,7 @@ import contextlib
 import json
 import sqlite3
 import time
+import uuid
 
 from core.constants import DB_PATH
 
@@ -31,7 +32,8 @@ def init_db(connection):
         );
 
         CREATE TABLE IF NOT EXISTS profiles (
-          name TEXT PRIMARY KEY,
+          id TEXT PRIMARY KEY,
+          display_name TEXT NOT NULL UNIQUE,
           dir_name TEXT NOT NULL UNIQUE,
           sort_order INTEGER NOT NULL DEFAULT 0,
           created_at INTEGER NOT NULL,
@@ -39,12 +41,11 @@ def init_db(connection):
         );
 
         CREATE TABLE IF NOT EXISTS profile_usage (
-          profile_name TEXT PRIMARY KEY,
+          profile_id TEXT PRIMARY KEY,
           payload_json TEXT NOT NULL,
           fetched_at REAL,
           updated_at INTEGER NOT NULL,
-          FOREIGN KEY (profile_name) REFERENCES profiles(name)
-            ON DELETE CASCADE ON UPDATE CASCADE
+          FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS instruction_templates (
@@ -61,7 +62,6 @@ def init_db(connection):
         """
     )
 
-
 def load_config(defaults):
     with connect() as connection:
         settings = {
@@ -69,8 +69,8 @@ def load_config(defaults):
             for row in connection.execute("SELECT key, value_json FROM settings")
         }
         profiles = [
-            row["name"]
-            for row in connection.execute("SELECT name FROM profiles ORDER BY sort_order, name")
+            row["display_name"]
+            for row in connection.execute("SELECT display_name FROM profiles ORDER BY sort_order, display_name")
         ]
     return {**defaults, **settings, "profiles": profiles}
 
@@ -94,21 +94,22 @@ def save_config(config):
             )
 
         for sort_order, name in enumerate(profiles):
+            profile_id = uuid.uuid4().hex
             connection.execute(
                 """
-                INSERT INTO profiles (name, dir_name, sort_order, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(name) DO UPDATE SET
+                INSERT INTO profiles (id, display_name, dir_name, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(display_name) DO UPDATE SET
                   sort_order = excluded.sort_order,
                   updated_at = excluded.updated_at
                 """,
-                (name, name, sort_order, now, now),
+                (profile_id, name, profile_id, sort_order, now, now),
             )
 
         if profiles:
             placeholders = ",".join("?" for _ in profiles)
             connection.execute(
-                f"DELETE FROM profiles WHERE name NOT IN ({placeholders})",
+                f"DELETE FROM profiles WHERE display_name NOT IN ({placeholders})",
                 profiles,
             )
         else:
@@ -118,8 +119,10 @@ def save_config(config):
 def load_usage_cache():
     with connect() as connection:
         return {
-            row["profile_name"]: json.loads(row["payload_json"])
-            for row in connection.execute("SELECT profile_name, payload_json FROM profile_usage")
+            row["display_name"]: json.loads(row["payload_json"])
+            for row in connection.execute(
+                "SELECT p.display_name, u.payload_json FROM profile_usage u JOIN profiles p ON p.id = u.profile_id"
+            )
         }
 
 
@@ -127,36 +130,62 @@ def save_usage_cache(cache):
     now = int(time.time())
     with connect() as connection:
         for profile_name, usage in cache.items():
-            connection.execute(
-                """
-                INSERT INTO profiles (name, dir_name, sort_order, created_at, updated_at)
-                VALUES (?, ?, 0, ?, ?)
-                ON CONFLICT(name) DO NOTHING
-                """,
-                (profile_name, profile_name, now, now),
-            )
+            profile = connection.execute(
+                "SELECT id FROM profiles WHERE display_name = ?", (profile_name,)
+            ).fetchone()
+            if not profile:
+                continue
             fetched_at = usage.get("fetchedAt") if isinstance(usage, dict) else None
             connection.execute(
                 """
-                INSERT INTO profile_usage (profile_name, payload_json, fetched_at, updated_at)
+                INSERT INTO profile_usage (profile_id, payload_json, fetched_at, updated_at)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(profile_name) DO UPDATE SET
+                ON CONFLICT(profile_id) DO UPDATE SET
                   payload_json = excluded.payload_json,
                   fetched_at = excluded.fetched_at,
                   updated_at = excluded.updated_at
                 """,
-                (profile_name, json.dumps(usage, ensure_ascii=False), fetched_at, now),
+                (profile["id"], json.dumps(usage, ensure_ascii=False), fetched_at, now),
             )
 
         names = list(cache)
         if names:
             placeholders = ",".join("?" for _ in names)
             connection.execute(
-                f"DELETE FROM profile_usage WHERE profile_name NOT IN ({placeholders})",
+                f"DELETE FROM profile_usage WHERE profile_id NOT IN (SELECT id FROM profiles WHERE display_name IN ({placeholders}))",
                 names,
             )
         else:
             connection.execute("DELETE FROM profile_usage")
+
+
+def get_profile(profile_name):
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT id, display_name, dir_name FROM profiles WHERE display_name = ?",
+            (profile_name,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_profile_records():
+    with connect() as connection:
+        return [
+            dict(row)
+            for row in connection.execute(
+                "SELECT id, display_name, dir_name FROM profiles ORDER BY sort_order, display_name"
+            )
+        ]
+
+
+def rename_profile(old_name, new_name):
+    with connect() as connection:
+        cursor = connection.execute(
+            "UPDATE profiles SET display_name = ?, updated_at = ? WHERE display_name = ?",
+            (new_name, int(time.time()), old_name),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("账号不存在")
 
 
 def load_instruction_templates(scope_key):

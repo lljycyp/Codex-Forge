@@ -423,7 +423,7 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
           </div>
         </section>
 
-        <aside className="sticky top-0 overflow-hidden rounded-panel border border-shell-line bg-white shadow-[0_10px_28px_rgba(15,23,42,0.045)] max-[1050px]:static" aria-label={t("账号检查器")}>
+        <aside className="sticky top-0 min-w-0 overflow-hidden rounded-panel border border-shell-line bg-white shadow-[0_10px_28px_rgba(15,23,42,0.045)] max-[1050px]:static" aria-label={t("账号检查器")}>
           <ProfileInspector
             profile={selectedProfile}
             launchMode={launchMode}
@@ -739,7 +739,7 @@ function ProfileInspector({
   const openProfilePath = () => onOpenPath(profile.profileDir);
 
   return (
-    <div className="bg-white">
+    <div className="min-w-0 bg-white">
       <div className="border-b border-slate-100 px-4 pb-3.5 pt-4">
         <div className="min-w-0">
           <div className="text-[11px] font-bold tracking-[0.08em] text-slate-400">{t("账号检查器")}</div>
@@ -758,7 +758,7 @@ function ProfileInspector({
       </div>
 
       <Tabs
-        className="px-4 [&_.ant-tabs-nav]:!mb-3"
+        className="min-w-0 px-4 [&_.ant-tabs-nav]:!mb-3"
         defaultActiveKey="overview"
         items={[
           {
@@ -794,7 +794,7 @@ function ProfileInspector({
                 <InspectorRow label={t("账号目录")} value={maskPath(profile.profileDir, privacyMode)} />
                 <InspectorRow label="auth.json" value={profile.authExists ? t("存在") : t("缺失")} />
                 <InspectorRow label="config.toml" value={profile.configExists ? t("存在") : t("缺失")} />
-                {launchMode === "multi" ? <InspectorRow label={t("程序副本")} value={profile.portableCodexExists ? profile.portableCodexSizeText || t("存在") : t("待创建")} /> : null}
+                {launchMode === "multi" ? <InspectorRow label={t("共享客户端副本")} value={profile.portableCodexExists ? profile.portableCodexSizeText || t("存在") : t("待创建")} /> : null}
                 <Button icon={<FolderOpen size={14} />} onClick={openProfilePath}>{t("打开目录")}</Button>
                 <Button icon={<Info size={14} />} loading={detailLoading} onClick={() => onOpenDetail(profile)}>{t("查看完整详情")}</Button>
               </div>
@@ -829,7 +829,7 @@ function InspectorStat({ label, value }: { label: string; value: string }) {
 
 function InspectorRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[8px] border border-slate-100 bg-slate-50/70 px-3 py-2.5">
+    <div className="min-w-0 rounded-[8px] border border-slate-100 bg-slate-50/70 px-3 py-2.5">
       <div className="text-[10.5px] font-semibold text-slate-400">{label}</div>
       <Tooltip title={value}><div className="mt-1 truncate font-mono text-[11.5px] font-medium text-slate-600">{value}</div></Tooltip>
     </div>
@@ -924,7 +924,7 @@ function ProfileDetailPanel({
           />
           <DetailMetric
             icon={<Archive size={17} />}
-            label={t("程序副本")}
+            label={t("共享客户端副本")}
             value={detail.portableCodexExists ? detail.portableCodexSizeText || "0 B" : t("待创建")}
             tone={detail.portableCodexExists ? "green" : "slate"}
           />
@@ -996,7 +996,7 @@ function ProfileDetailPanel({
                       <PathRow label="CodexHome" path={detail.codexHome} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
                     ) : null}
                     {detail.portableCodexPath ? (
-                      <PathRow label={t("程序副本")} path={detail.portableCodexPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
+                      <PathRow label={t("共享客户端副本")} path={detail.portableCodexPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
                     ) : null}
                   </div>
                 ),

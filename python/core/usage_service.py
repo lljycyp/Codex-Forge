@@ -1,13 +1,12 @@
 import contextlib
 import os
-import shutil
 import time
 from pathlib import Path
 
 from core import db
 from core.app_server_service import read_account_and_rate_limits
 from core.constants import DB_PATH
-from core.profile_service import get_active_config_path, resolve_profile_auth_path
+from core.profile_service import get_active_config_path, get_profile_auth_path, sync_codex_home_to_profile
 
 
 def load_usage_cache():
@@ -111,12 +110,12 @@ def _build_profile_usage(profile_dir, share_system_config=False, use_codex_home_
 
 
 def _resolve_usage_auth_path(profile_dir, use_codex_home_auth=False):
-    """多开模式优先读取 ChatGPT 进程使用的 CODEX_HOME/auth.json。"""
+    """多开模式使用运行副本，其余场景使用账号唯一持久认证。"""
     profile_dir = Path(profile_dir)
     codex_home_auth_path = profile_dir / "CodexHome" / "auth.json"
     if use_codex_home_auth and codex_home_auth_path.exists():
         return codex_home_auth_path
-    return resolve_profile_auth_path(profile_dir)
+    return get_profile_auth_path(profile_dir)
 
 
 def _resolve_usage_config_path(profile_dir, share_system_config=False, use_codex_home_auth=False):
@@ -131,10 +130,7 @@ def _sync_usage_auth_to_profile(profile_dir, auth_path, use_codex_home_auth=Fals
     """把 App Server 刷新后的多开认证同步回账号主资料。"""
     if not use_codex_home_auth:
         return
-    auth_path = Path(auth_path)
-    profile_auth_path = Path(profile_dir) / "auth.json"
-    if auth_path.exists() and auth_path != profile_auth_path:
-        shutil.copy2(auth_path, profile_auth_path)
+    sync_codex_home_to_profile(profile_dir)
 
 
 def _map_app_server_usage(account, payload):

@@ -27,6 +27,12 @@ contextBridge.exposeInMainWorld("launcherApi", {
   downloadUpdate: () => ipcRenderer.invoke("app:update-download"),
   installUpdate: () => ipcRenderer.invoke("app:update-install"),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
+  isWindowMaximized: () => ipcRenderer.invoke("window:is-maximized"),
+  onWindowMaximizedChanged: (callback: (maximized: boolean) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, maximized: boolean) => callback(maximized);
+    ipcRenderer.on("window:maximized-changed", listener);
+    return () => ipcRenderer.removeListener("window:maximized-changed", listener);
+  },
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close")
 });

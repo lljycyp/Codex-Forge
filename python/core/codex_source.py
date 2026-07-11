@@ -223,7 +223,7 @@ def get_file_version(path):
 
 
 def read_source_signature(target_app_dir):
-    """读取账号程序副本记录的源程序版本信息。"""
+    """读取共享客户端副本记录的安装源版本信息。"""
     version_path = Path(target_app_dir) / SOURCE_VERSION_FILE_NAME
     if not version_path.exists():
         return {}
@@ -234,13 +234,13 @@ def read_source_signature(target_app_dir):
 
 
 def write_source_signature(target_app_dir, signature):
-    """写入账号程序副本对应的源程序版本信息。"""
+    """写入共享客户端副本对应的安装源版本信息。"""
     version_path = Path(target_app_dir) / SOURCE_VERSION_FILE_NAME
     version_path.write_text(json.dumps(signature, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def portable_app_needs_update(source_codex_path, target_app_dir):
-    """判断账号程序副本是否缺失或落后于源 Codex。"""
+    """判断共享客户端副本是否缺失或落后于安装源。"""
     source_codex_path = Path(source_codex_path)
     target_app_dir = Path(target_app_dir)
     target_codex_path = target_app_dir / source_codex_path.name
@@ -264,7 +264,7 @@ def portable_app_needs_update(source_codex_path, target_app_dir):
 
 
 def prepare_portable_codex_path(source_codex_path, profile_dir, allow_update=True, progress_callback=None):
-    """通过临时目录原子准备账号独立 ChatGPT 程序副本。"""
+    """从安装源原子复制多开账号共用的 ChatGPT 客户端副本。"""
     source_codex_path = Path(source_codex_path)
     source_app_dir = source_codex_path.parent
     profile_dir = Path(profile_dir)

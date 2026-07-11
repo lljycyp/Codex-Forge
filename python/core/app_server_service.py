@@ -11,6 +11,7 @@ from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 
+from core.constants import PORTABLE_APP_DIR_NAME
 from core.path_utils import remove_readonly_path
 from core.profile_service import sanitize_profile_config_text, write_profile_auth_json
 
@@ -108,7 +109,8 @@ def find_codex_cli_path(profile_dir=None):
             pass
 
     if profile_dir:
-        candidates.append(Path(profile_dir) / "ChatGPTPortableApp" / "resources" / "codex.exe")
+        profile_dir = Path(profile_dir)
+        candidates.append(profile_dir.parent / ".shared" / PORTABLE_APP_DIR_NAME / "resources" / "codex.exe")
 
     command_path = shutil.which("codex")
     if command_path:

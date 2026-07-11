@@ -66,9 +66,8 @@ def ensure_profile_env_file(codex_home_dir):
 
 def prepare_profile_codex_home(profile_dir, share_system_config=False):
     """把账号资料同步到多开模式使用的 CodexHome。"""
-    migrate_legacy_profile_files(profile_dir)
     profile_dir = Path(profile_dir)
-    source_auth_path = resolve_profile_auth_path(profile_dir)
+    source_auth_path = get_profile_auth_path(profile_dir)
     if not source_auth_path.exists():
         raise FileNotFoundError("账号认证文件不存在，无法启动")
 
@@ -87,34 +86,16 @@ def sync_codex_home_to_profile(profile_dir, share_system_config=False):
     codex_home_dir = profile_dir / "CodexHome"
     auth_path = codex_home_dir / "auth.json"
     if auth_path.exists():
-        shutil.copy2(auth_path, profile_dir / "auth.json")
-
-
-def migrate_legacy_profile_files(profile_dir):
-    """把旧版外层 config.toml 收敛到 CodexHome/config.toml。"""
-    profile_dir = Path(profile_dir)
-    legacy_auth_path = profile_dir / "CodexHome" / "auth.json"
-    root_auth_path = profile_dir / "auth.json"
-    root_config_path = profile_dir / "config.toml"
-    runtime_config_path = profile_dir / "CodexHome" / "config.toml"
-    changed = False
-
-    if legacy_auth_path.exists() and not root_auth_path.exists():
-        shutil.copy2(legacy_auth_path, root_auth_path)
-        changed = True
-    if root_config_path.exists():
-        runtime_config_path.parent.mkdir(parents=True, exist_ok=True)
-        if not runtime_config_path.exists():
-            shutil.copy2(root_config_path, runtime_config_path)
-        root_config_path.unlink()
-        changed = True
-    return changed
+        try:
+            auth_json = json.loads(auth_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("运行时 auth.json 内容不是有效的 JSON") from exc
+        write_profile_auth_json(get_profile_auth_path(profile_dir), auth_json)
 
 
 def ensure_profile_config_path(profile_dir):
     """确保账号级配置只存在于 CodexHome/config.toml。"""
     profile_dir = Path(profile_dir)
-    migrate_legacy_profile_files(profile_dir)
     config_path = resolve_profile_config_path(profile_dir)
     if config_path.exists():
         return config_path
@@ -177,8 +158,7 @@ def sanitize_profile_config_text(text):
 
 def apply_profile(profile_dir, share_system_config=False):
     """把指定账号资料写入当前 Codex 活动配置。"""
-    migrate_legacy_profile_files(profile_dir)
-    source_auth_path = resolve_profile_auth_path(profile_dir)
+    source_auth_path = get_profile_auth_path(profile_dir)
     if not source_auth_path.exists():
         raise FileNotFoundError("账号认证文件不存在，无法切换")
 
@@ -225,8 +205,7 @@ def backup_active_files(active_dir):
 
 def get_profile_status(profile_dir, share_system_config=False):
     """检查账号资料是否完整。"""
-    migrate_legacy_profile_files(profile_dir)
-    auth_path = resolve_profile_auth_path(profile_dir)
+    auth_path = get_profile_auth_path(profile_dir)
     config_path = resolve_profile_config_path(profile_dir)
     errors = []
     warnings = []
@@ -246,13 +225,9 @@ def get_profile_status(profile_dir, share_system_config=False):
     }
 
 
-def resolve_profile_auth_path(profile_dir):
-    """兼容新版根目录认证文件和旧版 CodexHome 认证文件。"""
-    profile_dir = Path(profile_dir)
-    root_auth_path = profile_dir / "auth.json"
-    if root_auth_path.exists():
-        return root_auth_path
-    return profile_dir / "CodexHome" / "auth.json"
+def get_profile_auth_path(profile_dir):
+    """返回账号唯一持久认证文件。"""
+    return Path(profile_dir) / "auth.json"
 
 
 def resolve_profile_config_path(profile_dir):

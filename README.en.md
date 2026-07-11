@@ -61,7 +61,7 @@
 | 👥 **Profile management** | Search, filter, and sort accounts, then use the profile inspector to launch or close an account, refresh usage, view details, export a backup, rename, or delete it. Data is stored in `~/Documents/CodexProfiles` by default. |
 | 🔑 **Auth import** | Uses the official Codex App Server for ChatGPT browser sign-in, and supports saving the current account or importing `auth.json`. |
 | 🚀 **One-click switch and launch** | Writes the selected account into the current user's `.codex` directory and launches ChatGPT. If ChatGPT is running, the app prompts you to close it first. |
-| 📦 **Isolated multi-instance launch** | Featured capability. In multi-instance mode, prepares a per-account `CodexHome`, `APPDATA`, `LOCALAPPDATA`, `--user-data-dir`, and full `ChatGPTPortableApp` copy to avoid accounts overwriting each other. |
+| 📦 **Isolated multi-instance launch** | Featured capability. Creates one shared copy from the installed ChatGPT client. All accounts use that copy with separate `CodexHome`, `APPDATA`, `LOCALAPPDATA`, and `--user-data-dir` environments. |
 | 📊 **Usage snapshots** | Uses the official Codex App Server to read and cache remaining ChatGPT usage, reset times, and limit status. |
 | 🛠️ **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
 | 📝 **Instruction templates (prompt injection)** | Saves Markdown prompt templates locally. Enabling a template copies it into the active ChatGPT config directory and points `model_instructions_file` in `config.toml` to that template. |
@@ -78,7 +78,7 @@ The home page brings together the current workspace, launch mode, selected accou
 The profile management page supports account search, status filters, and multiple sort orders. After you select an account, the profile inspector groups its information and actions into:
 
 - **Overview**: Plan, runtime and authentication status, five-hour and weekly remaining usage, and reset times.
-- **Runtime**: Profile directory, authentication file, configuration file, and multi-instance app-copy status.
+- **Runtime**: Profile directory, authentication file, configuration file, and shared client-copy status.
 - **Maintenance**: Export backup, rename, open directory, and delete account.
 
 ### 2. 🛡️ Isolated Account Profiles
@@ -86,8 +86,8 @@ The profile management page supports account search, status filters, and multipl
 Each account profile stores its own login credentials and config:
 
 ```text
-~/Documents/CodexProfiles/<profile-name>/auth.json
-~/Documents/CodexProfiles/<profile-name>/CodexHome/config.toml
+~/Documents/CodexProfiles/<profile-id>/auth.json
+~/Documents/CodexProfiles/<profile-id>/CodexHome/config.toml
 ```
 
 Account-switching mode only replaces `auth.json`; global ChatGPT settings such as model and proxy always use the system `~/.codex/config.toml`. Isolated multi-instance mode uses each account's own `CodexHome/config.toml`.
@@ -158,14 +158,14 @@ This means you can switch between default instructions, team rules, and a less r
 In addition to the default account-switching mode, ChatGPT Forge's featured launch capability is isolated multi-instance mode:
 
 - **Account-switching mode**: The default mode. Switching accounts writes into the system `~/.codex`; one ChatGPT client is recommended.
-- **Isolated multi-instance mode**: Each account uses an isolated environment and a full ChatGPT client copy, allowing multiple ChatGPT clients to run at once.
+- **Isolated multi-instance mode**: On first launch, Forge creates one shared copy from the installed ChatGPT client. All accounts use that copy with separate configuration and runtime data.
 
-Isolated multi-instance mode separates `CodexHome`, `APPDATA`, `LOCALAPPDATA`, and the browser `--user-data-dir`. Each account directory also contains:
+Isolated multi-instance mode separates `CodexHome`, `APPDATA`, `LOCALAPPDATA`, and the browser `--user-data-dir`. The copied shared client is stored once under the profile root:
 
 ```text
-CodexProfiles/<account>/CodexHome
-CodexProfiles/<account>/AppData
-CodexProfiles/<account>/ChatGPTPortableApp
+CodexProfiles/.shared/ChatGPTPortableApp
+CodexProfiles/<profile-id>/CodexHome
+CodexProfiles/<profile-id>/AppData
 ```
 
 ### 7. ⚙️ Settings, Updates, and Project Links
@@ -173,7 +173,7 @@ CodexProfiles/<account>/ChatGPTPortableApp
 The Settings page centralizes ChatGPT Forge's own configuration:
 
 - **Account profile location**: Change the account profile root. The app prompts you to close running ChatGPT instances before migration.
-- **Launch mode**: Switch between account-switching mode and isolated multi-instance mode. Multi-instance mode warns about disk usage.
+- **Launch mode**: Switch between account-switching and isolated multi-instance mode. The first multi-instance launch copies one shared client from the installed app.
 - **Auto start**: Start ChatGPT Forge automatically after Windows sign-in.
 - **Language switching**: Switch between Chinese and English UI.
 - **Version updates**: Show the current version and check for updates manually. When a new version is available, you can view release notes, download in the background, and restart to install.

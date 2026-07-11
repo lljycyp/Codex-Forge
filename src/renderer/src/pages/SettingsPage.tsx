@@ -159,8 +159,8 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
       Modal.confirm({
         title: t("切换到多开隔离模式"),
         content: appState.runningCount > 0
-          ? (language === "en-US" ? "ChatGPT is running. Close it first if possible. Isolated multi-instance mode copies the full ChatGPT client for each account, so disk usage is roughly the client size times account count." : "检测到 ChatGPT 正在运行。建议先关闭当前 ChatGPT；多开隔离模式会为每个账号复制一整份 ChatGPT 客户端，磁盘占用约等于客户端大小 × 多开账号数。")
-          : (language === "en-US" ? "Isolated multi-instance mode copies the full ChatGPT client for each account, so disk usage is roughly the client size times account count." : "多开隔离模式会为每个账号复制一整份 ChatGPT 客户端，磁盘占用约等于客户端大小 × 多开账号数。"),
+          ? (language === "en-US" ? "ChatGPT is running. Close it first if possible. Isolated multi-instance mode creates one shared copy from the installed ChatGPT client, then keeps each account's configuration and runtime data separate." : "检测到 ChatGPT 正在运行。建议先关闭当前 ChatGPT；多开隔离模式会从系统已安装的 ChatGPT 客户端复制出一份共享副本，并分别隔离每个账号的配置和运行数据。")
+          : (language === "en-US" ? "Isolated multi-instance mode creates one shared copy from the installed ChatGPT client, then keeps each account's configuration and runtime data separate." : "多开隔离模式会从系统已安装的 ChatGPT 客户端复制出一份共享副本，并分别隔离每个账号的配置和运行数据。"),
         okText: t("切换"),
         cancelText: t("取消"),
         onOk: () => saveLaunchMode(mode),
@@ -262,8 +262,8 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
                 className="mt-3"
                 type="warning"
                 showIcon
-                message={t("多开模式会复制完整 ChatGPT 客户端")}
-                description={t("如果账号较多，磁盘占用会随账号数量增长。运行中的多开实例需要先关闭，才能切回账号切换模式。")}
+                message={t("多开账号共用一份 ChatGPT 客户端副本")}
+                description={t("首次启动多开账号时会从系统已安装的客户端复制一份共享副本，新增账号不会重复复制。运行中的多开实例需要先关闭，才能切回账号切换模式。")}
               />
             ) : null}
           </div>

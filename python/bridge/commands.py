@@ -9,6 +9,7 @@ import time
 import zipfile
 from pathlib import Path
 
+from core import db
 from core.codex_source import (
     find_running_codex_path,
     find_windowsapps_codex_path,
@@ -36,7 +37,7 @@ from core.profile_service import (
     import_active_profile,
     ensure_profile_config_path,
     prepare_profile_codex_home,
-    resolve_profile_auth_path,
+    get_profile_auth_path,
     sync_codex_home_to_profile,
 )
 from core.instruction_service import (
@@ -53,7 +54,6 @@ from core.usage_service import (
     refresh_all_profile_usage as refresh_all_profile_usage_cache,
     refresh_profile_usage as refresh_profile_usage_cache,
     remove_cached_usage,
-    rename_cached_usage,
 )
 
 
@@ -158,11 +158,18 @@ def create_profile(payload):
     """新增账号，把当前默认 Codex 账号资料保存到账号目录。"""
     config = load_config()
     name = _validate_profile_name(config, payload.get("name", ""))
-    profile_dir = _get_profile_dir(config, name)
-    logger.info("账号创建开始 名称=%s 目录=%s", name, profile_dir)
-    import_active_profile(profile_dir)
     profiles = config.setdefault("profiles", [])
     profiles.append(name)
+    save_config(config)
+    profile_dir = _get_profile_dir(config, name)
+    logger.info("账号创建开始 名称=%s 目录=%s", name, profile_dir)
+    try:
+        import_active_profile(profile_dir)
+    except Exception:
+        _remove_path_if_inside_profile_root(config, profile_dir)
+        profiles.remove(name)
+        save_config(config)
+        raise
     config["active_profile"] = name
     save_config(config)
     logger.info("账号创建成功 名称=%s 目录=%s", name, profile_dir)
@@ -175,10 +182,17 @@ def create_oauth_profile(payload):
     name = _validate_profile_name(config, payload.get("name", ""))
     logger.info("浏览器授权账号创建开始 名称=%s", name)
     auth_json = login_with_browser()
-    profile_dir = _get_profile_dir(config, name)
-    import_auth_json_profile(profile_dir, auth_json)
     profiles = config.setdefault("profiles", [])
     profiles.append(name)
+    save_config(config)
+    profile_dir = _get_profile_dir(config, name)
+    try:
+        import_auth_json_profile(profile_dir, auth_json)
+    except Exception:
+        _remove_path_if_inside_profile_root(config, profile_dir)
+        profiles.remove(name)
+        save_config(config)
+        raise
     save_config(config)
     logger.info("浏览器授权账号创建成功 名称=%s 目录=%s", name, profile_dir)
     return _build_profile_summary(config, name, read_running_codex_commands())
@@ -198,11 +212,17 @@ def create_auth_file_profile(payload):
         raise ValueError("auth.json 内容不是有效的 JSON") from exc
     if not auth_kind(auth_json):
         raise ValueError("auth.json 内容不是有效的 ChatGPT 或 API Key 登录信息")
-    profile_dir = _get_profile_dir(config, name)
-    import_auth_json_profile(profile_dir, auth_json)
     profiles = config.setdefault("profiles", [])
     profiles.append(name)
     save_config(config)
+    profile_dir = _get_profile_dir(config, name)
+    try:
+        import_auth_json_profile(profile_dir, auth_json)
+    except Exception:
+        _remove_path_if_inside_profile_root(config, profile_dir)
+        profiles.remove(name)
+        save_config(config)
+        raise
     logger.info("本地认证文件账号创建成功 名称=%s 目录=%s", name, profile_dir)
     return _build_profile_summary(config, name, read_running_codex_commands())
 
@@ -217,17 +237,11 @@ def rename_profile(payload):
     logger.info("账号重命名开始 原名称=%s 新名称=%s", old_name, new_name)
     if _is_profile_running(config, old_name):
         raise RuntimeError("该账号正在运行，请先关闭后再改名")
-    old_dir = _get_profile_dir(config, old_name)
-    new_dir = _get_profile_dir(config, new_name)
-    if old_dir.exists() and old_dir != new_dir:
-        if new_dir.exists():
-            raise FileExistsError("目标账号资料目录已存在，请换一个账号名称")
-        _move_profile_dir(config, old_dir, new_dir)
     profiles = config.setdefault("profiles", [])
     profiles[profiles.index(old_name)] = new_name
     if config.get("active_profile") == old_name:
         config["active_profile"] = new_name
-    rename_cached_usage(old_name, new_name)
+    db.rename_profile(old_name, new_name)
     save_config(config)
     logger.info("账号重命名成功 原名称=%s 新名称=%s", old_name, new_name)
     return _build_profile_summary(config, new_name, read_running_codex_commands())
@@ -306,7 +320,6 @@ def _iter_profile_backup_files(profile_dir):
     profile_dir = Path(profile_dir)
     direct_files = (
         profile_dir / "auth.json",
-        profile_dir / "CodexHome" / "auth.json",
         profile_dir / "CodexHome" / "config.toml",
         profile_dir / "CodexHome" / ".env",
     )
@@ -340,6 +353,9 @@ def import_profile_backup(payload):
     with zipfile.ZipFile(backup_path, "r") as archive:
         meta = _read_backup_meta(archive)
         name = _validate_profile_name(config, payload.get("name") or meta.get("name") or backup_path.stem)
+        profiles = config.setdefault("profiles", [])
+        profiles.append(name)
+        save_config(config)
         profile_dir = _get_profile_dir(config, name)
         profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT).resolve()
         profile_dir_resolved = profile_dir.resolve()
@@ -352,11 +368,11 @@ def import_profile_backup(payload):
             archive.extractall(profile_dir)
         except Exception:
             shutil.rmtree(profile_dir, onerror=remove_readonly_path)
+            profiles.remove(name)
+            save_config(config)
             raise
     (profile_dir / "chatgpt-forge-profile.json").unlink(missing_ok=True)
     ensure_profile_config_path(profile_dir)
-    profiles = config.setdefault("profiles", [])
-    profiles.append(name)
     save_config(config)
     return _build_profile_summary(config, name, read_running_codex_commands())
 
@@ -416,7 +432,7 @@ def _launch_profile_multi(config, name):
     prepare_profile_codex_home(profile_dir)
     portable_codex_path = prepare_portable_codex_path(
         codex_path,
-        profile_dir,
+        _get_shared_app_root(config),
         progress_callback=lambda percent, copied, total: _emit_backend_progress(
             {
                 "operation": "portable-client-copy",
@@ -694,7 +710,7 @@ def _sync_active_auth_to_profile(config, profile_name):
     if not profile_name or profile_name != config.get("active_profile"):
         return
     profile_dir = _get_profile_dir(config, profile_name)
-    profile_auth_path = resolve_profile_auth_path(profile_dir)
+    profile_auth_path = get_profile_auth_path(profile_dir)
     active_auth_path = get_active_auth_path()
     if not active_auth_path.exists() or not profile_auth_path.exists():
         return
@@ -794,6 +810,14 @@ def get_diagnostics(_payload=None):
     _normalize_profile_configs(config)
     profiles = config.get("profiles", [])
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
+    profile_records = db.list_profile_records()
+    expected_dirs = {str((profile_root / item["dir_name"]).resolve()) for item in profile_records}
+    expected_dirs.add(str(_get_shared_app_root(config).resolve()))
+    actual_dirs = (
+        {str(path.resolve()) for path in profile_root.iterdir() if path.is_dir()}
+        if profile_root.is_dir()
+        else set()
+    )
     running_commands = read_running_codex_commands()
     profile_items = []
     for profile_name in profiles:
@@ -832,6 +856,8 @@ def get_diagnostics(_payload=None):
             "activeProfile": config.get("active_profile", ""),
             "shareSystemConfig": True,
             "profileCount": len(profiles),
+            "missingProfileDirs": sorted(expected_dirs - actual_dirs),
+            "orphanProfileDirs": sorted(actual_dirs - expected_dirs),
         },
         "profiles": profile_items,
     }
@@ -906,14 +932,15 @@ def _jwt_expiration(token):
 
 
 def _build_profile_summary(config, profile_name, running_commands):
-    """构造账号列表项，不执行启动或迁移副作用。"""
+    """构造账号列表项。"""
+    profile_record = db.get_profile(profile_name)
     profile_dir = _get_profile_dir(config, profile_name)
     status = get_profile_status(
         profile_dir,
     )
     active_profile = config.get("active_profile", "")
     running = _is_profile_running(config, profile_name, running_commands)
-    target_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
+    target_app_dir = _get_shared_app_root(config) / PORTABLE_APP_DIR_NAME
     portable_client_path = target_app_dir / "ChatGPT.exe"
     if not portable_client_path.exists():
         portable_client_path = target_app_dir / "Codex.exe"
@@ -925,7 +952,9 @@ def _build_profile_summary(config, profile_name, running_commands):
             source_signature["directory_size"] = portable_codex_size
             write_source_signature(target_app_dir, source_signature)
     return {
+        "id": profile_record["id"] if profile_record else "",
         "name": profile_name,
+        "storageKey": profile_record["dir_name"] if profile_record else profile_dir.name,
         "running": running,
         "active": profile_name == active_profile,
         "profileDir": str(profile_dir),
@@ -947,9 +976,18 @@ def _build_profile_summary(config, profile_name, running_commands):
 
 
 def _get_profile_dir(config, profile_name):
-    """按现有规则计算账号资料目录，保持历史配置兼容。"""
+    """通过不可变存储键计算账号目录。"""
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
-    return profile_root / sanitize_profile_name(profile_name)
+    profile = db.get_profile(profile_name)
+    if not profile:
+        raise ValueError("账号不存在")
+    return profile_root / profile["dir_name"]
+
+
+def _get_shared_app_root(config):
+    """返回所有多开账号共用的客户端存储目录。"""
+    profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
+    return profile_root / ".shared"
 
 
 def _normalize_profile_configs(config):
@@ -987,25 +1025,6 @@ def _instruction_payload(target):
     return payload
 
 
-def _move_profile_dir(config, old_dir, new_dir):
-    """移动账号目录；目录被短暂占用时，改用复制后清理的方式完成改名。"""
-    try:
-        old_dir.rename(new_dir)
-        return
-    except PermissionError as exc:
-        try:
-            shutil.copytree(old_dir, new_dir, copy_function=shutil.copy2)
-        except Exception as copy_exc:
-            _remove_path_if_inside_profile_root(config, new_dir)
-            raise RuntimeError("账号资料目录被占用，改名失败；请关闭相关窗口后重试") from copy_exc
-        try:
-            shutil.rmtree(old_dir, onerror=remove_readonly_path)
-        except OSError:
-            # 新目录已复制成功，旧目录若仍被系统占用则保留为孤立目录，避免改名结果回滚。
-            pass
-        return
-
-
 def _remove_path_if_inside_profile_root(config, path):
     """仅清理账号根目录内的临时目标，防止异常路径被误删。"""
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT).resolve()
@@ -1026,14 +1045,6 @@ def _validate_profile_name(config, profile_name, exclude_name=None):
     profiles = config.setdefault("profiles", [])
     if profile_name in profiles and profile_name != exclude_name:
         raise ValueError("已存在同名账号")
-    profile_dir = _get_profile_dir(config, profile_name)
-    for existing_name in profiles:
-        if exclude_name is not None and existing_name == exclude_name:
-            continue
-        if _get_profile_dir(config, existing_name).resolve() == profile_dir.resolve():
-            raise ValueError(f"该名称对应的数据目录已被“{existing_name}”使用")
-    if exclude_name is None and profile_dir.exists():
-        raise FileExistsError("该名称对应的账号资料目录已存在")
     return profile_name
 
 
@@ -1107,7 +1118,7 @@ def _get_legacy_system_running_profile(config):
         return ""
     matching_profiles = []
     for profile_name in config.get("profiles", []):
-        profile_auth_path = resolve_profile_auth_path(_get_profile_dir(config, profile_name))
+        profile_auth_path = get_profile_auth_path(_get_profile_dir(config, profile_name))
         if not profile_auth_path.exists():
             continue
         try:
@@ -1178,7 +1189,7 @@ def _resolve_codex_launch_spec(config):
 
 
 def _resolve_codex_app_source_path(config):
-    """多开模式需要可复制的 Codex 桌面程序路径。"""
+    """定位用于复制共享客户端副本的 ChatGPT 安装源。"""
     configured_path = str(config.get("codex_path") or "").strip()
     configured_app_path = _resolve_configured_codex_app_path(configured_path)
     if configured_app_path:

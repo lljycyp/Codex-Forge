@@ -158,6 +158,13 @@ function createMainWindow(): void {
     mainWindow?.hide();
   });
 
+  mainWindow.on("maximize", () => {
+    mainWindow?.webContents.send("window:maximized-changed", true);
+  });
+  mainWindow.on("unmaximize", () => {
+    mainWindow?.webContents.send("window:maximized-changed", false);
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });

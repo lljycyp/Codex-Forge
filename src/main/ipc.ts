@@ -51,6 +51,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle("window:minimize", (event) => {
     BrowserWindow.fromWebContents(event.sender)?.minimize();
   });
+  ipcMain.handle("window:is-maximized", (event) => {
+    return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false;
+  });
   ipcMain.handle("window:toggle-maximize", (event) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (!window) {

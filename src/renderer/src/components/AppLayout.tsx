@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Layout } from "antd";
-import { Minus, Square, X } from "lucide-react";
+import { Copy, Minus, Square, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { AppState, ViewKey } from "../types";
 import chatgptForgeLogo from "../assets/chatgpt-forge-logo.png";
@@ -37,6 +37,13 @@ export function AppLayout({
   onChangeView,
 }: AppLayoutProps) {
   const { t } = useI18n();
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    void window.launcherApi.isWindowMaximized().then(setIsMaximized);
+    return window.launcherApi.onWindowMaximizedChanged(setIsMaximized);
+  }, []);
+
   return (
     <Layout className="grid h-screen grid-rows-[48px_minmax(0,1fr)] overflow-hidden bg-[#e8f4f4] bg-shell-gradient">
       <div className="grid h-12 grid-cols-[auto_minmax(0,1fr)_auto] items-center border-b-0 bg-transparent [-webkit-app-region:drag]">
@@ -75,10 +82,10 @@ export function AppLayout({
           </button>
           <button
             className={windowButtonClass}
-            title={t("最大化")}
+            title={t(isMaximized ? "还原" : "最大化")}
             onClick={() => window.launcherApi.toggleMaximizeWindow()}
           >
-            <Square size={14} strokeWidth={2} />
+            {isMaximized ? <Copy size={14} strokeWidth={2} /> : <Square size={14} strokeWidth={2} />}
           </button>
           <button
             className={`${windowButtonClass} hover:bg-[#ff4d4f] hover:text-white`}

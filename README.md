@@ -61,7 +61,7 @@
 | 👥 **账号资料管理**           | 支持搜索、筛选和排序账号，并通过账号检查器集中完成启动、关闭、额度刷新、详情查看、备份、改名和删除，数据默认保存在 `~/Documents/CodexProfiles`。       |
 | 🔑 **授权导入**               | 通过官方 Codex App Server 完成 ChatGPT 浏览器登录，也支持保存当前账号或导入本地 `auth.json`。                                                        |
 | 🚀 **一键切换启动**           | 账号切换模式下自动写入当前用户 `.codex` 目录并启动 ChatGPT。若检测到 ChatGPT 正在运行会提示先关闭。                                                  |
-| 📦 **多开隔离启动**           | 特色功能。多开隔离模式下为账号准备独立 `CodexHome`、`APPDATA`、`LOCALAPPDATA`、`--user-data-dir` 和完整 `ChatGPTPortableApp` 副本，避免多账号互相覆盖。 |
+| 📦 **多开隔离启动**           | 特色功能。从系统已安装的 ChatGPT 客户端复制出一份共享副本，所有账号共用该副本，并分别隔离 `CodexHome`、`APPDATA`、`LOCALAPPDATA` 和 `--user-data-dir`。 |
 | 📊 **额度快照**               | 通过官方 Codex App Server 读取并缓存 ChatGPT 账号的剩余额度、重置时间与限制状态。                                                                    |
 | 🛠️ **TOML 编辑**              | 直接查看和保存当前生效的 `config.toml`，且在保存前自动进行文件备份。                                                                                  |
 | 📝 **指令模板（提示词注入）** | 本地保存 Markdown（标记语言）提示词模板，启用后复制到当前 ChatGPT 配置目录，并把 `config.toml` 的 `model_instructions_file` 指向该模板。              |
@@ -78,7 +78,7 @@
 账号管理页提供账号搜索、状态筛选和多种排序方式。选择账号后，右侧账号检查器会集中展示：
 
 - **概览**：账号套餐、运行与认证状态、五小时和一周剩余额度及重置时间。
-- **运行环境**：账号目录、认证文件、配置文件和多开程序副本状态。
+- **运行环境**：账号目录、认证文件、配置文件和共享客户端副本状态。
 - **维护操作**：导出备份、改名、打开目录和删除账号。
 
 ### 2. 🛡️ 多账号资料隔离
@@ -86,8 +86,8 @@
 每个账号资料独立保存自身的登录凭证与配置：
 
 ```text
-~/Documents/CodexProfiles/<账号名>/auth.json
-~/Documents/CodexProfiles/<账号名>/CodexHome/config.toml
+~/Documents/CodexProfiles/<profile_id>/auth.json
+~/Documents/CodexProfiles/<profile_id>/CodexHome/config.toml
 ```
 
 账号切换模式只替换 `auth.json`，模型、代理等全局 ChatGPT 配置始终使用系统 `~/.codex/config.toml`。多开隔离模式使用账号自己的 `CodexHome/config.toml`。
@@ -159,14 +159,14 @@ ChatGPT Forge 当前内置破除限制提示词模板：
 除默认的账号切换模式外，ChatGPT Forge 的特色启动能力是多开隔离：
 
 - **账号切换模式**：默认模式。切换账号时写入系统 `~/.codex`，同一时间只建议运行一个 ChatGPT 客户端。
-- **多开隔离模式**：特色模式。每个账号使用独立环境并复制一份完整 ChatGPT 客户端，可同时运行多个 ChatGPT 客户端。
+- **多开隔离模式**：特色模式。首次启动时从系统已安装的 ChatGPT 客户端复制出一份共享副本，所有账号共用该副本，并使用独立配置和运行环境。
 
-多开隔离模式会隔离 `CodexHome`、`APPDATA`、`LOCALAPPDATA` 和浏览器 `--user-data-dir`，账号目录会额外包含：
+多开隔离模式会隔离 `CodexHome`、`APPDATA`、`LOCALAPPDATA` 和浏览器 `--user-data-dir`。复制出来的共享客户端副本只在账号资料根目录下保存一份：
 
 ```text
-CodexProfiles/<账号名>/CodexHome
-CodexProfiles/<账号名>/AppData
-CodexProfiles/<账号名>/ChatGPTPortableApp
+CodexProfiles/.shared/ChatGPTPortableApp
+CodexProfiles/<profile_id>/CodexHome
+CodexProfiles/<profile_id>/AppData
 ```
 
 ### 7. ⚙️ 设置、更新与项目入口
@@ -174,7 +174,7 @@ CodexProfiles/<账号名>/ChatGPTPortableApp
 设置页集中管理启动器自身配置：
 
 - **账号资料位置**：可更改账号资料根目录，迁移前会提示关闭正在运行的 ChatGPT。
-- **启动模式**：可在账号切换模式和多开隔离模式之间切换，多开模式会提示磁盘占用风险。
+- **启动模式**：可在账号切换模式和多开隔离模式之间切换；首次启动多开账号时会从系统安装目录复制一份共享客户端副本。
 - **开机自启**：支持登录 Windows 后自动启动 ChatGPT Forge。
 - **语言切换**：支持中文 / English 界面切换。
 - **版本更新**：显示当前版本，支持手动检查更新；发现新版本后可查看更新内容、后台下载并重启安装。

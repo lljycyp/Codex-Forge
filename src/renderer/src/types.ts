@@ -40,7 +40,9 @@ export type RunCommand = (
 ) => Promise<void>;
 
 export type ProfileSummary = {
+  id: string;
   name: string;
+  storageKey: string;
   running: boolean;
   active: boolean;
   profileDir: string;
@@ -138,6 +140,8 @@ export type LauncherApi = {
   downloadUpdate?: () => Promise<void>;
   installUpdate?: () => Promise<void>;
   minimizeWindow: () => Promise<void>;
+  isWindowMaximized: () => Promise<boolean>;
+  onWindowMaximizedChanged: (callback: (maximized: boolean) => void) => () => void;
   toggleMaximizeWindow: () => Promise<void>;
   closeWindow: () => Promise<void>;
 };

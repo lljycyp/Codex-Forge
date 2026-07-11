@@ -241,6 +241,7 @@ trusted_hash = "dynamic"
             (portable_dir / "ChatGPT.exe").write_bytes(b"client")
             codex_home = profile_dir / "CodexHome"
             codex_home.mkdir()
+            (codex_home / "auth.json").write_text('{"runtime":true}', encoding="utf-8")
             (codex_home / "config.toml").write_text("model = 'test'", encoding="utf-8")
             (codex_home / "logs_2.sqlite").write_bytes(b"runtime-state")
             plugin_dir = codex_home / "plugins" / "cached-plugin"
@@ -251,11 +252,15 @@ trusted_hash = "dynamic"
             (app_data / "Cookies").write_bytes(b"browser-state")
             config = {"profile_root": str(root / "profiles"), "profiles": ["work"]}
 
-            with patch("bridge.commands.load_config", return_value=config):
+            with (
+                patch("bridge.commands.load_config", return_value=config),
+                patch("bridge.commands.db.get_profile", return_value={"dir_name": "work"}),
+            ):
                 result = export_profile_backup({"name": "work", "targetDir": str(root)})
 
             with zipfile.ZipFile(result["backupPath"]) as archive:
                 self.assertIn("auth.json", archive.namelist())
+                self.assertNotIn("CodexHome/auth.json", archive.namelist())
                 self.assertIn("CodexHome/config.toml", archive.namelist())
                 self.assertFalse(any(name.startswith("ChatGPTPortableApp/") for name in archive.namelist()))
                 self.assertFalse(any(name.startswith("AppData/") for name in archive.namelist()))
@@ -285,6 +290,7 @@ trusted_hash = "dynamic"
         with (
             patch("bridge.commands.read_running_codex_commands", return_value=""),
             patch("bridge.commands._get_legacy_system_running_profile", return_value="first"),
+            patch("bridge.commands.db.get_profile", side_effect=lambda name: {"dir_name": name}),
         ):
             self.assertTrue(_is_profile_running(config, "first"))
             self.assertFalse(_is_profile_running(config, "second"))
@@ -304,6 +310,7 @@ trusted_hash = "dynamic"
                 patch("bridge.commands.get_active_auth_path", return_value=system_auth_path),
                 patch("bridge.commands.read_running_codex_processes", return_value=[{"command_line": '"C:\\Apps\\ChatGPT.exe"'}]),
                 patch("bridge.commands._is_same_auth_account", side_effect=lambda left, right: left == right),
+                patch("bridge.commands.db.get_profile", side_effect=lambda name: {"dir_name": name}),
             ):
                 self.assertEqual(_get_legacy_system_running_profile(config), "first")
 
