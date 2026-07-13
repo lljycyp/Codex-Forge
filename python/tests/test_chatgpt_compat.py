@@ -138,16 +138,35 @@ class ChatGptCompatibilityTest(unittest.TestCase):
                     "credits": {"hasCredits": True, "unlimited": False},
                     "rateLimitReachedType": "primary",
                 },
-                "rateLimitResetCredits": {"availableCount": 3},
+                "rateLimitResetCredits": {
+                    "availableCount": 3,
+                    "credits": [
+                        {"status": "available", "expiresAt": 2000},
+                        {"status": "used", "expiresAt": 1000},
+                        {"status": "available", "expiresAt": 3000},
+                    ],
+                },
             },
         )
         self.assertEqual(usage["resetCredits"], 3)
+        self.assertEqual(usage["resetCreditExpiresAt"], [2000, 3000])
         self.assertTrue(usage["hasCredits"])
         self.assertFalse(usage["creditsUnlimited"])
         self.assertTrue(usage["spendControlReached"])
         self.assertEqual(usage["planType"], "team")
-        self.assertEqual(usage["fiveHour"]["remainingPercent"], 75)
         self.assertEqual(usage["oneWeek"]["remainingPercent"], 92)
+
+    def test_weekly_usage_is_mapped_without_legacy_window(self):
+        usage = _map_app_server_usage(
+            {"type": "chatgpt", "planType": "team"},
+            {
+                "rateLimits": {
+                    "primary": {"windowDurationMins": 10080, "usedPercent": 2},
+                },
+            },
+        )
+
+        self.assertEqual(usage["oneWeek"]["remainingPercent"], 98)
 
     def test_app_server_temp_cleanup_retries_marketplace_race(self):
         path = Path(tempfile.gettempdir()) / "chatgpt-forge-account-test"

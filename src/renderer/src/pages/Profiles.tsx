@@ -391,9 +391,9 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
                         {launchMode === "switch" && profile.active ? <span className="font-semibold text-blue-600">{t("当前账号")}</span> : null}
                       </div>
                     </div>
-                    <div className="grid min-w-0 grid-cols-2 gap-2">
-                      <UsageMeter label={t("五小时")} language={language} window={profile.usage?.fiveHour ?? null} />
-                      <UsageMeter label={t("一周")} language={language} window={profile.usage?.oneWeek ?? null} />
+                    <div className="grid min-w-0 gap-2">
+                      {profile.usage?.oneWeek ? <UsageMeter label={t("一周")} language={language} window={profile.usage.oneWeek} /> : null}
+                      <ResetCreditSummary usage={profile.usage} language={language} compact />
                     </div>
                     <Button
                       className="!min-w-[86px] !rounded-[8px]"
@@ -773,8 +773,8 @@ function ProfileInspector({
                   </div>
                 ) : null}
                 <div className="grid gap-3">
-                  <UsageMeter label={t("五小时额度")} language={language} window={profile.usage?.fiveHour ?? null} />
-                  <UsageMeter label={t("一周额度")} language={language} window={profile.usage?.oneWeek ?? null} />
+                  {profile.usage?.oneWeek ? <UsageMeter label={t("一周额度")} language={language} window={profile.usage.oneWeek} /> : null}
+                  <ResetCreditSummary usage={profile.usage} language={language} />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <InspectorStat label={t("套餐")} value={formatPlanType(profile.usage?.planType, t)} />
@@ -945,14 +945,14 @@ function ProfileDetailPanel({
                         <span>{detail.auth.error}</span>
                       </div>
                     ) : null}
-                    <div className="grid grid-cols-2 gap-3 max-[960px]:grid-cols-1">
-                      <DetailUsageCard title={t("五小时额度")} language={language} window={detail.usage?.fiveHour ?? null} />
-                      <DetailUsageCard title={t("一周额度")} language={language} window={detail.usage?.oneWeek ?? null} />
+                    <div className="grid gap-3">
+                      {detail.usage?.oneWeek ? <DetailUsageCard title={t("一周额度")} language={language} window={detail.usage.oneWeek} /> : null}
                     </div>
                     <InfoGrid
                       rows={[
                         [t("最后刷新"), detail.usage?.fetchedAt ? formatTimestamp(detail.usage.fetchedAt, language) : "-"],
-                        [t("可用额度重置"), detail.usage?.resetCredits == null ? "-" : String(detail.usage.resetCredits)],
+                        [t("可刷新次数"), detail.usage?.resetCredits == null ? "-" : String(detail.usage.resetCredits)],
+                        [t("刷新次数过期"), formatCreditExpiries(detail.usage?.resetCreditExpiresAt, language)],
                         [t("额度模式"), detail.usage?.creditsUnlimited ? t("无限额度") : detail.usage?.hasCredits ? t("有可用额度") : t("无额外额度")],
                         [t("限制状态"), detail.usage?.rateLimitReachedType ? t("已触发") : t("未触发")],
                         [t("当前账号"), detail.active ? t("是") : t("否")],
@@ -1085,7 +1085,7 @@ function InfoGrid({ rows }: { rows: Array<[string, string]> }) {
       {rows.map(([label, value]) => (
         <div key={label} className="grid grid-cols-[140px_minmax(0,1fr)] border-b border-slate-100 px-4 py-3 text-sm last:border-b-0 max-[720px]:grid-cols-1 max-[720px]:gap-1">
           <div className="font-semibold text-slate-500">{label}</div>
-          <div className="min-w-0 break-words font-medium text-slate-800">{value}</div>
+          <div className="min-w-0 whitespace-pre-line break-words font-medium text-slate-800">{value}</div>
         </div>
       ))}
     </div>
@@ -1262,10 +1262,64 @@ function usageScore(usage: ProfileUsage | null) {
   if (!usage) {
     return -1;
   }
-  return Math.min(
-    usage.fiveHour?.remainingPercent ?? 0,
-    usage.oneWeek?.remainingPercent ?? 0,
+  return usage.oneWeek?.remainingPercent ?? 0;
+}
+
+function ResetCreditSummary({
+  usage,
+  language,
+  compact = false,
+}: {
+  usage: ProfileUsage | null;
+  language: "zh-CN" | "en-US";
+  compact?: boolean;
+}) {
+  const count = usage?.resetCredits;
+  const expiries = usage?.resetCreditExpiresAt ?? [];
+  const countText = count == null ? "-" : language === "en-US" ? `${count} available` : `${count} 次可用`;
+  const expiryDates = expiries.map((value) => formatTimestamp(value, language));
+  const emptyExpiryText = language === "en-US" ? "No expiration returned" : "未返回过期时间";
+
+  if (compact) {
+    return (
+      <div className="flex min-w-0 items-center justify-between gap-2 border-t border-slate-100 pt-2 text-[11.5px]">
+        <span className="flex shrink-0 items-center gap-1.5 font-medium text-slate-500">
+          <RefreshCw size={11} aria-hidden />
+          {language === "en-US" ? "Resets" : "刷新次数"}
+        </span>
+        <strong className={count ? "font-bold text-brand-700 tabular-nums" : "font-bold text-slate-600 tabular-nums"}>{count == null ? "-" : count}</strong>
+      </div>
+    );
+  }
+
+  return (
+    <section className="overflow-hidden rounded-[9px] border border-brand-100 bg-brand-50/55">
+      <div className="flex items-center justify-between gap-3 px-3.5 py-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-[8px] bg-white text-brand-600 shadow-[0_2px_8px_rgba(13,148,136,0.09)]">
+            <RefreshCw size={15} aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <div className="text-[11.5px] font-semibold text-slate-500">{language === "en-US" ? "Available resets" : "可刷新次数"}</div>
+            <div className="mt-0.5 text-[12px] text-slate-600">{language === "en-US" ? "Expiration dates" : "刷新次数过期时间"}</div>
+          </div>
+        </div>
+        <strong className="shrink-0 text-[22px] font-bold tracking-[-0.04em] text-brand-700 tabular-nums">{countText}</strong>
+      </div>
+      {expiryDates.length ? (
+        <div className="grid gap-1 border-t border-brand-100/80 bg-white/60 px-3.5 py-2 text-[11px] text-slate-500">
+          {expiryDates.map((date, index) => <div key={`${date}-${index}`}><span className="mr-2 font-semibold text-slate-400">#{index + 1}</span>{date}</div>)}
+        </div>
+      ) : <div className="border-t border-brand-100/80 bg-white/60 px-3.5 py-2 text-[11px] text-slate-400">{emptyExpiryText}</div>}
+    </section>
   );
+}
+
+function formatCreditExpiries(values: number[] | null | undefined, language: "zh-CN" | "en-US") {
+  if (!values?.length) {
+    return "-";
+  }
+  return values.map((value, index) => `${index + 1}. ${formatTimestamp(value, language)}`).join("\n");
 }
 
 function maskSensitive(value: string, enabled: boolean) {

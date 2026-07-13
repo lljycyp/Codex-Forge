@@ -70,9 +70,9 @@ export type ProfileUsageWindow = {
 export type ProfileUsage = {
   fetchedAt: number;
   planType: string | null;
-  fiveHour: ProfileUsageWindow | null;
   oneWeek: ProfileUsageWindow | null;
   resetCredits?: number | null;
+  resetCreditExpiresAt?: number[];
   hasCredits?: boolean;
   creditsUnlimited?: boolean;
   spendControlReached?: boolean;

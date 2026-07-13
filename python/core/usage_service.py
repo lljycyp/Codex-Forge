@@ -144,13 +144,14 @@ def _map_app_server_usage(account, payload):
         if isinstance(window, dict)
     ]
     reset_credits = payload.get("rateLimitResetCredits") or {}
+    reset_credit_items = reset_credits.get("credits") or []
     credits = rate_limits.get("credits") or {}
     return {
         "fetchedAt": time.time(),
         "planType": _clean_string(rate_limits.get("planType") or account.get("planType")),
-        "fiveHour": _to_usage_window(_pick_nearest_window(windows, 5 * 60 * 60)),
-        "oneWeek": _to_usage_window(_pick_nearest_window(windows, 7 * 24 * 60 * 60)),
+        "oneWeek": _to_usage_window(_find_window(windows, 7 * 24 * 60 * 60)),
         "resetCredits": _optional_int(reset_credits.get("availableCount")),
+        "resetCreditExpiresAt": _available_credit_expiries(reset_credit_items),
         "hasCredits": bool(credits.get("hasCredits")),
         "creditsUnlimited": bool(credits.get("unlimited")),
         "spendControlReached": bool(rate_limits.get("rateLimitReachedType")),
@@ -159,17 +160,18 @@ def _map_app_server_usage(account, payload):
     }
 
 
-def _pick_nearest_window(windows, target_seconds):
-    """选择最接近目标时长的额度窗口。"""
-    valid_windows = [
-        window
-        for window in windows
-        if isinstance(window.get("windowDurationMins"), (int, float))
-        and isinstance(window.get("usedPercent"), (int, float))
-    ]
-    if not valid_windows:
-        return None
-    return min(valid_windows, key=lambda window: abs(window["windowDurationMins"] * 60 - target_seconds))
+def _find_window(windows, target_seconds):
+    """按真实时长查找额度窗口。"""
+    target_minutes = target_seconds / 60
+    return next(
+        (
+            window
+            for window in windows
+            if window.get("windowDurationMins") == target_minutes
+            and isinstance(window.get("usedPercent"), (int, float))
+        ),
+        None,
+    )
 
 
 def _to_usage_window(window):
@@ -190,9 +192,9 @@ def _usage_error(message, plan_type=None):
     return {
         "fetchedAt": time.time(),
         "planType": plan_type,
-        "fiveHour": None,
         "oneWeek": None,
         "resetCredits": None,
+        "resetCreditExpiresAt": [],
         "hasCredits": False,
         "creditsUnlimited": False,
         "spendControlReached": False,
@@ -203,6 +205,17 @@ def _usage_error(message, plan_type=None):
 
 def _optional_int(value):
     return int(value) if isinstance(value, (int, float)) else None
+
+
+def _available_credit_expiries(credits):
+    expires_at_values = [
+        credit.get("expiresAt")
+        for credit in credits
+        if isinstance(credit, dict)
+        and credit.get("status") == "available"
+        and isinstance(credit.get("expiresAt"), (int, float))
+    ]
+    return sorted(int(value) for value in expires_at_values)
 
 
 def _normalize_usage_error(message):

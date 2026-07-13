@@ -42,7 +42,7 @@
 - 🛡️ **Config isolation**: Account-switching mode always uses the system `~/.codex/config.toml`; isolated multi-instance mode uses each account's `CodexHome/config.toml`.
 - 🛠️ **Visual editing**: View and edit the active `~/.codex/config.toml`.
 - 📝 **Instruction templates (prompt injection)**: Save common prompts as Markdown templates and switch ChatGPT's global behavior profile with one click. The built-in prompt can break restrictions and support effects such as SQL injection testing and reverse engineering.
-- 📊 **Status monitoring**: Check the current workspace and running instances on the home page, then inspect account health, remaining usage, and reset times from profile management.
+- 📊 **Status monitoring**: Check the current workspace and running instances on the home page, then inspect account health, weekly remaining usage, available resets, and expiration times from profile management.
 - 🚀 **Selectable launch modes**: Supports account switching and isolated multi-instance mode for running multiple ChatGPT clients.
 - 🌐 **Bilingual UI**: Built-in Chinese / English switching for different language environments.
 - 🔔 **Version updates**: Check for updates in the app, review release notes, download in the background, and restart to install.
@@ -62,7 +62,7 @@
 | 🔑 **Auth import** | Uses the official Codex App Server for ChatGPT browser sign-in, and supports saving the current account or importing `auth.json`. |
 | 🚀 **One-click switch and launch** | Writes the selected account into the current user's `.codex` directory and launches ChatGPT. If ChatGPT is running, the app prompts you to close it first. |
 | 📦 **Isolated multi-instance launch** | Featured capability. Creates one shared copy from the installed ChatGPT client. All accounts use that copy with separate `CodexHome`, `APPDATA`, `LOCALAPPDATA`, and `--user-data-dir` environments. |
-| 📊 **Usage snapshots** | Uses the official Codex App Server to read and cache remaining ChatGPT usage, reset times, and limit status. |
+| 📊 **Usage snapshots** | Uses the official Codex App Server to read and cache weekly remaining usage, available resets, each reset's expiration time, and limit status. |
 | 🛠️ **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
 | 📝 **Instruction templates (prompt injection)** | Saves Markdown prompt templates locally. Enabling a template copies it into the active ChatGPT config directory and points `model_instructions_file` in `config.toml` to that template. |
 | ⚙️ **Launch and directory settings** | Switch launch modes, migrate the account profile root, and enable ChatGPT Forge to start after Windows sign-in. |
@@ -77,7 +77,7 @@ The home page brings together the current workspace, launch mode, selected accou
 
 The profile management page supports account search, status filters, and multiple sort orders. After you select an account, the profile inspector groups its information and actions into:
 
-- **Overview**: Plan, runtime and authentication status, five-hour and weekly remaining usage, and reset times.
+- **Overview**: Plan, runtime and authentication status, weekly remaining usage, available resets, and each reset's expiration time.
 - **Runtime**: Profile directory, authentication file, configuration file, and shared client-copy status.
 - **Maintenance**: Export backup, rename, open directory, and delete account.
 
