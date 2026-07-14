@@ -244,8 +244,8 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
 
   const exportBackup = async (profile: ProfileSummary) => {
     Modal.confirm({
-      title: t("导出敏感账号备份"),
-      content: t("备份包含 auth.json 和账号配置，请像密码一样妥善保管。会话、日志、缓存和客户端程序不会导出。"),
+      title: t("导出加密账号备份"),
+      content: t("备份包含 auth.json 和账号配置，并使用当前 Windows 用户加密。它只能由创建备份的 Windows 用户恢复；会话、日志、缓存和客户端程序不会导出。"),
       okText: t("继续导出"),
       cancelText: t("取消"),
       onOk: async () => {
@@ -255,7 +255,7 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
         }
         await runCommand(
           "export_profile_backup",
-          { name: profile.name, targetDir },
+          { name: profile.name, targetDir, secure: true },
           t("账号备份已导出"),
           { blocking: false, refreshAfter: false },
         );
@@ -292,12 +292,9 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
       .sort((left, right) => {
         if (profileSort === "name") return left.name.localeCompare(right.name);
         if (profileSort === "usage") return usageScore(right.usage) - usageScore(left.usage);
-        if (left.name === recommendedProfileName) return -1;
-        if (right.name === recommendedProfileName) return 1;
-        if (left.running !== right.running) return left.running ? -1 : 1;
-        return left.name.localeCompare(right.name);
+        return compareRecommendedProfiles(left, right);
       });
-  }, [profileFilter, profileSearch, profileSort, profiles, recommendedProfileName]);
+  }, [profileFilter, profileSearch, profileSort, profiles]);
 
   return (
     <div className="mx-auto grid w-full max-w-[1480px] gap-4">
@@ -1245,17 +1242,35 @@ function formatResetCountdown(value: number | null | undefined, language: "zh-CN
 }
 
 function getRecommendedProfileName(profiles: ProfileSummary[]) {
-  let best: { name: string; score: number } | null = null;
-  for (const profile of profiles) {
-    if (!profile.authExists || profile.usage?.error) {
-      continue;
-    }
-    const score = usageScore(profile.usage);
-    if (!best || score > best.score) {
-      best = { name: profile.name, score };
-    }
+  return profiles
+    .filter(isRecommendableProfile)
+    .sort(compareRecommendedProfiles)[0]?.name ?? "";
+}
+
+function compareRecommendedProfiles(left: ProfileSummary, right: ProfileSummary) {
+  const tierDifference = recommendationTier(left) - recommendationTier(right);
+  if (tierDifference !== 0) return tierDifference;
+
+  if (isRecommendableProfile(left) && isRecommendableProfile(right)) {
+    const usageDifference = usageScore(right.usage) - usageScore(left.usage);
+    if (usageDifference !== 0) return usageDifference;
   }
-  return best?.name ?? "";
+
+  if (left.running !== right.running) return left.running ? -1 : 1;
+  return left.name.localeCompare(right.name);
+}
+
+function recommendationTier(profile: ProfileSummary) {
+  if (isRecommendableProfile(profile)) return 0;
+  return isHealthyProfile(profile) ? 1 : 2;
+}
+
+function isRecommendableProfile(profile: ProfileSummary) {
+  return isHealthyProfile(profile)
+    && Boolean(profile.usage?.oneWeek)
+    && !profile.usage?.error
+    && !profile.usage?.spendControlReached
+    && !profile.usage?.rateLimitReachedType;
 }
 
 function usageScore(usage: ProfileUsage | null) {

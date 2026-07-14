@@ -10,6 +10,10 @@ export function getViewMeta(t: (text: string) => string): Record<ViewKey, ViewMe
     title: t("账号管理"),
     description: t("查看运行实例、选择账号并管理账号环境")
   },
+  workspace: {
+    title: t("环境工作台"),
+    description: t("管理额度历史、健康检查、MCP、Skills、会话与启动环境")
+  },
   instructions: {
     title: t("指令模板"),
     description: t("管理自定义指令模板，启用后写入当前 Codex 配置")

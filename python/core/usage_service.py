@@ -208,14 +208,14 @@ def _optional_int(value):
 
 
 def _available_credit_expiries(credits):
-    expires_at_values = [
-        credit.get("expiresAt")
-        for credit in credits
-        if isinstance(credit, dict)
-        and credit.get("status") == "available"
-        and isinstance(credit.get("expiresAt"), (int, float))
-    ]
-    return sorted(int(value) for value in expires_at_values)
+    expires_at_values = []
+    for credit in credits:
+        if not isinstance(credit, dict) or credit.get("status") != "available":
+            continue
+        value = credit.get("expiresAt")
+        if isinstance(value, (int, float)):
+            expires_at_values.append(int(value))
+    return sorted(expires_at_values)
 
 
 def _normalize_usage_error(message):

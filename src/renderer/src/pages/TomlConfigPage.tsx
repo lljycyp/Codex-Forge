@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Input, Modal, Select, Spin, Tooltip, message } from "antd";
-import { Save } from "lucide-react";
+import { GitCompare, Save } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
 import type { AppState, ProfileSummary, TomlConfigState } from "../types";
@@ -23,6 +23,11 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
   const [syncTargetProfile, setSyncTargetProfile] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [compareTarget, setCompareTarget] = useState(SYSTEM_PROFILE_NAME);
+  const [compareDiff, setCompareDiff] = useState("");
+  const [compareKeys, setCompareKeys] = useState<string[]>([]);
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
 
   const multiMode = isMulti(appState.launchMode);
   const noProfile = multiMode && !profileName;
@@ -105,6 +110,40 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
     }
   };
 
+  const compareConfig = async () => {
+    setLoading(true);
+    try {
+      const result = await invokeLauncher<{ identical: boolean; diff: string; sourceKeys: string[] }>("compare_toml_configs", {
+        sourceProfile: profileName,
+        targetProfile: compareTarget,
+      });
+      setCompareDiff(result.identical ? t("两份配置完全一致") : result.diff);
+      setCompareKeys(result.sourceKeys);
+      setSelectedKeys([]);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : t("比较 TOML 配置失败"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const syncSelectedKeys = async () => {
+    setSaving(true);
+    try {
+      await invokeLauncher("sync_toml_keys", {
+        sourceProfile: profileName,
+        targetProfile: compareTarget,
+        keys: selectedKeys,
+      });
+      message.success(t("已同步选中的配置项"));
+      await compareConfig();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : t("同步配置项失败"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-4 rounded-panel border border-shell-line bg-white px-5 py-4 shadow-[0_10px_28px_rgba(15,23,42,0.045)]">
@@ -136,6 +175,21 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
           <Button type="primary" icon={<Save size={15} />} loading={saving} disabled={noProfile} onClick={save}>
             {t("保存")}
           </Button>
+          {multiMode ? (
+            <Button
+              icon={<GitCompare size={15} />}
+              disabled={noProfile}
+              onClick={() => {
+                setCompareTarget(profileName === SYSTEM_PROFILE_NAME ? profiles[0]?.name || SYSTEM_PROFILE_NAME : SYSTEM_PROFILE_NAME);
+                setCompareDiff("");
+                setCompareKeys([]);
+                setSelectedKeys([]);
+                setCompareOpen(true);
+              }}
+            >
+              {t("配置对比")}
+            </Button>
+          ) : null}
           {multiMode ? (
             <Button loading={saving} disabled={noProfile} onClick={syncAll}>
               {t("同步全部账号")}
@@ -207,6 +261,43 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
           placeholder={t("选择目标账号")}
           options={accountOptions}
           onChange={setSyncTargetProfile}
+        />
+      </Modal>
+      <Modal
+        width={860}
+        title={t("配置差异对比")}
+        open={compareOpen}
+        onCancel={() => setCompareOpen(false)}
+        footer={<Button onClick={() => setCompareOpen(false)}>{t("关闭")}</Button>}
+      >
+        <div className="mb-3 flex items-center gap-2">
+          <Select
+            className="min-w-[280px]"
+            value={compareTarget}
+            options={profileOptions.filter((option) => option.value !== profileName)}
+            onChange={(value) => {
+              setCompareTarget(value);
+              setCompareDiff("");
+            }}
+          />
+          <Button type="primary" loading={loading} onClick={compareConfig}>{t("开始比较")}</Button>
+        </div>
+        <div className="mb-3 flex items-center gap-2">
+          <Select
+            mode="multiple"
+            className="min-w-0 flex-1"
+            value={selectedKeys}
+            options={compareKeys.map((key) => ({ label: key, value: key }))}
+            placeholder={t("选择要从当前配置同步到目标配置的顶层配置项")}
+            onChange={setSelectedKeys}
+          />
+          <Button disabled={selectedKeys.length === 0} loading={saving} onClick={syncSelectedKeys}>{t("同步选中项")}</Button>
+        </div>
+        <TextArea
+          className="!h-[480px] !font-mono !text-xs"
+          value={compareDiff}
+          readOnly
+          placeholder={t("选择目标配置后开始比较")}
         />
       </Modal>
     </div>

@@ -48,6 +48,25 @@ def init_db(connection):
           FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS profile_usage_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          fetched_at REAL NOT NULL,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_profile_usage_history_profile_time
+          ON profile_usage_history(profile_id, fetched_at DESC);
+
+        CREATE TABLE IF NOT EXISTS profile_launch_settings (
+          profile_id TEXT PRIMARY KEY,
+          payload_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS instruction_templates (
           scope_key TEXT NOT NULL,
           id TEXT NOT NULL,
@@ -147,6 +166,19 @@ def save_usage_cache(cache):
                 """,
                 (profile["id"], json.dumps(usage, ensure_ascii=False), fetched_at, now),
             )
+            if isinstance(fetched_at, (int, float)) and not usage.get("error"):
+                previous = connection.execute(
+                    "SELECT fetched_at FROM profile_usage_history WHERE profile_id = ? ORDER BY fetched_at DESC LIMIT 1",
+                    (profile["id"],),
+                ).fetchone()
+                if not previous or float(previous["fetched_at"]) != float(fetched_at):
+                    connection.execute(
+                        """
+                        INSERT INTO profile_usage_history (profile_id, payload_json, fetched_at, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (profile["id"], json.dumps(usage, ensure_ascii=False), fetched_at, now),
+                    )
 
         names = list(cache)
         if names:
@@ -157,6 +189,61 @@ def save_usage_cache(cache):
             )
         else:
             connection.execute("DELETE FROM profile_usage")
+        connection.execute(
+            "DELETE FROM profile_usage_history WHERE fetched_at < ?",
+            (time.time() - 30 * 24 * 60 * 60,),
+        )
+
+
+def load_usage_history(profile_name, days=7, limit=500):
+    cutoff = time.time() - max(1, min(int(days), 30)) * 24 * 60 * 60
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT h.payload_json
+            FROM profile_usage_history h
+            JOIN profiles p ON p.id = h.profile_id
+            WHERE p.display_name = ? AND h.fetched_at >= ?
+            ORDER BY h.fetched_at DESC
+            LIMIT ?
+            """,
+            (profile_name, cutoff, max(1, min(int(limit), 2000))),
+        )
+        return [json.loads(row["payload_json"]) for row in reversed(list(rows))]
+
+
+def load_profile_launch_settings(profile_name):
+    with connect() as connection:
+        row = connection.execute(
+            """
+            SELECT s.payload_json
+            FROM profile_launch_settings s
+            JOIN profiles p ON p.id = s.profile_id
+            WHERE p.display_name = ?
+            """,
+            (profile_name,),
+        ).fetchone()
+        return json.loads(row["payload_json"]) if row else {}
+
+
+def save_profile_launch_settings(profile_name, payload):
+    now = int(time.time())
+    with connect() as connection:
+        profile = connection.execute(
+            "SELECT id FROM profiles WHERE display_name = ?", (profile_name,)
+        ).fetchone()
+        if not profile:
+            raise ValueError("账号不存在")
+        connection.execute(
+            """
+            INSERT INTO profile_launch_settings (profile_id, payload_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(profile_id) DO UPDATE SET
+              payload_json = excluded.payload_json,
+              updated_at = excluded.updated_at
+            """,
+            (profile["id"], json.dumps(payload, ensure_ascii=False), now),
+        )
 
 
 def get_profile(profile_name):

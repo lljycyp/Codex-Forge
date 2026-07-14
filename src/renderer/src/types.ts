@@ -20,7 +20,7 @@ export type AppState = {
   authCredentialStore: "file" | "keyring" | "auto";
 };
 
-export type ViewKey = "home" | "profiles" | "instructions" | "toml" | "settings";
+export type ViewKey = "home" | "profiles" | "workspace" | "instructions" | "toml" | "settings";
 
 export type ViewMeta = {
   title: string;
@@ -131,6 +131,7 @@ export type LauncherApi = {
   selectProfileBackupFile?: () => Promise<string>;
   getAutoStartEnabled?: () => Promise<boolean>;
   getAppVersion?: () => Promise<string>;
+  showNotification?: (title: string, body: string) => Promise<boolean>;
   openProjectGitHub?: () => Promise<void>;
   openProjectGitee?: () => Promise<void>;
   setAutoStartEnabled?: (enabled: boolean) => Promise<boolean>;

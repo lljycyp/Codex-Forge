@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Form, Input, message, Modal, Radio, Space, Switch } from "antd";
-import { ClipboardCopy, EyeOff, FolderOpen, Github, HardDrive, Info, Power, RefreshCw } from "lucide-react";
+import { Alert, Button, Form, Input, InputNumber, message, Modal, Radio, Space, Switch } from "antd";
+import { Bell, ClipboardCopy, EyeOff, FolderOpen, Github, HardDrive, Info, Power, RefreshCw } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
 import type { AppState, RunCommand } from "../types";
@@ -40,6 +40,8 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
   const [checkUpdateLoading, setCheckUpdateLoading] = useState(false);
   const [launchModeLoading, setLaunchModeLoading] = useState(false);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [quotaAlertsEnabled, setQuotaAlertsEnabled] = useState(() => localStorage.getItem("quotaAlertsEnabled") !== "false");
+  const [quotaAlertThreshold, setQuotaAlertThreshold] = useState(() => Number(localStorage.getItem("quotaAlertThreshold") || "20"));
 
   useEffect(() => {
     form.setFieldsValue({
@@ -170,6 +172,14 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
     void saveLaunchMode(mode);
   };
 
+  const saveQuotaAlertSettings = (enabled: boolean, threshold = quotaAlertThreshold) => {
+    const normalized = Math.max(1, Math.min(Number(threshold) || 20, 90));
+    setQuotaAlertsEnabled(enabled);
+    setQuotaAlertThreshold(normalized);
+    localStorage.setItem("quotaAlertsEnabled", String(enabled));
+    localStorage.setItem("quotaAlertThreshold", String(normalized));
+  };
+
   const copyDiagnostics = async () => {
     setDiagnosticsLoading(true);
     try {
@@ -279,6 +289,28 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
               loading={autoStartLoading}
               onChange={changeAutoStartEnabled}
             />
+          </div>
+          <div className="mt-5 flex items-center justify-between gap-6 border-t border-slate-200 pt-5">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 font-semibold text-slate-700">
+                <Bell size={16} />
+                {t("额度告警")}
+              </div>
+              <div className="mt-1 text-sm leading-6 text-slate-500">
+                {t("自动刷新后，一周剩余额度低于阈值时发送一次 Windows 通知。")}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <InputNumber
+                min={1}
+                max={90}
+                addonAfter="%"
+                value={quotaAlertThreshold}
+                disabled={!quotaAlertsEnabled}
+                onChange={(value) => saveQuotaAlertSettings(quotaAlertsEnabled, Number(value) || 20)}
+              />
+              <Switch checked={quotaAlertsEnabled} onChange={(value) => saveQuotaAlertSettings(value)} />
+            </div>
           </div>
         </div>
 

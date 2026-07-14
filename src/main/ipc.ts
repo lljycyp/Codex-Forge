@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Notification, type OpenDialogOptions } from "electron";
 import { invokeBackend } from "./python/launcherBackend";
 
 export function registerIpcHandlers(): void {
@@ -31,7 +31,7 @@ export function registerIpcHandlers(): void {
     const window = BrowserWindow.fromWebContents(event.sender);
     const options: OpenDialogOptions = {
       title: "选择账号备份文件",
-      filters: [{ name: "ChatGPT Forge profile backup", extensions: ["zip"] }],
+      filters: [{ name: "ChatGPT Forge profile backup", extensions: ["forgebackup", "zip"] }],
       properties: ["openFile"]
     };
     const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
@@ -41,6 +41,13 @@ export function registerIpcHandlers(): void {
     return app.getLoginItemSettings().openAtLogin;
   });
   ipcMain.handle("app:get-version", () => app.getVersion());
+  ipcMain.handle("app:show-notification", (_event, title: string, body: string) => {
+    if (!Notification.isSupported()) {
+      return false;
+    }
+    new Notification({ title, body }).show();
+    return true;
+  });
   ipcMain.handle("app:set-auto-start-enabled", (_event, enabled: boolean) => {
     app.setLoginItemSettings({
       openAtLogin: enabled,

@@ -1,11 +1,15 @@
 import json
 import hashlib
 import hmac
+import difflib
+import io
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -49,11 +53,22 @@ from core.instruction_service import (
     sync_instruction_template as sync_instruction_template_service,
 )
 from core.toml_config_service import read_toml_config as read_toml_config_service, save_toml_config as save_toml_config_service
+from core.secure_store import protect_bytes, unprotect_bytes
 from core.usage_service import (
     get_cached_profile_usage,
     refresh_all_profile_usage as refresh_all_profile_usage_cache,
     refresh_profile_usage as refresh_profile_usage_cache,
     remove_cached_usage,
+)
+from core.workspace_service import (
+    delete_mcp_server as delete_mcp_server_service,
+    install_skill as install_skill_service,
+    list_sessions as list_sessions_service,
+    read_workspace,
+    remove_skill as remove_skill_service,
+    save_agents as save_agents_service,
+    save_mcp_server as save_mcp_server_service,
+    set_skill_enabled as set_skill_enabled_service,
 )
 
 
@@ -83,7 +98,13 @@ def invoke(command, payload=None):
         "get_app_state": get_app_state,
         "get_diagnostics": get_diagnostics,
         "get_profile_detail": get_profile_detail,
+        "get_profile_health": get_profile_health,
+        "get_profile_launch_settings": get_profile_launch_settings,
+        "get_usage_history": get_usage_history,
+        "get_workspace": get_workspace,
         "import_profile_backup": import_profile_backup,
+        "install_skill": install_skill,
+        "list_sessions": list_sessions,
         "list_instruction_templates": list_instruction_templates,
         "save_instruction_template": save_instruction_template,
         "delete_instruction_template": delete_instruction_template,
@@ -95,8 +116,17 @@ def invoke(command, payload=None):
         "refresh_codex_source": refresh_codex_source,
         "refresh_profile_usage": refresh_profile_usage,
         "read_toml_config": read_toml_config,
+        "remove_skill": remove_skill,
+        "repair_profile": repair_profile,
         "rename_profile": rename_profile,
         "save_toml_config": save_toml_config,
+        "save_agents": save_agents,
+        "save_mcp_server": save_mcp_server,
+        "save_profile_launch_settings": save_profile_launch_settings,
+        "set_skill_enabled": set_skill_enabled,
+        "sync_toml_keys": sync_toml_keys,
+        "delete_mcp_server": delete_mcp_server,
+        "compare_toml_configs": compare_toml_configs,
         "set_share_system_config": set_share_system_config,
         "set_launch_mode": set_launch_mode,
         "set_profile_root": set_profile_root,
@@ -280,8 +310,228 @@ def get_profile_detail(payload):
     return {**summary, "auth": auth_meta}
 
 
+def get_usage_history(payload):
+    name = str(payload.get("name") or "").strip()
+    config = load_config()
+    if name not in config.get("profiles", []):
+        raise ValueError("账号不存在")
+    items = db.load_usage_history(name, payload.get("days", 7), payload.get("limit", 500))
+    remaining = [
+        item["oneWeek"]["remainingPercent"]
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("oneWeek"), dict)
+    ]
+    pace_per_day = None
+    if len(items) >= 2 and len(remaining) >= 2:
+        elapsed = float(items[-1]["fetchedAt"]) - float(items[0]["fetchedAt"])
+        if elapsed > 0:
+            pace_per_day = round((remaining[0] - remaining[-1]) / elapsed * 86400, 2)
+    return {"name": name, "items": items, "pacePerDay": pace_per_day}
+
+
+def get_profile_health(payload):
+    name = str(payload.get("name") or "").strip()
+    config = load_config()
+    if name not in config.get("profiles", []):
+        raise ValueError("账号不存在")
+    summary = _build_profile_summary(config, name, read_running_codex_commands())
+    auth = _read_profile_auth_meta(Path(summary["authPath"]))
+    checks = []
+
+    def add(key, ok_value, message, severity="error", action=None):
+        checks.append({"key": key, "ok": bool(ok_value), "message": message, "severity": "ok" if ok_value else severity, "action": None if ok_value else action})
+
+    add("profile-directory", summary["profileDirExists"], "账号资料目录可用" if summary["profileDirExists"] else "账号资料目录不存在")
+    add("auth", summary["authExists"], "auth.json 已就绪" if summary["authExists"] else "缺少 auth.json")
+    if summary["authExists"]:
+        add("auth-readable", not auth.get("error"), "认证文件可读取" if not auth.get("error") else f"认证文件异常：{auth.get('error')}")
+        if auth.get("kind") != "api":
+            add("refresh-token", auth.get("hasRefreshToken"), "刷新令牌已就绪" if auth.get("hasRefreshToken") else "缺少 refresh_token，额度刷新或发送消息可能失败", "warning")
+    config_path = Path(summary["configPath"])
+    add("config", config_path.is_file(), "config.toml 已就绪" if config_path.is_file() else "缺少 config.toml", "warning", "ensure-config")
+    if config_path.is_file():
+        try:
+            tomllib.loads(config_path.read_text(encoding="utf-8"))
+            add("config-syntax", True, "config.toml 语法正确")
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            add("config-syntax", False, f"config.toml 无法解析：{exc}")
+    if _get_launch_mode(config) == "multi":
+        add("portable-client", summary["portableCodexExists"], "共享客户端已就绪" if summary["portableCodexExists"] else "共享客户端将在首次启动时创建", "warning")
+    usage = summary.get("usage") or {}
+    add("usage", not usage.get("error"), "额度状态正常" if not usage.get("error") else str(usage.get("error")), "warning", "refresh-usage")
+    return {"name": name, "healthy": all(item["ok"] for item in checks), "checks": checks}
+
+
+def repair_profile(payload):
+    name = _require_profile_name(payload)
+    action = str(payload.get("action") or "")
+    config = load_config()
+    profile_dir = _get_profile_dir(config, name)
+    if action == "ensure-config":
+        path = ensure_profile_config_path(profile_dir)
+        return {"name": name, "action": action, "path": str(path)}
+    if action == "refresh-usage":
+        return refresh_profile_usage({"name": name})
+    if action == "prepare-runtime":
+        prepare_profile_codex_home(profile_dir)
+        return {"name": name, "action": action}
+    raise ValueError("不支持的修复操作")
+
+
+def get_profile_launch_settings(payload):
+    name = _require_profile_name(payload)
+    value = db.load_profile_launch_settings(name)
+    return {"name": name, "workingDir": value.get("workingDir", ""), "args": value.get("args", []), "env": value.get("env", {})}
+
+
+def save_profile_launch_settings(payload):
+    name = _require_profile_name(payload)
+    working_dir = str(payload.get("workingDir") or "").strip()
+    if working_dir and not Path(working_dir).is_dir():
+        raise ValueError("默认项目目录不存在")
+    args = [str(value).strip() for value in payload.get("args", []) if str(value).strip()]
+    env = {
+        str(key).strip(): str(value)
+        for key, value in dict(payload.get("env") or {}).items()
+        if str(key).strip()
+    }
+    if any("=" in key or "\x00" in key for key in env):
+        raise ValueError("环境变量名称不合法")
+    blocked = {"APPDATA", "LOCALAPPDATA", "CODEX_HOME", "CODEX_MULTI_PROFILE"}
+    if any(key.upper() in blocked for key in env):
+        raise ValueError("隔离环境变量由 ChatGPT Forge 管理，不能在账号启动环境中覆盖")
+    value = {"workingDir": working_dir, "args": args, "env": env}
+    db.save_profile_launch_settings(name, value)
+    return {"name": name, **value}
+
+
+def get_workspace(payload):
+    target = _workspace_target(payload)
+    return read_workspace(target["codex_home"])
+
+
+def save_agents(payload):
+    target = _workspace_target(payload)
+    return save_agents_service(target["codex_home"], payload.get("content", ""))
+
+
+def save_mcp_server(payload):
+    target = _workspace_target(payload)
+    return save_mcp_server_service(target["path"], payload.get("server") or {})
+
+
+def delete_mcp_server(payload):
+    target = _workspace_target(payload)
+    return delete_mcp_server_service(target["path"], payload.get("name"))
+
+
+def set_skill_enabled(payload):
+    target = _workspace_target(payload)
+    return set_skill_enabled_service(target["codex_home"], payload.get("name"), bool(payload.get("enabled")))
+
+
+def install_skill(payload):
+    target = _workspace_target(payload)
+    return install_skill_service(target["codex_home"], payload.get("sourcePath"))
+
+
+def remove_skill(payload):
+    target = _workspace_target(payload)
+    return remove_skill_service(target["codex_home"], payload.get("name"))
+
+
+def list_sessions(payload):
+    target = _workspace_target(payload)
+    return {"items": list_sessions_service(target["codex_home"], payload.get("limit", 200))}
+
+
+def compare_toml_configs(payload):
+    source = _resolve_config_target(load_config(), {"profileName": payload.get("sourceProfile")})
+    target = _resolve_config_target(load_config(), {"profileName": payload.get("targetProfile")})
+    source_text = Path(source["path"]).read_text(encoding="utf-8") if Path(source["path"]).is_file() else ""
+    target_text = Path(target["path"]).read_text(encoding="utf-8") if Path(target["path"]).is_file() else ""
+    diff = "".join(
+        difflib.unified_diff(
+            source_text.splitlines(keepends=True),
+            target_text.splitlines(keepends=True),
+            fromfile=str(source["path"]),
+            tofile=str(target["path"]),
+        )
+    )
+    source_data = tomllib.loads(source_text) if source_text.strip() else {}
+    return {"sourcePath": str(source["path"]), "targetPath": str(target["path"]), "identical": source_text == target_text, "diff": diff, "sourceKeys": sorted(source_data)}
+
+
+def sync_toml_keys(payload):
+    keys = [str(value) for value in payload.get("keys", [])]
+    if not keys:
+        raise ValueError("请选择要同步的配置项")
+    config = load_config()
+    source = _resolve_config_target(config, {"profileName": payload.get("sourceProfile")})
+    target = _resolve_config_target(config, {"profileName": payload.get("targetProfile")})
+    source_text = Path(source["path"]).read_text(encoding="utf-8") if Path(source["path"]).is_file() else ""
+    target_text = Path(target["path"]).read_text(encoding="utf-8") if Path(target["path"]).is_file() else ""
+    source_data = tomllib.loads(source_text) if source_text.strip() else {}
+    missing = [key for key in keys if key not in source_data]
+    if missing:
+        raise ValueError(f"源配置中不存在：{', '.join(missing)}")
+    merged = target_text
+    additions = []
+    for key in keys:
+        merged = _remove_toml_root(merged, key)
+        block = _extract_toml_root(source_text, key)
+        if block:
+            additions.append(block.strip())
+    merged = merged.rstrip()
+    if additions:
+        merged += ("\n\n" if merged else "") + "\n\n".join(additions) + "\n"
+    result = save_toml_config_service({"path": str(target["path"]), "content": merged})
+    return {**result, "keys": keys}
+
+
+def _extract_toml_root(content, root_key):
+    output = []
+    current_root = None
+    assignment = re.compile(rf"^\s*{re.escape(root_key)}\s*=")
+    for line in content.splitlines():
+        header = re.match(r"^\s*\[+\s*([A-Za-z0-9_-]+)(?:\.|\]|\s)", line)
+        if header:
+            current_root = header.group(1)
+        if (current_root is None and assignment.match(line)) or current_root == root_key:
+            output.append(line)
+    return "\n".join(output)
+
+
+def _remove_toml_root(content, root_key):
+    output = []
+    current_root = None
+    assignment = re.compile(rf"^\s*{re.escape(root_key)}\s*=")
+    for line in content.splitlines():
+        header = re.match(r"^\s*\[+\s*([A-Za-z0-9_-]+)(?:\.|\]|\s)", line)
+        if header:
+            current_root = header.group(1)
+        if (current_root is None and assignment.match(line)) or current_root == root_key:
+            continue
+        output.append(line)
+    return "\n".join(output).strip()
+
+
+def _workspace_target(payload):
+    config = load_config()
+    if _get_launch_mode(config) == "multi":
+        return _resolve_config_target(config, {"profileName": payload.get("profileName")})
+    return {"path": get_active_config_path(), "codex_home": get_active_codex_dir()}
+
+
+def _require_profile_name(payload):
+    name = str(payload.get("name") or "").strip()
+    if name not in load_config().get("profiles", []):
+        raise ValueError("账号不存在")
+    return name
+
+
 def export_profile_backup(payload):
-    """导出单个账号资料为 zip 备份。"""
+    """导出单个账号资料；敏感备份使用当前 Windows 用户的 DPAPI 加密。"""
     name = payload.get("name", "")
     target_dir = Path(payload.get("targetDir", ""))
     config = load_config()
@@ -294,35 +544,42 @@ def export_profile_backup(payload):
     if not profile_dir.exists():
         raise FileNotFoundError("账号资料目录不存在")
 
-    backup_path = target_dir / f"{sanitize_profile_name(name)}-backup-{time.strftime('%Y%m%d-%H%M%S')}.zip"
-    with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    secure = bool(payload.get("secure"))
+    include_auth = secure or bool(payload.get("includeAuth"))
+    suffix = ".forgebackup" if secure else ".zip"
+    backup_path = target_dir / f"{sanitize_profile_name(name)}-backup-{time.strftime('%Y%m%d-%H%M%S')}{suffix}"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
             "chatgpt-forge-profile.json",
             json.dumps(
-                {"name": name, "formatVersion": 2, "containsSensitiveAuth": True},
+                {"name": name, "formatVersion": 3, "containsSensitiveAuth": include_auth, "encrypted": secure},
                 ensure_ascii=False,
                 indent=2,
             ),
         )
-        included_files = list(_iter_profile_backup_files(profile_dir))
+        included_files = list(_iter_profile_backup_files(profile_dir, include_auth=include_auth))
         for file_path in included_files:
             archive.write(file_path, file_path.relative_to(profile_dir).as_posix())
+    backup_path.write_bytes(protect_bytes(buffer.getvalue()) if secure else buffer.getvalue())
     return {
         "name": name,
         "backupPath": str(backup_path),
         "includedFileCount": len(included_files),
-        "containsSensitiveAuth": True,
+        "containsSensitiveAuth": include_auth,
+        "encrypted": secure,
     }
 
 
-def _iter_profile_backup_files(profile_dir):
+def _iter_profile_backup_files(profile_dir, include_auth=True):
     """只备份可恢复账号所需文件，排除会话、日志、缓存和客户端副本。"""
     profile_dir = Path(profile_dir)
     direct_files = (
-        profile_dir / "auth.json",
         profile_dir / "CodexHome" / "config.toml",
         profile_dir / "CodexHome" / ".env",
     )
+    if include_auth:
+        direct_files = (profile_dir / "auth.json", *direct_files)
     seen = set()
     for file_path in direct_files:
         if file_path.is_file() and not is_reparse_point(file_path):
@@ -345,12 +602,15 @@ def _iter_profile_backup_files(profile_dir):
 
 
 def import_profile_backup(payload):
-    """从 zip 备份恢复账号资料。"""
+    """从普通 zip 或当前 Windows 用户加密的备份恢复账号资料。"""
     backup_path = Path(payload.get("backupPath", ""))
     config = load_config()
-    if not backup_path.is_file() or backup_path.suffix.lower() != ".zip":
-        raise ValueError("请选择有效的账号备份 zip")
-    with zipfile.ZipFile(backup_path, "r") as archive:
+    if not backup_path.is_file() or backup_path.suffix.lower() not in (".zip", ".forgebackup"):
+        raise ValueError("请选择有效的账号备份文件")
+    raw = backup_path.read_bytes()
+    if backup_path.suffix.lower() == ".forgebackup":
+        raw = unprotect_bytes(raw)
+    with zipfile.ZipFile(io.BytesIO(raw), "r") as archive:
         meta = _read_backup_meta(archive)
         name = _validate_profile_name(config, payload.get("name") or meta.get("name") or backup_path.stem)
         profiles = config.setdefault("profiles", [])
@@ -400,7 +660,7 @@ def launch_profile(payload):
     )
     config["active_profile"] = name
     save_config(config)
-    _launch_default_codex()
+    _launch_default_codex(name)
     logger.info("账号启动成功 名称=%s 目录=%s", name, profile_dir)
     return {"name": name, "activeAuthPath": str(get_active_auth_path()), "activeConfigPath": str(get_active_config_path())}
 
@@ -449,11 +709,15 @@ def _launch_profile_multi(config, name):
     env["LOCALAPPDATA"] = str(localappdata_dir)
     env["CODEX_HOME"] = str(codex_home_dir)
     env["CODEX_MULTI_PROFILE"] = name
+    launch_settings = db.load_profile_launch_settings(name)
+    env.update({str(key): str(value) for key, value in dict(launch_settings.get("env") or {}).items()})
+    extra_args = [str(value) for value in launch_settings.get("args", [])]
+    working_dir = str(launch_settings.get("workingDir") or Path(portable_codex_path).parent)
 
     logger.info("多开账号启动开始 名称=%s 程序=%s CODEX_HOME=%s", name, portable_codex_path, codex_home_dir)
     subprocess.Popen(
-        [portable_codex_path, f"--user-data-dir={user_data_dir}"],
-        cwd=str(Path(portable_codex_path).parent),
+        [portable_codex_path, f"--user-data-dir={user_data_dir}", *extra_args],
+        cwd=working_dir,
         env=env,
         close_fds=True,
         creationflags=subprocess.CREATE_NO_WINDOW,
@@ -800,7 +1064,10 @@ def open_path(payload):
     path = Path(payload.get("path", ""))
     if not path.exists():
         raise FileNotFoundError(path)
-    os.startfile(str(path))
+    if payload.get("reveal") and path.is_file():
+        subprocess.Popen(["explorer.exe", "/select,", str(path)], creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        os.startfile(str(path))
     return {"path": str(path)}
 
 
@@ -1292,17 +1559,22 @@ $matches | Where-Object { $_ -match $pattern } | Sort-Object @{Expression = { $_
     return next((line.strip() for line in result.stdout.splitlines() if line.strip()), "")
 
 
-def _launch_default_codex():
+def _launch_default_codex(profile_name=""):
     """启动默认安装的 Codex 桌面端。"""
     config = load_config()
     launch_spec = _resolve_codex_launch_spec(config)
-    command = launch_spec["command"]
+    launch_settings = db.load_profile_launch_settings(profile_name) if profile_name else {}
+    extra_args = [str(value) for value in launch_settings.get("args", [])] if launch_spec["kind"] == "app" else []
+    command = [*launch_spec["command"], *extra_args]
+    env = os.environ.copy()
+    env.update({str(key): str(value) for key, value in dict(launch_settings.get("env") or {}).items()})
+    working_dir = str(launch_settings.get("workingDir") or launch_spec.get("cwd") or "") or None
     logger.info("Codex 启动开始 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
     try:
         subprocess.Popen(
             command,
-            cwd=launch_spec.get("cwd"),
-            env=os.environ.copy(),
+            cwd=working_dir,
+            env=env,
             close_fds=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )

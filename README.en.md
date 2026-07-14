@@ -43,6 +43,7 @@
 - 🛠️ **Visual editing**: View and edit the active `~/.codex/config.toml`.
 - 📝 **Instruction templates (prompt injection)**: Save common prompts as Markdown templates and switch ChatGPT's global behavior profile with one click. The built-in prompt can break restrictions and support effects such as SQL injection testing and reverse engineering.
 - 📊 **Status monitoring**: Check the current workspace and running instances on the home page, then inspect account health, weekly remaining usage, available resets, and expiration times from profile management.
+- 🧰 **Environment workspace**: Review 30-day usage trends and account health, then manage MCP, Skills, AGENTS.md, the read-only session index, and per-account launch settings.
 - 🚀 **Selectable launch modes**: Supports account switching and isolated multi-instance mode for running multiple ChatGPT clients.
 - 🌐 **Bilingual UI**: Built-in Chinese / English switching for different language environments.
 - 🔔 **Version updates**: Check for updates in the app, review release notes, download in the background, and restart to install.
@@ -63,6 +64,8 @@
 | 🚀 **One-click switch and launch** | Writes the selected account into the current user's `.codex` directory and launches ChatGPT. If ChatGPT is running, the app prompts you to close it first. |
 | 📦 **Isolated multi-instance launch** | Featured capability. Creates one shared copy from the installed ChatGPT client. All accounts use that copy with separate `CodexHome`, `APPDATA`, `LOCALAPPDATA`, and `--user-data-dir` environments. |
 | 📊 **Usage snapshots** | Uses the official Codex App Server to read and cache weekly remaining usage, available resets, each reset's expiration time, and limit status. |
+| 🧰 **Environment workspace** | Keeps 30 days of usage history, provides threshold alerts, config diffs and field-level sync, health checks and repairs, and manages MCP, Skills, AGENTS.md, a read-only session index, and launch settings. |
+| 🔐 **Encrypted profile backups** | Protects profile backups with Windows DPAPI while keeping legacy ZIP restore compatibility; sessions, logs, caches, and client files stay excluded. |
 | 🛠️ **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
 | 📝 **Instruction templates (prompt injection)** | Saves Markdown prompt templates locally. Enabling a template copies it into the active ChatGPT config directory and points `model_instructions_file` in `config.toml` to that template. |
 | ⚙️ **Launch and directory settings** | Switch launch modes, migrate the account profile root, and enable ChatGPT Forge to start after Windows sign-in. |

@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("launcherApi", {
   },
   getAutoStartEnabled: () => ipcRenderer.invoke("app:get-auto-start-enabled"),
   getAppVersion: () => ipcRenderer.invoke("app:get-version"),
+  showNotification: (title: string, body: string) => ipcRenderer.invoke("app:show-notification", title, body),
   openProjectGitHub: () => ipcRenderer.invoke("app:open-external", projectGitHubUrl),
   openProjectGitee: () => ipcRenderer.invoke("app:open-external", projectGiteeUrl),
   setAutoStartEnabled: (enabled: boolean) => ipcRenderer.invoke("app:set-auto-start-enabled", enabled),

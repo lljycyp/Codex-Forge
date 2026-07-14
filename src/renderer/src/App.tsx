@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Layout, Modal, Progress, message } from "antd";
-import { Code2, FileText, Home, Settings, ShieldCheck } from "lucide-react";
+import { Boxes, Code2, FileText, Home, Settings, ShieldCheck } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
 import { getViewMeta } from "./constants/views";
 import { invokeLauncher } from "./api/launcher";
@@ -10,6 +10,7 @@ import { Profiles } from "./pages/Profiles";
 import { InstructionsPage } from "./pages/InstructionsPage";
 import { TomlConfigPage } from "./pages/TomlConfigPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { WorkspacePage } from "./pages/WorkspacePage";
 import chatgptForgeLogo from "./assets/chatgpt-forge-logo.png";
 import type { AppState, ProfileSummary, RunCommand, UpdateEvent, ViewKey } from "./types";
 
@@ -72,6 +73,30 @@ function updateNotes(event: UpdateEvent | null, language: string) {
   return notes;
 }
 
+async function notifyLowUsage(profiles: ProfileSummary[], t: (text: string) => string) {
+  if (localStorage.getItem("quotaAlertsEnabled") === "false" || !window.launcherApi.showNotification) {
+    return;
+  }
+  const configured = Number(localStorage.getItem("quotaAlertThreshold") || "20");
+  const threshold = Number.isFinite(configured) ? Math.max(1, Math.min(configured, 90)) : 20;
+  for (const profile of profiles) {
+    for (const [label, usage] of [[t("一周剩余额度"), profile.usage?.oneWeek]] as const) {
+      if (!usage || profile.usage?.error) continue;
+      const resetKey = `quotaWindowReset:${profile.id}:${usage.windowSeconds}`;
+      const previousReset = Number(localStorage.getItem(resetKey) || "0");
+      if (usage.resetAt) localStorage.setItem(resetKey, String(usage.resetAt));
+      if (previousReset && usage.resetAt && usage.resetAt > previousReset && usage.remainingPercent > threshold) {
+        await window.launcherApi.showNotification(t("ChatGPT 额度已重置"), `${profile.name} ${label} ${Math.round(usage.remainingPercent)}%`);
+      }
+      if (usage.remainingPercent > threshold) continue;
+      const key = `quotaAlert:${profile.id}:${usage.windowSeconds}:${usage.resetAt ?? "unknown"}:${threshold}`;
+      if (localStorage.getItem(key)) continue;
+      localStorage.setItem(key, String(Date.now()));
+      await window.launcherApi.showNotification(t("ChatGPT 额度提醒"), `${profile.name} ${label} ${Math.round(usage.remainingPercent)}%`);
+    }
+  }
+}
+
 export default function App() {
   const { language, t } = useI18n();
   const [activeView, setActiveView] = useState<ViewKey>("home");
@@ -127,6 +152,7 @@ export default function App() {
     ]);
     setAppState(stateData);
     setProfiles(profileData.profiles);
+    return profileData.profiles;
   }, []);
 
   const refresh = useCallback(async (view?: ViewKey | null) => {
@@ -199,7 +225,8 @@ export default function App() {
       autoUsageRefreshingRef.current = true;
       try {
         await invokeLauncher("refresh_all_profile_usage");
-        await loadShellState();
+        const nextProfiles = await loadShellState();
+        await notifyLowUsage(nextProfiles, t);
       } catch {
         // 静默自动刷新不打扰用户，手动刷新仍会展示具体错误。
       } finally {
@@ -212,7 +239,7 @@ export default function App() {
     }, usageAutoRefreshMs);
     void refreshUsageSilently();
     return () => window.clearInterval(timer);
-  }, [loadShellState]);
+  }, [loadShellState, t]);
 
   const runCommand = useCallback<RunCommand>(
     async (command, payload, successText = t("操作完成"), options) => {
@@ -251,6 +278,7 @@ export default function App() {
     () => [
       { key: "home" as const, label: t("首页"), icon: <Home size={18} /> },
       { key: "profiles" as const, label: t("账号"), icon: <ShieldCheck size={18} /> },
+      { key: "workspace" as const, label: t("环境"), icon: <Boxes size={18} /> },
       { key: "instructions" as const, label: t("指令模板"), icon: <FileText size={18} /> },
       { key: "toml" as const, label: "TOML", icon: <Code2 size={18} /> },
       { key: "settings" as const, label: t("设置"), icon: <Settings size={18} /> }
@@ -361,6 +389,9 @@ export default function App() {
               runCommand={runCommand}
               loading={commandingView === "profiles" || refreshingView === "profiles"}
             />
+          ) : null}
+          {activeView === "workspace" ? (
+            <WorkspacePage appState={appState} profiles={profiles} />
           ) : null}
           {activeView === "instructions" ? (
             <InstructionsPage appState={appState} profiles={profiles} />

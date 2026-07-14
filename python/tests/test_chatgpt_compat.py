@@ -278,7 +278,7 @@ trusted_hash = "dynamic"
                 result = export_profile_backup({"name": "work", "targetDir": str(root)})
 
             with zipfile.ZipFile(result["backupPath"]) as archive:
-                self.assertIn("auth.json", archive.namelist())
+                self.assertNotIn("auth.json", archive.namelist())
                 self.assertNotIn("CodexHome/auth.json", archive.namelist())
                 self.assertIn("CodexHome/config.toml", archive.namelist())
                 self.assertFalse(any(name.startswith("ChatGPTPortableApp/") for name in archive.namelist()))
