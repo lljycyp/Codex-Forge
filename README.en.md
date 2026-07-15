@@ -121,15 +121,18 @@ Before saving changes, it validates the TOML content and backs up the old file t
 
 ### 5. 📝 Instruction Template Management (Prompt Injection)
 
-Instruction templates let you quickly switch ChatGPT's system-level behavior prompt. You can save common workflows, coding rules, review standards, or a restriction-breaking prompt such as `docs/propmt/gpt5.5-unrestricted.md` as Markdown templates and enable them when needed.
+Instruction templates let you quickly switch ChatGPT's system-level behavior prompt. You can save common workflows, coding rules, review standards, or one of the bundled restriction-breaking prompts as Markdown templates and enable them when needed.
 
-ChatGPT Forge currently includes this restriction-breaking prompt template:
+ChatGPT Forge currently includes these restriction-breaking prompt templates:
 
 - `docs/propmt/gpt5.5-unrestricted.md`
+- `docs/propmt/gpt-5.6-sol-unrestricted.md` (for GPT-5.6 SOL)
 
-You can enable or disable it directly from the **Instruction templates** page. After it is enabled, ChatGPT Forge writes the matching `.md` file into the ChatGPT config directory and updates `model_instructions_file` in `config.toml`.
+ChatGPT Forge automatically adds both templates to **Instruction templates** at startup, but leaves them disabled and does not overwrite existing templates with the same filenames.
 
-| Comparison | Default instructions | `gpt5.5-unrestricted.md` |
+You can enable or disable them directly from the **Instruction templates** page. After a template is enabled, ChatGPT Forge writes the matching `.md` file into the ChatGPT config directory and updates `model_instructions_file` in `config.toml`.
+
+| Comparison | Default instructions | Restriction-breaking prompt templates |
 | :--- | :--- | :--- |
 | Positioning | General ChatGPT assistant | High-freedom developer mode |
 | Strategy | More conservative and more likely to give generic refusals | Emphasizes execution, analysis, and verifiable results |

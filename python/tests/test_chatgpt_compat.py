@@ -1,7 +1,8 @@
+import json
+import os
 import tempfile
 import tomllib
 import unittest
-import json
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,7 +29,7 @@ from core.codex_source import (
     write_source_signature,
 )
 from core.auth_service import auth_kind
-from core.app_server_service import _remove_temporary_directory
+from core.app_server_service import _exclusive_file_lock, _remove_temporary_directory
 from core.profile_service import (
     get_auth_credentials_store,
     require_file_auth_store,
@@ -38,6 +39,25 @@ from core.usage_service import _map_app_server_usage
 
 
 class ChatGptCompatibilityTest(unittest.TestCase):
+    def test_stale_app_server_lock_is_recovered(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "auth.json.app-server.lock"
+            lock_path.write_text("12345", encoding="utf-8")
+            with patch("core.app_server_service._is_process_running", return_value=False):
+                with _exclusive_file_lock(lock_path, timeout_seconds=1):
+                    self.assertEqual(lock_path.read_text(encoding="utf-8"), str(os.getpid()))
+            self.assertFalse(lock_path.exists())
+
+    def test_running_app_server_lock_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "auth.json.app-server.lock"
+            lock_path.write_text("12345", encoding="utf-8")
+            with patch("core.app_server_service._is_process_running", return_value=True):
+                with self.assertRaises(TimeoutError):
+                    with _exclusive_file_lock(lock_path, timeout_seconds=0):
+                        pass
+            self.assertEqual(lock_path.read_text(encoding="utf-8"), "12345")
+
     def test_new_client_entry_processes_and_portable_copy(self):
         self.assertTrue(_is_client_main_process({
             "name": "ChatGPT.exe",

@@ -48,6 +48,7 @@ from core.instruction_service import (
     delete_instruction_template as delete_instruction_template_service,
     disable_instruction_template as disable_instruction_template_service,
     enable_instruction_template as enable_instruction_template_service,
+    ensure_builtin_instruction_templates,
     list_instruction_templates as list_instruction_templates_service,
     save_instruction_template as save_instruction_template_service,
     sync_instruction_template as sync_instruction_template_service,
@@ -151,6 +152,10 @@ def get_app_state(_payload=None):
     """读取首页需要的账号切换状态。"""
     config = load_config()
     _normalize_profile_configs(config)
+    ensure_builtin_instruction_templates()
+    for profile_name in config.get("profiles", []):
+        target = _resolve_config_target(config, {"profileName": profile_name})
+        ensure_builtin_instruction_templates(_instruction_payload(target))
     profiles = config.get("profiles", [])
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
     running_count = _running_count_for_mode(config)

@@ -5,16 +5,30 @@ from pathlib import Path
 
 from core import db
 from core.constants import CONFIG_DIR
+from core.path_utils import resource_path
 from core.profile_service import get_active_codex_dir, get_active_config_path
 
 
 DEFAULT_TEMPLATE_DIR = CONFIG_DIR / "instruction_templates"
+BUILTIN_TEMPLATES = (
+    {
+        "id": "builtin-gpt-5.5-unrestricted",
+        "title": "GPT-5.5 破除限制",
+        "filename": "gpt5.5-unrestricted.md",
+    },
+    {
+        "id": "builtin-gpt-5.6-sol-unrestricted",
+        "title": "GPT-5.6 Sol 破除限制",
+        "filename": "gpt-5.6-sol-unrestricted.md",
+    },
+)
 
 
 def list_instruction_templates(_payload=None):
     """读取本地指令模板列表，并标记当前启用项。"""
     payload = _payload or {}
     template_dir = _template_dir(payload)
+    ensure_builtin_instruction_templates(payload)
     templates = _load_index(template_dir)
     config_path = Path(payload.get("configPath") or get_active_config_path())
     current_file = _get_current_instruction_file(config_path)
@@ -31,6 +45,28 @@ def list_instruction_templates(_payload=None):
         "currentInstructionFile": current_file or "",
         "activeConfigPath": str(config_path),
     }
+
+
+def ensure_builtin_instruction_templates(payload=None):
+    """补齐内置指令模板，但不覆盖同名模板，也不自动启用。"""
+    template_dir = _template_dir(payload)
+    templates = _load_index(template_dir)
+    filenames = {template["filename"] for template in templates}
+    changed = False
+    for builtin in BUILTIN_TEMPLATES:
+        filename = builtin["filename"]
+        target = _template_path(filename, template_dir)
+        if not target.exists():
+            source = resource_path("docs", "propmt", filename)
+            if not source.is_file():
+                raise FileNotFoundError(f"内置指令模板不存在：{filename}")
+            _write_text_atomic(target, source.read_text(encoding="utf-8"))
+        if filename not in filenames:
+            templates.append(dict(builtin))
+            filenames.add(filename)
+            changed = True
+    if changed:
+        _save_index(templates, template_dir)
 
 
 def save_instruction_template(payload):

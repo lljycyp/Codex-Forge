@@ -14,6 +14,8 @@ rm -f resources/main.exe
   --onefile \
   --console \
   --name main \
+  --add-data ../docs/propmt/gpt5.5-unrestricted.md:docs/propmt \
+  --add-data ../docs/propmt/gpt-5.6-sol-unrestricted.md:docs/propmt \
   main.py \
   --noconfirm \
   --distpath ../resources \

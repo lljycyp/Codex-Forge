@@ -121,15 +121,18 @@ ChatGPT Forge 会读取当前生效的配置文件：
 
 ### 5. 📝 指令模板管理（提示词注入）
 
-指令模板用于快速切换 ChatGPT 的系统级行为提示词。你可以把常用工作方式、代码规范、审查标准，或类似 `docs/propmt/gpt5.5-unrestricted.md` 这样的破除限制提示词保存为 Markdown（标记语言）模板，需要时一键启用。
+指令模板用于快速切换 ChatGPT 的系统级行为提示词。你可以把常用工作方式、代码规范、审查标准，或仓库内置的破除限制提示词保存为 Markdown（标记语言）模板，需要时一键启用。
 
 ChatGPT Forge 当前内置破除限制提示词模板：
 
 - `docs/propmt/gpt5.5-unrestricted.md`
+- `docs/propmt/gpt-5.6-sol-unrestricted.md`（适配 GPT-5.6 SOL）
+
+ChatGPT Forge 启动时会自动将这两个模板写入 **指令模板**，但不会默认启用，也不会覆盖已有的同名模板。
 
 你可以在 **指令模板** 页面直接点击启用 / 禁用。启用后，ChatGPT Forge 会把对应 `.md` 写入 ChatGPT 配置目录，并更新 `config.toml` 中的 `model_instructions_file`。
 
-| 对比项 | 默认指令             | `gpt5.5-unrestricted.md`     |
+| 对比项 | 默认指令             | 破除限制提示词模板           |
 | :----- | :------------------- | :--------------------------- |
 | 定位   | 通用 ChatGPT 助手    | 高自由度开发者模式           |
 | 策略   | 偏保守，容易泛化拒答 | 更强调执行、分析和可验证结果 |

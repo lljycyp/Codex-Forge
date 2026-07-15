@@ -85,7 +85,8 @@ async function notifyLowUsage(profiles: ProfileSummary[], t: (text: string) => s
       const resetKey = `quotaWindowReset:${profile.id}:${usage.windowSeconds}`;
       const previousReset = Number(localStorage.getItem(resetKey) || "0");
       if (usage.resetAt) localStorage.setItem(resetKey, String(usage.resetAt));
-      if (previousReset && usage.resetAt && usage.resetAt > previousReset && usage.remainingPercent > threshold) {
+      const previousWindowEnded = previousReset > 0 && previousReset <= Date.now() / 1000;
+      if (previousWindowEnded && usage.resetAt && usage.resetAt > previousReset && usage.remainingPercent > threshold) {
         await window.launcherApi.showNotification(t("ChatGPT 额度已重置"), `${profile.name} ${label} ${Math.round(usage.remainingPercent)}%`);
       }
       if (usage.remainingPercent > threshold) continue;

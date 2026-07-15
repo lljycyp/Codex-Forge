@@ -6,7 +6,7 @@ from pathlib import Path
 
 def resource_path(*parts):
     """获取源码运行或打包运行时都可访问的资源路径。"""
-    base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
+    base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
     return base_dir.joinpath(*parts)
 
 
