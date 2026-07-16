@@ -6,7 +6,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 from bridge.commands import (
     _get_legacy_system_running_profile,
@@ -29,7 +29,7 @@ from core.codex_source import (
     write_source_signature,
 )
 from core.auth_service import auth_kind
-from core.app_server_service import _exclusive_file_lock, _remove_temporary_directory
+from core.app_server_service import AppServerClient, _exclusive_file_lock, _remove_temporary_directory
 from core.profile_service import (
     get_auth_credentials_store,
     require_file_auth_store,
@@ -199,6 +199,23 @@ class ChatGptCompatibilityTest(unittest.TestCase):
 
         self.assertEqual(rmtree.call_count, 2)
         sleep.assert_called_once()
+
+    def test_windows_app_server_exit_kills_process_tree_before_closing_stdin(self):
+        events = Mock()
+        process = Mock(pid=12345)
+        process.poll.side_effect = (None, 0)
+        process.stdin.close.side_effect = lambda: events.stdin_closed()
+        client = AppServerClient("C:\\Temp\\codex-home", "C:\\Temp\\codex.exe")
+        client.process = process
+
+        with (
+            patch("core.app_server_service.os.name", "nt"),
+            patch("core.app_server_service.subprocess.run", side_effect=lambda *args, **kwargs: events.tree_killed()),
+        ):
+            client.__exit__(None, None, None)
+
+        self.assertEqual(events.mock_calls, [call.tree_killed(), call.stdin_closed()])
+        process.wait.assert_called_once_with(timeout=3)
 
     def test_profile_config_removes_chatgpt_runtime_state(self):
         source = """model = "gpt-test"

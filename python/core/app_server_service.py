@@ -285,6 +285,18 @@ class AppServerClient:
         process = self.process
         if process is None:
             return
+        if os.name == "nt" and process.poll() is None:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                capture_output=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
         if process.stdin:
             try:
                 process.stdin.close()
@@ -294,15 +306,7 @@ class AppServerClient:
             try:
                 process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                if os.name == "nt":
-                    subprocess.run(
-                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                        check=False,
-                        capture_output=True,
-                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    )
-                else:
-                    process.terminate()
+                process.terminate()
                 try:
                     process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
