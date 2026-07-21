@@ -7,6 +7,10 @@ triggers:
     tags:
       prefix:
         - v
+variables:
+  global:
+    - RELEASE_GITHUB_TOKEN
+    - RELEASE_GITEE_TOKEN
 stages:
   - name: prepare
     displayName: Prepare deploy artifact
