@@ -17,6 +17,18 @@ git fetch --tags origin
 git checkout main
 git pull --ff-only origin main
 
+release_tag="v$(node -p "require('./package.json').version")"
+head_commit="$(git rev-parse HEAD)"
+tag_commit="$(git rev-list -n 1 "$release_tag")"
+
+if [ "$head_commit" != "$tag_commit" ]; then
+  echo "Release tag $release_tag does not point to current main commit"
+  exit 1
+fi
+
+git checkout --detach "$release_tag"
+export RELEASE_TAG="$release_tag"
+
 npm config set registry https://registry.npmmirror.com
 command -v yarn >/dev/null 2>&1 || npm install -g yarn
 yarn config set registry https://registry.npmmirror.com
@@ -29,14 +41,15 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 yarn install --frozen-lockfile --network-timeout 600000
 yarn build
 
-if [ -z "${GITEE_TOKEN:-}" ]; then
-  export GITEE_TOKEN="${G_TOKEN:-}"
-fi
+export GITEE_UPLOAD_MAX_TIME=7200
 
-if [ -z "$GITEE_TOKEN" ] || [ "$GITEE_TOKEN" = '${G_TOKEN}' ]; then
-  echo "G_TOKEN is required in Gitee Go variables or GITEE_TOKEN is required on the Windows host"
+gitee_status=0
+github_status=0
+
+node scripts/publish_gitee_release.js || gitee_status=$?
+node scripts/publish_github_release.js || github_status=$?
+
+if [ "$gitee_status" -ne 0 ] || [ "$github_status" -ne 0 ]; then
+  echo "Release publishing failed: Gitee=$gitee_status GitHub=$github_status"
   exit 1
 fi
-
-export GITEE_UPLOAD_MAX_TIME=7200
-node scripts/publish_gitee_release.js

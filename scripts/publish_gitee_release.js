@@ -16,7 +16,7 @@ const uploadMaxTime = process.env.GITEE_UPLOAD_MAX_TIME || "7200";
 
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const version = pkg.version;
-const tagName = process.env.GITHUB_REF_NAME || `v${version}`;
+const tagName = process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME || `v${version}`;
 const releaseDir = path.join(root, "release");
 const releaseNotesPath = path.join(releaseDir, "release-notes.md");
 const requiredFiles = [
