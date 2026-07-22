@@ -22,14 +22,3 @@ where = ["."]
 
 [tool.pyinstaller]
 entry = "main.py"
-
-[tool.basedpyright]
-include = ["."]
-exclude = [
-    ".venv",
-    "__pycache__",
-    "**/*.egg-info",
-]
-typeCheckingMode = "basic"
-extraPaths = ["."]
-reportMissingTypeStubs = false

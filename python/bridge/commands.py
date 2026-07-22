@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import zipfile
@@ -97,12 +98,14 @@ def invoke(command, payload=None):
         "delete_profile": delete_profile,
         "export_profile_backup": export_profile_backup,
         "get_app_state": get_app_state,
+        "get_shell_snapshot": get_shell_snapshot,
         "get_diagnostics": get_diagnostics,
         "get_profile_detail": get_profile_detail,
         "get_profile_health": get_profile_health,
         "get_profile_launch_settings": get_profile_launch_settings,
         "get_usage_history": get_usage_history,
         "get_workspace": get_workspace,
+        "get_workspace_snapshot": get_workspace_snapshot,
         "import_profile_backup": import_profile_backup,
         "install_skill": install_skill,
         "list_sessions": list_sessions,
@@ -156,11 +159,34 @@ def get_app_state(_payload=None):
     for profile_name in config.get("profiles", []):
         target = _resolve_config_target(config, {"profileName": profile_name})
         ensure_builtin_instruction_templates(_instruction_payload(target))
+    running_processes = read_running_codex_processes()
+    running_commands = _commands_from_processes(running_processes)
+    return _build_app_state(config, running_processes, running_commands)
+
+
+def get_shell_snapshot(_payload=None):
+    """一次读取壳层状态和账号摘要，避免重复启动后端与扫描进程。"""
+    config = load_config()
+    _normalize_profile_configs(config)
+    ensure_builtin_instruction_templates()
+    for profile_name in config.get("profiles", []):
+        target = _resolve_config_target(config, {"profileName": profile_name})
+        ensure_builtin_instruction_templates(_instruction_payload(target))
+    running_processes = read_running_codex_processes()
+    running_commands = _commands_from_processes(running_processes)
+    return {
+        "appState": _build_app_state(config, running_processes, running_commands),
+        "profiles": _build_profile_summaries(config, running_commands, running_processes),
+    }
+
+
+def _build_app_state(config, running_processes, running_commands):
+    """用同一份配置和进程快照构造壳层状态。"""
     profiles = config.get("profiles", [])
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
-    running_count = _running_count_for_mode(config)
+    running_count = _running_count_for_mode(config, running_processes, running_commands)
     return {
-        "codexCommandAvailable": _is_codex_command_available(),
+        "codexCommandAvailable": _is_codex_command_available(config, running_processes),
         "activeAuthPath": str(get_active_auth_path()),
         "activeAuthExists": get_active_auth_path().exists(),
         "activeConfigPath": str(get_active_config_path()),
@@ -180,13 +206,9 @@ def list_profiles(_payload=None):
     """读取账号列表和每个账号资料状态。"""
     config = load_config()
     _normalize_profile_configs(config)
-    running_commands = read_running_codex_commands()
-    return {
-        "profiles": [
-            _build_profile_summary(config, profile_name, running_commands)
-            for profile_name in config.get("profiles", [])
-        ]
-    }
+    running_processes = read_running_codex_processes()
+    running_commands = _commands_from_processes(running_processes)
+    return {"profiles": _build_profile_summaries(config, running_commands, running_processes)}
 
 
 def create_profile(payload):
@@ -413,6 +435,39 @@ def save_profile_launch_settings(payload):
 def get_workspace(payload):
     target = _workspace_target(payload)
     return read_workspace(target["codex_home"])
+
+
+def get_workspace_snapshot(payload):
+    """一次读取环境工作台所需数据，减少打包后端的重复启动。"""
+    name = _require_profile_name(payload)
+    workspace_payload = {"profileName": payload.get("profileName")} if payload.get("profileName") else {}
+    readers = {
+        "history": (get_usage_history, {"name": name, "days": payload.get("days", 30)}),
+        "health": (get_profile_health, {"name": name}),
+        "workspace": (get_workspace, workspace_payload),
+        "sessions": (list_sessions, {**workspace_payload, "limit": payload.get("limit", 300)}),
+        "launchSettings": (get_profile_launch_settings, {"name": name}),
+    }
+    results = {}
+    errors = {}
+
+    def read_item(key, reader, reader_payload):
+        try:
+            results[key] = reader(reader_payload)
+        except Exception as exc:
+            errors[key] = exc
+
+    threads = [
+        threading.Thread(target=read_item, args=(key, reader, reader_payload))
+        for key, (reader, reader_payload) in readers.items()
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if errors:
+        raise next(iter(errors.values()))
+    return {key: results[key] for key in readers}
 
 
 def save_agents(payload):
@@ -1203,15 +1258,45 @@ def _jwt_expiration(token):
     return int(exp) if isinstance(exp, (int, float)) else None
 
 
-def _build_profile_summary(config, profile_name, running_commands):
+def _commands_from_processes(processes):
+    return normalize_path_for_match("\n".join(process["command_line"] for process in processes))
+
+
+def _build_profile_summaries(config, running_commands, running_processes):
+    profile_records = {record["display_name"]: record for record in db.list_profile_records()}
+    usage_cache = db.load_usage_cache()
+    legacy_profile = _get_legacy_system_running_profile(config, running_processes)
+    return [
+        _build_profile_summary(
+            config,
+            profile_name,
+            running_commands,
+            profile_record=profile_records.get(profile_name),
+            usage_cache=usage_cache,
+            legacy_profile=legacy_profile,
+        )
+        for profile_name in config.get("profiles", [])
+    ]
+
+
+def _build_profile_summary(
+    config,
+    profile_name,
+    running_commands,
+    profile_record=None,
+    usage_cache=None,
+    legacy_profile=None,
+):
     """构造账号列表项。"""
-    profile_record = db.get_profile(profile_name)
+    if profile_record is None:
+        profile_record = db.get_profile(profile_name)
+    usage = usage_cache.get(profile_name) if usage_cache is not None else get_cached_profile_usage(profile_name)
     profile_dir = _get_profile_dir(config, profile_name)
     status = get_profile_status(
         profile_dir,
     )
     active_profile = config.get("active_profile", "")
-    running = _is_profile_running(config, profile_name, running_commands)
+    running = _is_profile_running(config, profile_name, running_commands, legacy_profile)
     target_app_dir = _get_shared_app_root(config) / PORTABLE_APP_DIR_NAME
     portable_client_path = target_app_dir / "ChatGPT.exe"
     if not portable_client_path.exists():
@@ -1243,7 +1328,7 @@ def _build_profile_summary(config, profile_name, running_commands):
         "portableCodexSizeText": _format_bytes(portable_codex_size),
         "errors": status["errors"],
         "warnings": status["warnings"],
-        "usage": get_cached_profile_usage(profile_name),
+        "usage": usage,
     }
 
 
@@ -1325,27 +1410,31 @@ def _get_launch_mode(config):
     return "multi" if config.get("launch_mode") == "multi" else "switch"
 
 
-def _is_profile_running(config, profile_name, running_commands=None):
+def _is_profile_running(config, profile_name, running_commands=None, legacy_profile=None):
     """判断指定账号是否为当前正在运行的账号。"""
     if _get_launch_mode(config) == "multi":
         running_commands = running_commands if running_commands is not None else read_running_codex_commands()
         if any(target in running_commands for target in _get_profile_running_match_targets(config, profile_name)):
             return True
-        return _get_legacy_system_running_profile(config) == profile_name
+        if legacy_profile is None:
+            legacy_profile = _get_legacy_system_running_profile(config)
+        return legacy_profile == profile_name
     if running_commands is None:
         running_commands = read_running_codex_commands()
     return profile_name == config.get("active_profile", "") and bool(running_commands)
 
 
-def _running_count_for_mode(config):
+def _running_count_for_mode(config, running_processes=None, running_commands=None):
     """按当前启动模式统计运行账号数。"""
+    running_processes = running_processes if running_processes is not None else read_running_codex_processes()
     if _get_launch_mode(config) != "multi":
-        return 1 if _running_codex_count() > 0 else 0
-    running_commands = read_running_codex_commands()
+        return 1 if running_processes else 0
+    running_commands = running_commands if running_commands is not None else _commands_from_processes(running_processes)
+    legacy_profile = _get_legacy_system_running_profile(config, running_processes)
     return sum(
         1
         for profile_name in config.get("profiles", [])
-        if _is_profile_running(config, profile_name, running_commands)
+        if _is_profile_running(config, profile_name, running_commands, legacy_profile)
     )
 
 
@@ -1363,7 +1452,7 @@ def _running_multi_profile_names(config):
     return running_profiles
 
 
-def _get_unisolated_codex_processes(config):
+def _get_unisolated_codex_processes(config, running_processes=None):
     """返回不属于任何账号隔离目录的系统客户端主进程。"""
     profile_targets = [
         target
@@ -1372,14 +1461,14 @@ def _get_unisolated_codex_processes(config):
     ]
     return [
         process
-        for process in read_running_codex_processes()
+        for process in (running_processes if running_processes is not None else read_running_codex_processes())
         if not any(target in normalize_path_for_match(process["command_line"]) for target in profile_targets)
     ]
 
 
-def _get_legacy_system_running_profile(config):
+def _get_legacy_system_running_profile(config, running_processes=None):
     """识别从账号切换模式直接带入多开模式的系统客户端。"""
-    if _get_launch_mode(config) != "multi" or not _get_unisolated_codex_processes(config):
+    if _get_launch_mode(config) != "multi" or not _get_unisolated_codex_processes(config, running_processes):
         return ""
     active_auth_path = get_active_auth_path()
     if not active_auth_path.exists():
@@ -1421,10 +1510,12 @@ def _running_codex_count():
     return len(read_running_codex_processes())
 
 
-def _is_codex_command_available():
+def _is_codex_command_available(config=None, running_processes=None):
     """检查当前环境是否能找到可启动的 Codex 程序。"""
+    if running_processes:
+        return True
     try:
-        _resolve_codex_launch_spec(load_config())
+        _resolve_codex_launch_spec(config or load_config())
         return True
     except Exception:
         return False

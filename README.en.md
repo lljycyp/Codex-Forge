@@ -64,9 +64,9 @@
 | 🚀 **One-click switch and launch** | Writes the selected account into the current user's `.codex` directory and launches ChatGPT. If ChatGPT is running, the app prompts you to close it first. |
 | 📦 **Isolated multi-instance launch** | Featured capability. Creates one shared copy from the installed ChatGPT client. All accounts use that copy with separate `CodexHome`, `APPDATA`, `LOCALAPPDATA`, and `--user-data-dir` environments. |
 | 📊 **Usage snapshots** | Uses the official Codex App Server to read and cache weekly remaining usage, available resets, each reset's expiration time, and limit status. |
-| 🧰 **Environment workspace** | Keeps 30 days of usage history, provides threshold alerts, config diffs and field-level sync, health checks and repairs, and manages MCP, Skills, AGENTS.md, a read-only session index, and launch settings. |
+| 🧰 **Environment workspace** | Keeps 30 days of usage history, provides threshold alerts, config diffs and field-level sync, health checks and repairs, and manages MCP, Skills, AGENTS.md, a read-only session index, and launch settings. It remembers the last open tab and asks for confirmation before discarding unsaved changes or performing destructive actions. |
 | 🔐 **Encrypted profile backups** | Protects profile backups with Windows DPAPI while keeping legacy ZIP restore compatibility; sessions, logs, caches, and client files stay excluded. |
-| 🛠️ **TOML editor** | Opens and saves the active `config.toml`, with an automatic backup before saving. |
+| 🛠️ **TOML editor** | Opens and saves the active `config.toml`, backs it up automatically before saving, and warns about unsaved changes before switching configurations or leaving the page. |
 | 📝 **Instruction templates (prompt injection)** | Saves Markdown prompt templates locally. Enabling a template copies it into the active ChatGPT config directory and points `model_instructions_file` in `config.toml` to that template. |
 | ⚙️ **Launch and directory settings** | Switch launch modes, migrate the account profile root, and enable ChatGPT Forge to start after Windows sign-in. |
 | 🔔 **In-app updates** | Supports silent update checks, manual update checks, release notes, background downloads, and restart-to-install. |

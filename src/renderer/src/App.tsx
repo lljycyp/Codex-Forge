@@ -12,12 +12,13 @@ import { TomlConfigPage } from "./pages/TomlConfigPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import chatgptForgeLogo from "./assets/chatgpt-forge-logo.png";
-import type { AppState, ProfileSummary, RunCommand, UpdateEvent, ViewKey } from "./types";
+import type { AppState, ProfileSummary, ProfileUsage, RunCommand, UpdateEvent, ViewKey } from "./types";
 
 const { Content } = Layout;
 const usageAutoRefreshMs = 5 * 60 * 1000;
 const privacyModeStorageKey = "chatgptForgePrivacyMode";
 type UpdateModalEvent = Exclude<UpdateEvent, { status: "error" } | { status: "not-available" }>;
+type ShellSnapshot = { appState: AppState; profiles: ProfileSummary[] };
 
 const emptyState: AppState = {
   codexCommandAvailable: false,
@@ -109,6 +110,8 @@ export default function App() {
   const [taskText, setTaskText] = useState(t("就绪"));
   const contentRef = useRef<HTMLDivElement | null>(null);
   const activeViewRef = useRef<ViewKey>("home");
+  const profilesRef = useRef<ProfileSummary[]>([]);
+  const dirtyViewsRef = useRef(new Set<ViewKey>());
   const refreshTokenRef = useRef(0);
   const commandTokenRef = useRef(0);
   const autoUsageRefreshingRef = useRef(false);
@@ -126,6 +129,18 @@ export default function App() {
   useEffect(() => {
     activeViewRef.current = activeView;
   }, [activeView]);
+
+  useEffect(() => {
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (dirtyViewsRef.current.size === 0) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, []);
 
   useEffect(() => {
     setTaskText(t("就绪"));
@@ -147,13 +162,11 @@ export default function App() {
   }, [t]);
 
   const loadShellState = useCallback(async () => {
-    const [stateData, profileData] = await Promise.all([
-      invokeLauncher<AppState>("get_app_state"),
-      invokeLauncher<{ profiles: ProfileSummary[] }>("list_profiles")
-    ]);
-    setAppState(stateData);
-    setProfiles(profileData.profiles);
-    return profileData.profiles;
+    const snapshot = await invokeLauncher<ShellSnapshot>("get_shell_snapshot");
+    profilesRef.current = snapshot.profiles;
+    setAppState(snapshot.appState);
+    setProfiles(snapshot.profiles);
+    return snapshot.profiles;
   }, []);
 
   const refresh = useCallback(async (view?: ViewKey | null) => {
@@ -219,14 +232,23 @@ export default function App() {
   }, [t]);
 
   useEffect(() => {
+    if (initialLoading) {
+      return undefined;
+    }
     const refreshUsageSilently = async () => {
       if (autoUsageRefreshingRef.current) {
         return;
       }
       autoUsageRefreshingRef.current = true;
       try {
-        await invokeLauncher("refresh_all_profile_usage");
-        const nextProfiles = await loadShellState();
+        const result = await invokeLauncher<{ profiles: Record<string, ProfileUsage | null> }>("refresh_all_profile_usage");
+        const nextProfiles = profilesRef.current.map((profile) => (
+          Object.prototype.hasOwnProperty.call(result.profiles, profile.name)
+            ? { ...profile, usage: result.profiles[profile.name] }
+            : profile
+        ));
+        profilesRef.current = nextProfiles;
+        setProfiles(nextProfiles);
         await notifyLowUsage(nextProfiles, t);
       } catch {
         // 静默自动刷新不打扰用户，手动刷新仍会展示具体错误。
@@ -240,7 +262,7 @@ export default function App() {
     }, usageAutoRefreshMs);
     void refreshUsageSilently();
     return () => window.clearInterval(timer);
-  }, [loadShellState, t]);
+  }, [initialLoading, t]);
 
   const runCommand = useCallback<RunCommand>(
     async (command, payload, successText = t("操作完成"), options) => {
@@ -298,10 +320,37 @@ export default function App() {
 
   const changeView = useCallback(
     (view: ViewKey) => {
+      const currentView = activeViewRef.current;
+      if (view === currentView) {
+        return;
+      }
+      if (dirtyViewsRef.current.has(currentView)) {
+        Modal.confirm({
+          title: t("有未保存的更改"),
+          content: t("离开当前页面将丢失未保存的更改。"),
+          okText: t("放弃更改并离开"),
+          cancelText: t("继续编辑"),
+          onOk: () => {
+            dirtyViewsRef.current.delete(currentView);
+            setActiveView(view);
+          },
+        });
+        return;
+      }
       setActiveView(view);
     },
-    []
+    [t]
   );
+
+  const setViewDirty = useCallback((view: ViewKey, dirty: boolean) => {
+    if (dirty) {
+      dirtyViewsRef.current.add(view);
+    } else {
+      dirtyViewsRef.current.delete(view);
+    }
+  }, []);
+  const setWorkspaceDirty = useCallback((dirty: boolean) => setViewDirty("workspace", dirty), [setViewDirty]);
+  const setTomlDirty = useCallback((dirty: boolean) => setViewDirty("toml", dirty), [setViewDirty]);
 
   const launchProfileFromHome = useCallback(
     (profile: ProfileSummary) => {
@@ -392,13 +441,13 @@ export default function App() {
             />
           ) : null}
           {activeView === "workspace" ? (
-            <WorkspacePage appState={appState} profiles={profiles} />
+            <WorkspacePage appState={appState} profiles={profiles} onDirtyChange={setWorkspaceDirty} />
           ) : null}
           {activeView === "instructions" ? (
             <InstructionsPage appState={appState} profiles={profiles} />
           ) : null}
           {activeView === "toml" ? (
-            <TomlConfigPage appState={appState} profiles={profiles} />
+            <TomlConfigPage appState={appState} profiles={profiles} onDirtyChange={setTomlDirty} />
           ) : null}
           {activeView === "settings" ? (
             <SettingsPage

@@ -12,9 +12,10 @@ const isMulti = (mode: AppState["launchMode"]) => mode === "multi";
 type TomlConfigPageProps = {
   appState: AppState;
   profiles: ProfileSummary[];
+  onDirtyChange: (dirty: boolean) => void;
 };
 
-export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
+export function TomlConfigPage({ appState, profiles, onDirtyChange }: TomlConfigPageProps) {
   const { t } = useI18n();
   const [state, setState] = useState<TomlConfigState | null>(null);
   const [content, setContent] = useState("");
@@ -37,6 +38,13 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
     ...profiles.map((profile) => ({ label: profile.name, value: profile.name })),
   ];
   const accountOptions = profiles.map((profile) => ({ label: profile.name, value: profile.name }));
+  const dirty = state !== null && content !== state.content;
+
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
   useEffect(() => {
     if (multiMode && !profileName) {
@@ -110,6 +118,20 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
     }
   };
 
+  const changeProfile = (nextProfileName: string) => {
+    if (!dirty) {
+      setProfileName(nextProfileName);
+      return;
+    }
+    Modal.confirm({
+      title: t("有未保存的更改"),
+      content: t("切换配置将丢失当前未保存的更改。"),
+      okText: t("放弃更改"),
+      cancelText: t("继续编辑"),
+      onOk: () => setProfileName(nextProfileName),
+    });
+  };
+
   const compareConfig = async () => {
     setLoading(true);
     try {
@@ -169,7 +191,7 @@ export function TomlConfigPage({ appState, profiles }: TomlConfigPageProps) {
               value={profileName || undefined}
               placeholder={t("选择账号")}
               options={profileOptions}
-              onChange={setProfileName}
+              onChange={changeProfile}
             />
           ) : null}
           <Button type="primary" icon={<Save size={15} />} loading={saving} disabled={noProfile} onClick={save}>

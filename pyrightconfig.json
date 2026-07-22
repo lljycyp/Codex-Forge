@@ -1,0 +1,17 @@
+{
+    "include": [
+        "python"
+    ],
+    "exclude": [
+        "python/.venv",
+        "**/__pycache__",
+        "**/*.egg-info"
+    ],
+    "venvPath": "python",
+    "venv": ".venv",
+    "typeCheckingMode": "basic",
+    "extraPaths": [
+        "python"
+    ],
+    "reportMissingTypeStubs": false
+}

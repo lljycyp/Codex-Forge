@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from bridge import commands
 from bridge.commands import _extract_toml_root, _remove_toml_root
 from core import db
 from core.secure_store import protect_bytes, unprotect_bytes
@@ -20,6 +21,60 @@ from core.workspace_service import (
 
 
 class WorkspaceFeatureTests(unittest.TestCase):
+    def test_shell_snapshot_reuses_one_process_snapshot(self):
+        config = {"profiles": []}
+        processes = [{"command_line": "Codex.exe --test"}]
+        with (
+            patch.object(commands, "load_config", return_value=config),
+            patch.object(commands, "_normalize_profile_configs"),
+            patch.object(commands, "ensure_builtin_instruction_templates"),
+            patch.object(commands, "read_running_codex_processes", return_value=processes) as read_processes,
+            patch.object(commands, "_build_app_state", return_value={"runningCount": 1}) as build_state,
+            patch.object(commands, "_build_profile_summaries", return_value=[]) as build_profiles,
+        ):
+            result = commands.get_shell_snapshot()
+
+        read_processes.assert_called_once_with()
+        self.assertIs(build_state.call_args.args[1], processes)
+        self.assertIs(build_profiles.call_args.args[2], processes)
+        self.assertEqual({"appState": {"runningCount": 1}, "profiles": []}, result)
+
+    def test_workspace_snapshot_groups_existing_reads(self):
+        with (
+            patch.object(commands, "get_usage_history", return_value={"items": []}) as get_history,
+            patch.object(commands, "get_profile_health", return_value={"healthy": True}),
+            patch.object(commands, "get_workspace", return_value={"codexHome": "home"}),
+            patch.object(commands, "list_sessions", return_value={"items": []}) as list_session_items,
+            patch.object(commands, "get_profile_launch_settings", return_value={"workingDir": ""}),
+            patch.object(commands, "_require_profile_name", return_value="work"),
+        ):
+            result = commands.get_workspace_snapshot({"name": "work", "profileName": "work", "days": 7, "limit": 20})
+
+        self.assertEqual("home", result["workspace"]["codexHome"])
+        get_history.assert_called_once_with({"name": "work", "days": 7})
+        list_session_items.assert_called_once_with({"profileName": "work", "limit": 20})
+
+    def test_profile_summaries_load_records_and_usage_once(self):
+        config = {"profiles": ["work", "personal"], "launch_mode": "switch"}
+        usage_cache = {"work": {"planType": "plus"}}
+        with (
+            patch.object(db, "list_profile_records", return_value=[
+                {"display_name": "work", "id": "1", "dir_name": "1"},
+                {"display_name": "personal", "id": "2", "dir_name": "2"},
+            ]) as list_records,
+            patch.object(db, "load_usage_cache", return_value=usage_cache) as load_usage,
+            patch.object(db, "get_profile") as get_profile,
+            patch.object(commands, "_get_legacy_system_running_profile", return_value=""),
+            patch.object(commands, "_build_profile_summary", side_effect=[{"name": "work"}, {"name": "personal"}]) as build_summary,
+        ):
+            result = commands._build_profile_summaries(config, "", [])
+
+        list_records.assert_called_once_with()
+        load_usage.assert_called_once_with()
+        get_profile.assert_not_called()
+        self.assertIs(build_summary.call_args_list[0].kwargs["usage_cache"], usage_cache)
+        self.assertEqual([{"name": "work"}, {"name": "personal"}], result)
+
     def test_usage_history_and_launch_settings_are_profile_scoped(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch("core.db.DB_PATH", Path(temp_dir) / "forge.db"):
             db.save_config({"profiles": ["work"]})

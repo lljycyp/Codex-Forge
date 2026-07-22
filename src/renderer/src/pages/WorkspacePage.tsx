@@ -23,7 +23,7 @@ import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
 import type { AppState, ProfileSummary, ProfileUsage } from "../types";
 
-type WorkspacePageProps = { appState: AppState; profiles: ProfileSummary[] };
+type WorkspacePageProps = { appState: AppState; profiles: ProfileSummary[]; onDirtyChange: (dirty: boolean) => void };
 type HistoryState = { items: ProfileUsage[]; pacePerDay: number | null };
 type HealthCheck = { key: string; ok: boolean; message: string; severity: "ok" | "warning" | "error"; action?: string | null };
 type HealthState = { name?: string; healthy: boolean; checks: HealthCheck[] };
@@ -32,19 +32,43 @@ type Skill = { name: string; enabled: boolean; path: string; hasManifest: boolea
 type WorkspaceState = { codexHome: string; configError?: string; agentsPath: string; agentsContent: string; mcpServers: McpServer[]; skills: Skill[] };
 type SessionItem = { id: string; title: string; projectPath: string; path: string; updatedAt: number; sizeBytes: number };
 type LaunchSettings = { workingDir: string; args: string[]; env: Record<string, string> };
+type WorkspaceSnapshot = {
+  history: HistoryState;
+  health: HealthState;
+  workspace: WorkspaceState;
+  sessions: { items: SessionItem[] };
+  launchSettings: LaunchSettings;
+};
+type WorkspaceTab = "insights" | "resources" | "sessions" | "launch";
 
 const SYSTEM_PROFILE_NAME = "__system__";
+const workspaceTabStorageKey = "chatgptForgeWorkspaceTab";
 const { TextArea } = Input;
 
-export function WorkspacePage({ appState, profiles }: WorkspacePageProps) {
+export function WorkspacePage({ appState, profiles, onDirtyChange }: WorkspacePageProps) {
   const { t } = useI18n();
   const [profileName, setProfileName] = useState(appState.activeProfile || profiles[0]?.name || "");
   const [history, setHistory] = useState<HistoryState>({ items: [], pacePerDay: null });
   const [health, setHealth] = useState<HealthState>({ healthy: true, checks: [] });
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [agents, setAgents] = useState("");
+  const [savedAgents, setSavedAgents] = useState("");
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings>({ workingDir: "", args: [], env: {} });
+  const [savedLaunchSettings, setSavedLaunchSettings] = useState<LaunchSettings>({ workingDir: "", args: [], env: {} });
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(() => readWorkspaceTab());
   const [loading, setLoading] = useState(false);
+  const launchDirty = useMemo(
+    () => JSON.stringify(launchSettings) !== JSON.stringify(savedLaunchSettings),
+    [launchSettings, savedLaunchSettings],
+  );
+  const dirty = agents !== savedAgents || launchDirty;
+
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
   useEffect(() => {
     if (!profileName && profiles[0]?.name) setProfileName(profiles[0].name);
@@ -52,22 +76,26 @@ export function WorkspacePage({ appState, profiles }: WorkspacePageProps) {
 
   const workspacePayload = appState.launchMode === "multi" ? { profileName } : {};
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options?: { preserveEdits?: boolean }) => {
     if (!profileName) return;
     setLoading(true);
     try {
-      const [nextHistory, nextHealth, nextWorkspace, nextSessions, nextLaunch] = await Promise.all([
-        invokeLauncher<HistoryState>("get_usage_history", { name: profileName, days: 30 }),
-        invokeLauncher<HealthState>("get_profile_health", { name: profileName }),
-        invokeLauncher<WorkspaceState>("get_workspace", workspacePayload),
-        invokeLauncher<{ items: SessionItem[] }>("list_sessions", { ...workspacePayload, limit: 300 }),
-        invokeLauncher<LaunchSettings>("get_profile_launch_settings", { name: profileName }),
-      ]);
-      setHistory(nextHistory);
-      setHealth(nextHealth);
-      setWorkspace(nextWorkspace);
-      setSessions(nextSessions.items);
-      setLaunchSettings(nextLaunch);
+      const snapshot = await invokeLauncher<WorkspaceSnapshot>("get_workspace_snapshot", {
+        ...workspacePayload,
+        name: profileName,
+        days: 30,
+        limit: 300,
+      });
+      setHistory(snapshot.history);
+      setHealth(snapshot.health);
+      setWorkspace(snapshot.workspace);
+      setSessions(snapshot.sessions.items);
+      setSavedAgents(snapshot.workspace.agentsContent);
+      setSavedLaunchSettings(snapshot.launchSettings);
+      if (!options?.preserveEdits) {
+        setAgents(snapshot.workspace.agentsContent);
+        setLaunchSettings(snapshot.launchSettings);
+      }
     } catch (error) {
       message.error(error instanceof Error ? error.message : t("读取工作台失败"));
     } finally {
@@ -76,6 +104,34 @@ export function WorkspacePage({ appState, profiles }: WorkspacePageProps) {
   }, [appState.launchMode, profileName, t]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  const discardAndRun = (action: () => void) => {
+    if (!dirty) {
+      action();
+      return;
+    }
+    Modal.confirm({
+      title: t("有未保存的更改"),
+      content: t("继续操作将丢失当前工作台中未保存的更改。"),
+      okText: t("放弃更改"),
+      cancelText: t("继续编辑"),
+      onOk: () => {
+        setAgents(savedAgents);
+        setLaunchSettings(savedLaunchSettings);
+        action();
+      },
+    });
+  };
+
+  const changeProfile = (nextProfileName: string) => {
+    discardAndRun(() => setProfileName(nextProfileName));
+  };
+
+  const changeTab = (key: string) => {
+    const nextTab = key as WorkspaceTab;
+    localStorage.setItem(workspaceTabStorageKey, nextTab);
+    setActiveTab(nextTab);
+  };
 
   return (
     <div className="mx-auto grid w-full max-w-[1480px] gap-4 pb-8">
@@ -89,18 +145,20 @@ export function WorkspacePage({ appState, profiles }: WorkspacePageProps) {
             className="min-w-[260px]"
             value={profileName || undefined}
             options={profiles.map((profile) => ({ label: profile.name, value: profile.name }))}
-            onChange={setProfileName}
+            onChange={changeProfile}
           />
-          <Button icon={<RefreshCw size={15} />} loading={loading} onClick={() => void refresh()}>{t("刷新")}</Button>
+          <Button icon={<RefreshCw size={15} />} loading={loading} onClick={() => discardAndRun(() => void refresh())}>{t("刷新")}</Button>
         </Space>
       </div>
       {profiles.length === 0 ? <Empty description={t("请先添加账号")} /> : (
         <Tabs
+          activeKey={activeTab}
+          onChange={changeTab}
           items={[
-            { key: "insights", label: t("额度与健康"), children: <InsightsPanel history={history} health={health} onRefresh={refresh} /> },
-            { key: "resources", label: t("MCP / Skills / AGENTS"), children: workspace ? <ResourcesPanel state={workspace} payload={workspacePayload} onRefresh={refresh} /> : null },
+            { key: "insights", label: t("额度与健康"), children: <InsightsPanel history={history} health={health} onRefresh={() => refresh({ preserveEdits: true })} /> },
+            { key: "resources", label: t("MCP / Skills / AGENTS"), children: workspace ? <ResourcesPanel state={workspace} agents={agents} onAgentsChange={setAgents} payload={workspacePayload} onRefresh={() => refresh({ preserveEdits: true })} /> : null },
             { key: "sessions", label: t("会话索引"), children: <SessionsPanel items={sessions} /> },
-            { key: "launch", label: t("启动环境"), children: <LaunchPanel name={profileName} value={launchSettings} onChange={setLaunchSettings} /> },
+            { key: "launch", label: t("启动环境"), children: <LaunchPanel name={profileName} value={launchSettings} onChange={setLaunchSettings} onSaved={(next) => { setLaunchSettings(next); setSavedLaunchSettings(next); }} /> },
           ]}
         />
       )}
@@ -142,12 +200,10 @@ function UsageSparkline({ items }: { items: ProfileUsage[] }) {
   return <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-44 w-full rounded-lg bg-slate-50 p-2"><path d={path} fill="none" stroke="#0f766e" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>;
 }
 
-function ResourcesPanel({ state, payload, onRefresh }: { state: WorkspaceState; payload: object; onRefresh: () => Promise<void> }) {
+function ResourcesPanel({ state, agents, onAgentsChange, payload, onRefresh }: { state: WorkspaceState; agents: string; onAgentsChange: (value: string) => void; payload: object; onRefresh: () => Promise<void> }) {
   const { t } = useI18n();
-  const [agents, setAgents] = useState(state.agentsContent);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [mcpForm] = Form.useForm();
-  useEffect(() => setAgents(state.agentsContent), [state.agentsContent]);
 
   const saveAgents = async () => {
     await invokeLauncher("save_agents", { ...payload, content: agents });
@@ -170,6 +226,33 @@ function ResourcesPanel({ state, payload, onRefresh }: { state: WorkspaceState; 
     setMcpOpen(false);
     await onRefresh();
   };
+  const confirmDeleteMcp = (server: McpServer) => {
+    Modal.confirm({
+      title: t("确认删除 MCP 服务"),
+      content: `${t("将从当前配置中删除")}「${server.name}」。`,
+      okText: t("删除"),
+      okButtonProps: { danger: true },
+      cancelText: t("取消"),
+      onOk: async () => {
+        await invokeLauncher("delete_mcp_server", { ...payload, name: server.name });
+        await onRefresh();
+      },
+    });
+  };
+  const confirmRemoveSkill = (skill: Skill) => {
+    Modal.confirm({
+      title: t("确认移除 Skill"),
+      content: `${t("Skill 将移入备份目录")}：「${skill.name}」。`,
+      okText: t("移除"),
+      okButtonProps: { danger: true },
+      cancelText: t("取消"),
+      onOk: async () => {
+        await invokeLauncher("remove_skill", { ...payload, name: skill.name });
+        message.success(t("Skill 已移入备份目录"));
+        await onRefresh();
+      },
+    });
+  };
 
   return (
     <div className="grid gap-4 xl:grid-cols-2">
@@ -183,15 +266,15 @@ function ResourcesPanel({ state, payload, onRefresh }: { state: WorkspaceState; 
           columns={[
             { title: t("名称"), dataIndex: "name" },
             { title: t("命令"), dataIndex: "command", ellipsis: true },
-            { title: "", width: 110, render: (_, server) => <Space><Button size="small" onClick={() => editMcp(server)}>{t("编辑")}</Button><Button size="small" danger icon={<Trash2 size={13} />} onClick={async () => { await invokeLauncher("delete_mcp_server", { ...payload, name: server.name }); await onRefresh(); }} /></Space> },
+            { title: "", width: 110, render: (_, server) => <Space><Button size="small" onClick={() => editMcp(server)}>{t("编辑")}</Button><Button aria-label={`${t("删除 MCP 服务")} ${server.name}`} size="small" danger icon={<Trash2 size={13} />} onClick={() => confirmDeleteMcp(server)} /></Space> },
           ]}
         />
       </Card>
       <Card title={t("Skills")} extra={<Button size="small" icon={<Plus size={14} />} onClick={async () => { const sourcePath = await window.launcherApi.selectDirectory(); if (sourcePath) { await invokeLauncher("install_skill", { ...payload, sourcePath }); message.success(t("Skill 已安装")); await onRefresh(); } }}>{t("从目录安装")}</Button>}>
-        <List dataSource={state.skills} locale={{ emptyText: t("当前环境没有 Skills") }} renderItem={(skill) => <List.Item actions={[<Switch key="enabled" size="small" checked={skill.enabled} onChange={async (enabled) => { await invokeLauncher("set_skill_enabled", { ...payload, name: skill.name, enabled }); await onRefresh(); }} />, <Button key="remove" size="small" danger icon={<Trash2 size={13} />} onClick={async () => { await invokeLauncher("remove_skill", { ...payload, name: skill.name }); message.success(t("Skill 已移入备份目录")); await onRefresh(); }} />]}><List.Item.Meta title={<Space>{skill.name}{!skill.hasManifest ? <Tag color="orange">{t("缺少 SKILL.md")}</Tag> : null}</Space>} description={skill.path} /></List.Item>} />
+        <List dataSource={state.skills} locale={{ emptyText: t("当前环境没有 Skills") }} renderItem={(skill) => <List.Item actions={[<Switch key="enabled" aria-label={`${t("切换 Skill 状态")} ${skill.name}`} size="small" checked={skill.enabled} onChange={async (enabled) => { await invokeLauncher("set_skill_enabled", { ...payload, name: skill.name, enabled }); await onRefresh(); }} />, <Button key="remove" aria-label={`${t("移除 Skill")} ${skill.name}`} size="small" danger icon={<Trash2 size={13} />} onClick={() => confirmRemoveSkill(skill)} />]}><List.Item.Meta title={<Space>{skill.name}{!skill.hasManifest ? <Tag color="orange">{t("缺少 SKILL.md")}</Tag> : null}</Space>} description={skill.path} /></List.Item>} />
       </Card>
       <Card className="xl:col-span-2" title={<span className="flex items-center gap-2"><FileText size={16} />AGENTS.md</span>} extra={<Button type="primary" icon={<Save size={14} />} onClick={saveAgents}>{t("保存")}</Button>}>
-        <TextArea className="!h-[320px] !font-mono !text-sm" value={agents} onChange={(event) => setAgents(event.target.value)} />
+        <TextArea className="!h-[320px] !font-mono !text-sm" value={agents} onChange={(event) => onAgentsChange(event.target.value)} />
       </Card>
       <Modal title={t("MCP 服务")} open={mcpOpen} onCancel={() => setMcpOpen(false)} onOk={saveMcp} okText={t("保存")}>
         <Form form={mcpForm} layout="vertical">
@@ -216,17 +299,17 @@ function SessionsPanel({ items }: { items: SessionItem[] }) {
         { title: t("标题"), dataIndex: "title", ellipsis: true },
         { title: t("项目"), dataIndex: "projectPath", ellipsis: true },
         { title: t("最后活动"), dataIndex: "updatedAt", width: 180, render: (value) => new Date(value * 1000).toLocaleString() },
-        { title: "", width: 60, render: (_, item) => <Button icon={<FolderOpen size={14} />} onClick={() => void invokeLauncher("open_path", { path: item.path, reveal: true })} /> },
+        { title: "", width: 60, render: (_, item) => <Button aria-label={`${t("打开会话文件")} ${item.title}`} icon={<FolderOpen size={14} />} onClick={() => void invokeLauncher("open_path", { path: item.path, reveal: true })} /> },
       ]} />
     </Card>
   );
 }
 
-function LaunchPanel({ name, value, onChange }: { name: string; value: LaunchSettings; onChange: (value: LaunchSettings) => void }) {
+function LaunchPanel({ name, value, onChange, onSaved }: { name: string; value: LaunchSettings; onChange: (value: LaunchSettings) => void; onSaved: (value: LaunchSettings) => void }) {
   const { t } = useI18n();
   const save = async () => {
     const next = await invokeLauncher<LaunchSettings>("save_profile_launch_settings", { name, ...value });
-    onChange(next);
+    onSaved(next);
     message.success(t("账号启动环境已保存"));
   };
   return (
@@ -243,4 +326,9 @@ function LaunchPanel({ name, value, onChange }: { name: string; value: LaunchSet
 function lines(value: string) { return String(value || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean); }
 function envLines(value: string) {
   return Object.fromEntries(lines(value).map((line) => { const index = line.indexOf("="); return index > 0 ? [line.slice(0, index).trim(), line.slice(index + 1)] : [line, ""]; }));
+}
+
+function readWorkspaceTab(): WorkspaceTab {
+  const value = localStorage.getItem(workspaceTabStorageKey);
+  return value === "resources" || value === "sessions" || value === "launch" ? value : "insights";
 }
