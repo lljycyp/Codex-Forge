@@ -13,7 +13,7 @@ fi
 
 cd "$repo"
 git remote set-url origin https://gitee.com/llj20010218/codex-forge.git
-git fetch --tags origin
+git fetch --force --tags origin
 git checkout main
 git pull --ff-only origin main
 
