@@ -39,6 +39,7 @@ fi
 
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 yarn install --frozen-lockfile --network-timeout 600000
+rm -rf "$repo/python/.venv"
 yarn build
 
 export GITEE_UPLOAD_MAX_TIME=7200
