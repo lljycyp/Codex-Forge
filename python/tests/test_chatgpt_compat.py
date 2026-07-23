@@ -9,13 +9,19 @@ from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 from bridge.commands import (
+    _append_codex_skin_args,
     _get_legacy_system_running_profile,
+    get_codex_skin_sessions,
     _is_profile_running,
     _is_same_auth_account,
+    _launch_default_codex,
     _resolve_configured_codex_app_path,
     _running_multi_profile_names,
     _stop_client_processes,
     export_profile_backup,
+    ensure_codex_skin_sessions,
+    set_launch_mode,
+    set_codex_skin_enabled,
 )
 from core.codex_source import (
     _get_appx_package_version,
@@ -39,6 +45,232 @@ from core.usage_service import _map_app_server_usage
 
 
 class ChatGptCompatibilityTest(unittest.TestCase):
+    def test_switch_mode_skin_launches_regular_client_directly_with_cdp(self):
+        process = SimpleNamespace(pid=88)
+        with (
+            patch("bridge.commands.load_config", return_value={}),
+            patch("bridge.commands._resolve_codex_app_source_path", return_value=Path("C:/Apps/ChatGPT.exe")),
+            patch("bridge.commands.db.load_profile_launch_settings", return_value={"args": [], "env": {}}),
+            patch("bridge.commands.subprocess.Popen", return_value=process) as popen,
+        ):
+            result = _launch_default_codex("work", skin_port=19335)
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[0], "C:\\Apps\\ChatGPT.exe")
+        self.assertIn("--remote-debugging-address=127.0.0.1", command)
+        self.assertIn("--remote-debugging-port=19335", command)
+        skin_session = result.get("skinSession")
+        self.assertIsInstance(skin_session, dict)
+        assert isinstance(skin_session, dict)
+        self.assertEqual(skin_session["profileName"], "work")
+
+    def test_switch_mode_skin_uses_portable_copy_for_store_client(self):
+        process = SimpleNamespace(pid=89)
+        store_path = Path("C:/Program Files/WindowsApps/OpenAI.Codex_1.0_x64/app/ChatGPT.exe")
+        portable_path = "D:/Profiles/.shared/ChatGPTPortable/ChatGPT.exe"
+        config = {"profile_root": "D:/Profiles"}
+        with (
+            patch("bridge.commands.load_config", return_value=config),
+            patch("bridge.commands._resolve_codex_app_source_path", return_value=store_path),
+            patch("bridge.commands.prepare_portable_codex_path", return_value=portable_path) as prepare,
+            patch("bridge.commands.db.load_profile_launch_settings", return_value={"args": [], "env": {}}),
+            patch("bridge.commands.subprocess.Popen", return_value=process) as popen,
+        ):
+            result = _launch_default_codex("work", skin_port=19335)
+
+        prepare.assert_called_once()
+        command = popen.call_args.args[0]
+        self.assertEqual(command[0], str(Path(portable_path)))
+        self.assertIn("--remote-debugging-port=19335", command)
+        skin_session = result.get("skinSession")
+        self.assertIsInstance(skin_session, dict)
+        assert isinstance(skin_session, dict)
+        self.assertEqual(skin_session["processId"], 89)
+
+    def test_enabling_skin_restarts_running_switch_profile(self):
+        config = {"launch_mode": "switch", "active_profile": "work", "codex_skin_enabled": False}
+        with (
+            patch("bridge.commands.load_config", return_value=config),
+            patch("bridge.commands._running_codex_count", return_value=1),
+            patch("bridge.commands._sync_active_auth_to_profile") as sync_auth,
+            patch("bridge.commands._stop_running_codex_processes") as stop_clients,
+            patch("bridge.commands.save_config") as save_config,
+            patch("bridge.commands._allocate_codex_skin_port", return_value=19335),
+            patch(
+                "bridge.commands._launch_default_codex",
+                return_value={"skinSession": {"profileName": "work", "port": 19335, "processId": 88}},
+            ) as launch_client,
+        ):
+            result = set_codex_skin_enabled({"enabled": True})
+
+        sync_auth.assert_called_once_with(config, "work")
+        stop_clients.assert_called_once_with()
+        save_config.assert_called_once_with(config)
+        launch_client.assert_called_once_with("work", skin_port=19335)
+        self.assertEqual(result["skinSessions"][0]["port"], 19335)
+
+    @patch("bridge.commands._launch_profile_multi", return_value={})
+    @patch("bridge.commands._stop_profile_multi")
+    @patch("bridge.commands._running_multi_profile_names", return_value=["alpha"])
+    @patch("bridge.commands.save_config")
+    @patch("bridge.commands.load_config", return_value={"launch_mode": "multi", "codex_skin_enabled": True})
+    def test_disabling_skin_restarts_multi_profile_without_cdp(
+        self,
+        _load_config,
+        save_config,
+        _running_profiles,
+        stop_profile,
+        launch_profile_multi,
+    ):
+        result = set_codex_skin_enabled({"enabled": False})
+
+        config = {"launch_mode": "multi", "codex_skin_enabled": False}
+        save_config.assert_called_once_with(config)
+        stop_profile.assert_called_once_with(config, {"name": "alpha"})
+        launch_profile_multi.assert_called_once_with(config, "alpha", set())
+        self.assertEqual(result["skinSessions"], [])
+
+    def test_entering_multi_mode_syncs_the_active_system_auth(self):
+        config = {"launch_mode": "switch", "active_profile": "work"}
+        with (
+            patch("bridge.commands.load_config", return_value=config),
+            patch("bridge.commands.save_config") as save_config,
+            patch("bridge.commands._sync_active_auth_to_profile") as sync_auth,
+        ):
+            self.assertEqual(set_launch_mode({"mode": "multi"}), {"launchMode": "multi"})
+
+        sync_auth.assert_called_once_with(config, "work")
+        save_config.assert_called_once_with(config)
+
+    @patch("bridge.commands._launch_profile_multi")
+    @patch("bridge.commands._stop_profile_multi")
+    @patch("bridge.commands._running_multi_profile_names", return_value=["alpha", "beta"])
+    @patch("bridge.commands.save_config")
+    @patch("bridge.commands.load_config", return_value={"launch_mode": "multi", "codex_skin_enabled": False})
+    def test_enabling_codex_skin_restarts_running_multi_profiles(
+        self,
+        _load_config,
+        save_config,
+        _running_profiles,
+        stop_profile,
+        launch_profile_multi,
+    ):
+        seen_reserved_ports = []
+
+        def launch_with_reserved_port(_config, profile_name, reserved_ports):
+            seen_reserved_ports.append(set(reserved_ports))
+            offset = len(seen_reserved_ports) - 1
+            return {
+                "skinSession": {
+                    "profileName": profile_name,
+                    "port": 19335 + offset,
+                    "processId": 101 + offset,
+                }
+            }
+
+        launch_profile_multi.side_effect = launch_with_reserved_port
+
+        result = set_codex_skin_enabled({"enabled": True})
+
+        config = {"launch_mode": "multi", "codex_skin_enabled": True}
+        save_config.assert_called_once_with(config)
+        self.assertEqual(
+            stop_profile.call_args_list,
+            [call(config, {"name": "alpha"}), call(config, {"name": "beta"})],
+        )
+        self.assertEqual(seen_reserved_ports, [set(), {19335}])
+        self.assertEqual(
+            [session["profileName"] for session in result["skinSessions"]],
+            ["alpha", "beta"],
+        )
+
+    def test_codex_skin_appends_loopback_debugging_arguments(self):
+        self.assertEqual(
+            _append_codex_skin_args(["--start-minimized"], 19335),
+            [
+                "--start-minimized",
+                "--remote-debugging-address=127.0.0.1",
+                "--remote-debugging-port=19335",
+            ],
+        )
+
+    def test_codex_skin_rejects_conflicting_debugging_arguments(self):
+        with self.assertRaisesRegex(ValueError, "remote-debugging"):
+            _append_codex_skin_args(["--remote-debugging-port=9222"], 19335)
+
+    def test_recovers_running_switch_skin_session_from_managed_client(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            shared_root = Path(temp_dir) / ".shared"
+            executable = shared_root / "ChatGPTPortableApp" / "ChatGPT.exe"
+            config = {
+                "profile_root": temp_dir,
+                "launch_mode": "switch",
+                "active_profile": "work",
+                "codex_skin_enabled": True,
+            }
+            process = {
+                "pid": 88,
+                "executable_path": str(executable),
+                "command_line": (
+                    f'"{executable}" --remote-debugging-address=127.0.0.1 '
+                    "--remote-debugging-port=19335"
+                ),
+            }
+            with (
+                patch("bridge.commands.load_config", return_value=config),
+                patch("bridge.commands.read_running_codex_processes", return_value=[process]),
+            ):
+                result = get_codex_skin_sessions()
+
+        self.assertEqual(
+            result["skinSessions"],
+            [{"profileName": "work", "port": 19335, "processId": 88}],
+        )
+
+    def test_skin_session_recovery_rejects_unmanaged_client(self):
+        config = {
+            "profile_root": "D:/Profiles",
+            "launch_mode": "switch",
+            "active_profile": "work",
+            "codex_skin_enabled": True,
+        }
+        process = {
+            "pid": 89,
+            "executable_path": "C:/Other/ChatGPT.exe",
+            "command_line": (
+                '"C:/Other/ChatGPT.exe" --remote-debugging-address=127.0.0.1 '
+                "--remote-debugging-port=19335"
+            ),
+        }
+        with (
+            patch("bridge.commands.load_config", return_value=config),
+            patch("bridge.commands.read_running_codex_processes", return_value=[process]),
+        ):
+            self.assertEqual(get_codex_skin_sessions(), {"skinSessions": []})
+
+    def test_ensure_skin_session_restarts_running_switch_client_without_cdp(self):
+        config = {
+            "launch_mode": "switch",
+            "active_profile": "work",
+            "codex_skin_enabled": True,
+        }
+        session = {"profileName": "work", "port": 19335, "processId": 90}
+        with (
+            patch("bridge.commands.get_codex_skin_sessions", return_value={"skinSessions": []}),
+            patch("bridge.commands.load_config", return_value=config),
+            patch("bridge.commands._running_codex_count", return_value=1),
+            patch("bridge.commands._sync_active_auth_to_profile") as sync_auth,
+            patch("bridge.commands._stop_running_codex_processes") as stop_clients,
+            patch("bridge.commands._allocate_codex_skin_port", return_value=19335),
+            patch("bridge.commands._launch_default_codex", return_value={"skinSession": session}) as launch_client,
+        ):
+            result = ensure_codex_skin_sessions()
+
+        sync_auth.assert_called_once_with(config, "work")
+        stop_clients.assert_called_once_with()
+        launch_client.assert_called_once_with("work", skin_port=19335)
+        self.assertEqual(result, {"skinSessions": [session]})
+
     def test_stale_app_server_lock_is_recovered(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             lock_path = Path(temp_dir) / "auth.json.app-server.lock"

@@ -6,6 +6,7 @@ import io
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -76,6 +77,8 @@ from core.workspace_service import (
 
 logger = get_logger(__name__)
 SYSTEM_PROFILE_NAME = "__system__"
+CODEX_SKIN_PORT_START = 19335
+CODEX_SKIN_PORT_COUNT = 100
 
 
 def ok(data=None):
@@ -133,6 +136,9 @@ def invoke(command, payload=None):
         "compare_toml_configs": compare_toml_configs,
         "set_share_system_config": set_share_system_config,
         "set_launch_mode": set_launch_mode,
+        "set_codex_skin_enabled": set_codex_skin_enabled,
+        "get_codex_skin_sessions": get_codex_skin_sessions,
+        "ensure_codex_skin_sessions": ensure_codex_skin_sessions,
         "set_profile_root": set_profile_root,
         "open_path": open_path,
         "stop_profile": stop_profile,
@@ -194,6 +200,7 @@ def _build_app_state(config, running_processes, running_commands):
         "activeProfile": config.get("active_profile", ""),
         "shareSystemConfig": True,
         "launchMode": _get_launch_mode(config),
+        "codexSkinEnabled": bool(config.get("codex_skin_enabled")),
         "profileRoot": str(profile_root),
         "profileRootExists": profile_root.exists(),
         "profileCount": len(profiles),
@@ -720,9 +727,13 @@ def launch_profile(payload):
     )
     config["active_profile"] = name
     save_config(config)
-    _launch_default_codex(name)
+    skin_port = _allocate_codex_skin_port() if config.get("codex_skin_enabled") else None
+    launch_result = _launch_default_codex(name, skin_port=skin_port)
     logger.info("账号启动成功 名称=%s 目录=%s", name, profile_dir)
-    return {"name": name, "activeAuthPath": str(get_active_auth_path()), "activeConfigPath": str(get_active_config_path())}
+    result = {"name": name, "activeAuthPath": str(get_active_auth_path()), "activeConfigPath": str(get_active_config_path())}
+    if launch_result.get("skinSession"):
+        result["skinSession"] = launch_result["skinSession"]
+    return result
 
 
 def stop_profile(_payload):
@@ -733,7 +744,7 @@ def stop_profile(_payload):
     return _stop_running_codex_processes()
 
 
-def _launch_profile_multi(config, name):
+def _launch_profile_multi(config, name, reserved_skin_ports=None):
     """按账号隔离环境启动 Codex 桌面端。"""
     profile_dir = _get_profile_dir(config, name)
     running_commands = read_running_codex_commands()
@@ -770,12 +781,23 @@ def _launch_profile_multi(config, name):
     env["CODEX_HOME"] = str(codex_home_dir)
     env["CODEX_MULTI_PROFILE"] = name
     launch_settings = db.load_profile_launch_settings(name)
-    env.update({str(key): str(value) for key, value in dict(launch_settings.get("env") or {}).items()})
+    managed_env = {"APPDATA", "LOCALAPPDATA", "CODEX_HOME", "CODEX_MULTI_PROFILE"}
+    env.update(
+        {
+            str(key): str(value)
+            for key, value in dict(launch_settings.get("env") or {}).items()
+            if str(key).upper() not in managed_env
+        }
+    )
     extra_args = [str(value) for value in launch_settings.get("args", [])]
+    skin_port = None
+    if config.get("codex_skin_enabled"):
+        skin_port = _allocate_codex_skin_port(reserved_skin_ports)
+        extra_args = _append_codex_skin_args(extra_args, skin_port)
     working_dir = str(launch_settings.get("workingDir") or Path(portable_codex_path).parent)
 
     logger.info("多开账号启动开始 名称=%s 程序=%s CODEX_HOME=%s", name, portable_codex_path, codex_home_dir)
-    subprocess.Popen(
+    process = subprocess.Popen(
         [portable_codex_path, f"--user-data-dir={user_data_dir}", *extra_args],
         cwd=working_dir,
         env=env,
@@ -785,7 +807,116 @@ def _launch_profile_multi(config, name):
     config["active_profile"] = name
     save_config(config)
     logger.info("多开账号启动成功 名称=%s 目录=%s", name, profile_dir)
-    return {"name": name, "activeAuthPath": str(codex_home_dir / "auth.json"), "activeConfigPath": str(codex_home_dir / "config.toml")}
+    result = {
+        "name": name,
+        "activeAuthPath": str(codex_home_dir / "auth.json"),
+        "activeConfigPath": str(codex_home_dir / "config.toml"),
+    }
+    if skin_port is not None:
+        result["skinSession"] = {"profileName": name, "port": skin_port, "processId": process.pid}
+    return result
+
+
+def _append_codex_skin_args(extra_args, port):
+    """追加由 Forge 管理的 CDP 参数，避免与账号自定义参数产生歧义。"""
+    blocked_prefixes = ("--remote-debugging-address", "--remote-debugging-port")
+    if any(str(value).lower().startswith(blocked_prefixes) for value in extra_args):
+        raise ValueError("启用 Codex 皮肤时，账号启动参数不能包含 remote-debugging 参数")
+    return [
+        *extra_args,
+        "--remote-debugging-address=127.0.0.1",
+        f"--remote-debugging-port={port}",
+    ]
+
+
+def _allocate_codex_skin_port(reserved_ports=None):
+    """从 Forge 专用范围选择当前可用的回环端口。"""
+    reserved_ports = reserved_ports or set()
+    for port in range(CODEX_SKIN_PORT_START, CODEX_SKIN_PORT_START + CODEX_SKIN_PORT_COUNT):
+        if port in reserved_ports:
+            continue
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            try:
+                listener.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
+    raise RuntimeError("没有可用的 Codex 皮肤调试端口")
+
+
+def get_codex_skin_sessions(_payload=None):
+    """从 Forge 启动的受管客户端恢复皮肤 CDP 会话。"""
+    config = load_config()
+    if not config.get("codex_skin_enabled"):
+        return {"skinSessions": []}
+    shared_root = _get_shared_app_root(config).resolve()
+    launch_mode = _get_launch_mode(config)
+    sessions = []
+    for process in read_running_codex_processes():
+        command_line = str(process.get("command_line") or "")
+        normalized_command = normalize_path_for_match(command_line)
+        port_match = re.search(r"(?:^|\s)--remote-debugging-port(?:=|\s+)(\d+)(?:\s|$)", command_line, re.IGNORECASE)
+        if not port_match or "--remote-debugging-address=127.0.0.1" not in command_line.lower():
+            continue
+        port = int(port_match.group(1))
+        if not CODEX_SKIN_PORT_START <= port < CODEX_SKIN_PORT_START + CODEX_SKIN_PORT_COUNT:
+            continue
+        try:
+            Path(process.get("executable_path") or "").resolve().relative_to(shared_root)
+        except (OSError, ValueError):
+            continue
+        profile_name = str(config.get("active_profile") or SYSTEM_PROFILE_NAME)
+        if launch_mode == "multi":
+            profile_name = next(
+                (
+                    name
+                    for name in config.get("profiles", [])
+                    if any(target in normalized_command for target in _get_profile_running_match_targets(config, name))
+                ),
+                "",
+            )
+            if not profile_name:
+                continue
+        sessions.append(
+            {
+                "profileName": profile_name,
+                "port": port,
+                "processId": int(process.get("pid") or 0),
+            }
+        )
+    return {"skinSessions": sessions}
+
+
+def ensure_codex_skin_sessions(_payload=None):
+    """确保当前运行实例由 Forge 以皮肤 CDP 参数启动。"""
+    recovered = get_codex_skin_sessions()
+    if recovered["skinSessions"]:
+        return recovered
+    config = load_config()
+    if not config.get("codex_skin_enabled"):
+        return {"skinSessions": []}
+    launch_mode = _get_launch_mode(config)
+    if launch_mode == "multi":
+        running_profiles = _running_multi_profile_names(config)
+        if not running_profiles:
+            return {"skinSessions": []}
+        sessions = []
+        reserved_ports = set()
+        for profile_name in running_profiles:
+            _stop_profile_multi(config, {"name": profile_name})
+            session = _launch_profile_multi(config, profile_name, reserved_ports).get("skinSession")
+            if session:
+                sessions.append(session)
+                reserved_ports.add(session["port"])
+        return {"skinSessions": sessions}
+    if _running_codex_count() == 0:
+        return {"skinSessions": []}
+    active_profile = str(config.get("active_profile") or "")
+    _sync_active_auth_to_profile(config, active_profile)
+    _stop_running_codex_processes()
+    launch_result = _launch_default_codex(active_profile, skin_port=_allocate_codex_skin_port())
+    session = launch_result.get("skinSession")
+    return {"skinSessions": [session] if session else []}
 
 
 def _stop_profile_multi(config, payload):
@@ -1023,10 +1154,47 @@ def set_launch_mode(payload):
     config = load_config()
     if mode == "switch" and _running_multi_profile_names(config):
         raise RuntimeError("请先关闭所有多开隔离模式下运行的 Codex，再切回账号切换模式")
+    if mode == "multi" and _get_launch_mode(config) == "switch":
+        _sync_active_auth_to_profile(config, config.get("active_profile", ""))
     config["launch_mode"] = mode
     save_config(config)
     logger.info("启动模式已切换 模式=%s", mode)
     return {"launchMode": mode}
+
+
+def set_codex_skin_enabled(payload):
+    """保存 Codex 皮肤开关，并安全重启当前运行实例以切换 CDP 状态。"""
+    config = load_config()
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ValueError("Codex 皮肤开关无效")
+    previous_enabled = bool(config.get("codex_skin_enabled"))
+    launch_mode = _get_launch_mode(config)
+    running_profiles = _running_multi_profile_names(config) if launch_mode == "multi" else []
+    switch_running = launch_mode == "switch" and _running_codex_count() > 0
+    active_profile = config.get("active_profile", "")
+    if enabled == previous_enabled:
+        return {"codexSkinEnabled": enabled, "skinSessions": []}
+    if switch_running:
+        _sync_active_auth_to_profile(config, active_profile)
+        _stop_running_codex_processes()
+    config["codex_skin_enabled"] = enabled
+    save_config(config)
+    skin_sessions = []
+    reserved_skin_ports = set()
+    for profile_name in running_profiles:
+        _stop_profile_multi(config, {"name": profile_name})
+        session = _launch_profile_multi(config, profile_name, reserved_skin_ports).get("skinSession")
+        if session:
+            skin_sessions.append(session)
+            reserved_skin_ports.add(session["port"])
+    if switch_running:
+        skin_port = _allocate_codex_skin_port() if enabled else None
+        launch_result = _launch_default_codex(active_profile, skin_port=skin_port)
+        if launch_result.get("skinSession"):
+            skin_sessions.append(launch_result["skinSession"])
+    logger.info("Codex 皮肤设置已更新 启用=%s", enabled)
+    return {"codexSkinEnabled": enabled, "skinSessions": skin_sessions}
 
 
 def _sync_active_auth_to_profile(config, profile_name):
@@ -1655,19 +1823,46 @@ $matches | Where-Object { $_ -match $pattern } | Sort-Object @{Expression = { $_
     return next((line.strip() for line in result.stdout.splitlines() if line.strip()), "")
 
 
-def _launch_default_codex(profile_name=""):
+def _launch_default_codex(profile_name="", skin_port=None):
     """启动默认安装的 Codex 桌面端。"""
     config = load_config()
-    launch_spec = _resolve_codex_launch_spec(config)
+    if skin_port is not None:
+        codex_path = Path(_resolve_codex_app_source_path(config))
+        if _is_windows_store_codex_path(codex_path):
+            codex_path = Path(
+                prepare_portable_codex_path(
+                    codex_path,
+                    _get_shared_app_root(config),
+                    progress_callback=lambda percent, copied, total: _emit_backend_progress(
+                        {
+                            "operation": "portable-client-copy",
+                            "profileName": profile_name,
+                            "percent": percent,
+                            "copiedBytes": copied,
+                            "totalBytes": total,
+                        }
+                    ),
+                )
+            )
+        launch_spec = {
+            "kind": "app",
+            "command": [str(codex_path)],
+            "display": str(codex_path),
+            "cwd": str(codex_path.parent),
+        }
+    else:
+        launch_spec = _resolve_codex_launch_spec(config)
     launch_settings = db.load_profile_launch_settings(profile_name) if profile_name else {}
     extra_args = [str(value) for value in launch_settings.get("args", [])] if launch_spec["kind"] == "app" else []
+    if skin_port is not None:
+        extra_args = _append_codex_skin_args(extra_args, skin_port)
     command = [*launch_spec["command"], *extra_args]
     env = os.environ.copy()
     env.update({str(key): str(value) for key, value in dict(launch_settings.get("env") or {}).items()})
     working_dir = str(launch_settings.get("workingDir") or launch_spec.get("cwd") or "") or None
     logger.info("Codex 启动开始 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
     try:
-        subprocess.Popen(
+        process = subprocess.Popen(
             command,
             cwd=working_dir,
             env=env,
@@ -1675,6 +1870,16 @@ def _launch_default_codex(profile_name=""):
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         logger.info("Codex 启动成功 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
+        if skin_port is not None:
+            return {
+                "processId": process.pid,
+                "skinSession": {
+                    "profileName": profile_name or SYSTEM_PROFILE_NAME,
+                    "port": skin_port,
+                    "processId": process.pid,
+                },
+            }
+        return {"processId": process.pid}
     except FileNotFoundError as exc:
         logger.exception("Codex 启动失败 显示=%s 错误=%s", launch_spec["display"], exc)
         raise FileNotFoundError("未找到 ChatGPT 桌面客户端，请在设置中重新识别或确认已安装") from exc

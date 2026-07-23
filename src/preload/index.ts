@@ -8,6 +8,12 @@ contextBridge.exposeInMainWorld("launcherApi", {
   selectDirectory: (defaultPath?: string) => ipcRenderer.invoke("launcher:select-directory", defaultPath),
   selectAuthJsonFile: () => ipcRenderer.invoke("launcher:select-auth-json-file"),
   selectProfileBackupFile: () => ipcRenderer.invoke("launcher:select-profile-backup-file"),
+  getCodexSkinState: () => ipcRenderer.invoke("codex-skin:get-state"),
+  importCodexSkinTheme: () => ipcRenderer.invoke("codex-skin:import-theme"),
+  setActiveCodexSkinTheme: (themeId: string) => ipcRenderer.invoke("codex-skin:set-active", themeId),
+  deleteCodexSkinTheme: (themeId: string) => ipcRenderer.invoke("codex-skin:delete-theme", themeId),
+  setCodexSkinPaused: (paused: boolean) => ipcRenderer.invoke("codex-skin:set-paused", paused),
+  updateCodexSkinTheme: (themeId: string, options: unknown) => ipcRenderer.invoke("codex-skin:update-theme", themeId, options),
   onBackendProgress: (callback: (progress: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, progress: unknown) => callback(progress);
     ipcRenderer.on("launcher:backend-progress", listener);

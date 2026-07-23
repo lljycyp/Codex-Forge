@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Layout, Modal, Progress, message } from "antd";
-import { Boxes, Code2, FileText, Home, Settings, ShieldCheck } from "lucide-react";
+import { Boxes, Code2, FileText, Home, Palette, Settings, ShieldCheck } from "lucide-react";
 import { AppLayout } from "./components/AppLayout";
 import { getViewMeta } from "./constants/views";
 import { invokeLauncher } from "./api/launcher";
@@ -9,6 +9,7 @@ import { HomePage } from "./pages/HomePage";
 import { Profiles } from "./pages/Profiles";
 import { InstructionsPage } from "./pages/InstructionsPage";
 import { TomlConfigPage } from "./pages/TomlConfigPage";
+import { CodexSkinPage } from "./pages/CodexSkinPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import chatgptForgeLogo from "./assets/chatgpt-forge-logo.png";
@@ -29,6 +30,7 @@ const emptyState: AppState = {
   activeProfile: "",
   shareSystemConfig: true,
   launchMode: "switch",
+  codexSkinEnabled: false,
   profileRoot: "",
   profileRootExists: false,
   profileCount: 0,
@@ -304,6 +306,7 @@ export default function App() {
       { key: "workspace" as const, label: t("环境"), icon: <Boxes size={18} /> },
       { key: "instructions" as const, label: t("指令模板"), icon: <FileText size={18} /> },
       { key: "toml" as const, label: "TOML", icon: <Code2 size={18} /> },
+      { key: "skin" as const, label: t("换肤"), icon: <Palette size={18} /> },
       { key: "settings" as const, label: t("设置"), icon: <Settings size={18} /> }
     ],
     [t]
@@ -448,6 +451,9 @@ export default function App() {
           ) : null}
           {activeView === "toml" ? (
             <TomlConfigPage appState={appState} profiles={profiles} onDirtyChange={setTomlDirty} />
+          ) : null}
+          {activeView === "skin" ? (
+            <CodexSkinPage appState={appState} runCommand={runCommand} />
           ) : null}
           {activeView === "settings" ? (
             <SettingsPage

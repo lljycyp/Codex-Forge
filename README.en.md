@@ -44,6 +44,7 @@
 - 📝 **Instruction templates (prompt injection)**: Save common prompts as Markdown templates and switch ChatGPT's global behavior profile with one click. The built-in prompt can break restrictions and support effects such as SQL injection testing and reverse engineering.
 - 📊 **Status monitoring**: Check the current workspace and running instances on the home page, then inspect account health, weekly remaining usage, available resets, and expiration times from profile management.
 - 🧰 **Environment workspace**: Review 30-day usage trends and account health, then manage MCP, Skills, AGENTS.md, the read-only session index, and per-account launch settings.
+- 🎨 **Codex skins**: Includes the Forge Aurora theme and supports importing, switching, pausing, and deleting background themes stored only on your device.
 - 🚀 **Selectable launch modes**: Supports account switching and isolated multi-instance mode for running multiple ChatGPT clients.
 - 🌐 **Bilingual UI**: Built-in Chinese / English switching for different language environments.
 - 🔔 **Version updates**: Check for updates in the app, review release notes, download in the background, and restart to install.
@@ -68,6 +69,7 @@
 | 🔐 **Encrypted profile backups** | Protects profile backups with Windows DPAPI while keeping legacy ZIP restore compatibility; sessions, logs, caches, and client files stay excluded. |
 | 🛠️ **TOML editor** | Opens and saves the active `config.toml`, backs it up automatically before saving, and warns about unsaved changes before switching configurations or leaving the page. |
 | 📝 **Instruction templates (prompt injection)** | Saves Markdown prompt templates locally. Enabling a template copies it into the active ChatGPT config directory and points `model_instructions_file` in `config.toml` to that template. |
+| 🎨 **Codex skins** | Includes the Forge Aurora theme and supports importing, switching, pausing, and deleting local background themes. Images stay in the local Forge data directory, with support for both account-switch and isolated multi-instance modes. |
 | ⚙️ **Launch and directory settings** | Switch launch modes, migrate the account profile root, and enable ChatGPT Forge to start after Windows sign-in. |
 | 🔔 **In-app updates** | Supports silent update checks, manual update checks, release notes, background downloads, and restart-to-install. |
 | 🌐 **Language and project links** | Supports Chinese / English UI switching and provides GitHub and Gitee project links in the About area. |
@@ -174,7 +176,19 @@ CodexProfiles/<profile-id>/CodexHome
 CodexProfiles/<profile-id>/AppData
 ```
 
-### 7. ⚙️ Settings, Updates, and Project Links
+### 7. 🎨 Codex Skins
+
+The Codex Skins page includes the built-in **Forge Aurora** theme and lets you import and switch local background images. Imported images stay in the local Forge data directory and are never uploaded.
+
+<p align="center">
+  <img src="docs/images/codex-skin.png" alt="ChatGPT Forge Codex Skins page" />
+</p>
+
+- Works with both account-switch and isolated multi-instance modes.
+- Supports switching themes, pausing their display, and deleting custom themes.
+- Enabling or disabling skins safely restarts running Codex clients to apply the theme or restore the official appearance.
+
+### 8. ⚙️ Settings, Updates, and Project Links
 
 The Settings page centralizes ChatGPT Forge's own configuration:
 
@@ -185,7 +199,7 @@ The Settings page centralizes ChatGPT Forge's own configuration:
 - **Version updates**: Show the current version and check for updates manually. When a new version is available, you can view release notes, download in the background, and restart to install.
 - **Project links**: The About area provides GitHub and Gitee project links for source code and release information.
 
-### 8. 🧠 Smart ChatGPT Launch Detection
+### 9. 🧠 Smart ChatGPT Launch Detection
 
 When launching an account, ChatGPT Forge resolves the launch source in this order:
 

@@ -73,11 +73,17 @@ def prepare_profile_codex_home(profile_dir, share_system_config=False):
 
     codex_home_dir = profile_dir / "CodexHome"
     codex_home_dir.mkdir(parents=True, exist_ok=True)
+    runtime_auth_path = codex_home_dir / "auth.json"
+    if (
+        runtime_auth_path.exists()
+        and runtime_auth_path.stat().st_mtime_ns > source_auth_path.stat().st_mtime_ns
+    ):
+        sync_codex_home_to_profile(profile_dir)
     config_path = ensure_profile_config_path(profile_dir)
     sanitize_profile_config_file(config_path)
     require_file_auth_store(config_path)
     ensure_profile_env_file(codex_home_dir)
-    shutil.copy2(source_auth_path, codex_home_dir / "auth.json")
+    shutil.copy2(source_auth_path, runtime_auth_path)
 
 
 def sync_codex_home_to_profile(profile_dir, share_system_config=False):

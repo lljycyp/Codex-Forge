@@ -22,6 +22,10 @@ export function getViewMeta(t: (text: string) => string): Record<ViewKey, ViewMe
     title: t("TOML 配置"),
     description: t("查看和编辑当前生效的 Codex config.toml")
   },
+  skin: {
+    title: t("Codex 换肤"),
+    description: t("管理 Codex 外观、背景主题与显示构图")
+  },
   settings: {
     title: t("Forge 设置"),
     description: t("配置账号资料根目录")

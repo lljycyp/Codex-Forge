@@ -13,6 +13,7 @@ export type AppState = {
   activeProfile: string;
   shareSystemConfig: boolean;
   launchMode: "switch" | "multi";
+  codexSkinEnabled: boolean;
   profileRoot: string;
   profileRootExists: boolean;
   profileCount: number;
@@ -20,7 +21,7 @@ export type AppState = {
   authCredentialStore: "file" | "keyring" | "auto";
 };
 
-export type ViewKey = "home" | "profiles" | "workspace" | "instructions" | "toml" | "settings";
+export type ViewKey = "home" | "profiles" | "workspace" | "instructions" | "toml" | "skin" | "settings";
 
 export type ViewMeta = {
   title: string;
@@ -124,11 +125,37 @@ export type BackendProgress = {
   totalBytes?: number;
 };
 
+export type CodexSkinTheme = {
+  id: string;
+  name: string;
+  builtIn: boolean;
+  previewDataUrl: string;
+  focusX: number;
+  focusY: number;
+  safeArea: "left" | "right" | "center" | "none";
+  appearance: "auto" | "light" | "dark";
+};
+
+export type CodexSkinThemeState = {
+  activeThemeId: string;
+  paused: boolean;
+  themes: CodexSkinTheme[];
+};
+
 export type LauncherApi = {
   invoke: <T>(command: string, payload?: unknown) => Promise<BackendResponse<T>>;
   selectDirectory: (defaultPath?: string) => Promise<string>;
   selectAuthJsonFile: () => Promise<string>;
   selectProfileBackupFile?: () => Promise<string>;
+  getCodexSkinState?: () => Promise<CodexSkinThemeState>;
+  importCodexSkinTheme?: () => Promise<CodexSkinThemeState>;
+  setActiveCodexSkinTheme?: (themeId: string) => Promise<CodexSkinThemeState>;
+  deleteCodexSkinTheme?: (themeId: string) => Promise<CodexSkinThemeState>;
+  setCodexSkinPaused?: (paused: boolean) => Promise<CodexSkinThemeState>;
+  updateCodexSkinTheme?: (
+    themeId: string,
+    options: Pick<CodexSkinTheme, "focusX" | "focusY" | "safeArea" | "appearance">,
+  ) => Promise<CodexSkinThemeState>;
   getAutoStartEnabled?: () => Promise<boolean>;
   getAppVersion?: () => Promise<string>;
   showNotification?: (title: string, body: string) => Promise<boolean>;

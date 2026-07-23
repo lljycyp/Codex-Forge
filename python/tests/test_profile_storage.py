@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,11 +8,14 @@ from bridge.commands import _get_profile_dir, _get_shared_app_root, rename_profi
 from core import db
 from core.app_server_service import find_codex_cli_path
 from core.constants import PORTABLE_APP_DIR_NAME
-from core.config_store import load_config
-from core.profile_service import sync_codex_home_to_profile
+from core.config_store import load_config, normalize_config
+from core.profile_service import prepare_profile_codex_home, sync_codex_home_to_profile
 
 
 class ProfileStorageTest(unittest.TestCase):
+    def test_codex_skin_is_disabled_for_existing_configs(self):
+        self.assertFalse(normalize_config({})["codex_skin_enabled"])
+
     def test_shared_client_is_outside_account_directories(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -39,6 +43,29 @@ class ProfileStorageTest(unittest.TestCase):
 
             self.assertEqual(
                 (profile_dir / "auth.json").read_text(encoding="utf-8"),
+                '{\n  "version": 2\n}',
+            )
+
+    def test_prepare_runtime_preserves_newer_runtime_auth(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            runtime_dir = profile_dir / "CodexHome"
+            runtime_dir.mkdir(parents=True)
+            profile_auth = profile_dir / "auth.json"
+            runtime_auth = runtime_dir / "auth.json"
+            profile_auth.write_text('{"version":1}', encoding="utf-8")
+            runtime_auth.write_text('{"version":2}', encoding="utf-8")
+            runtime_auth_mtime = profile_auth.stat().st_mtime_ns + 1_000_000_000
+            os.utime(runtime_auth, ns=(runtime_auth_mtime, runtime_auth_mtime))
+
+            prepare_profile_codex_home(profile_dir)
+
+            self.assertEqual(
+                (profile_dir / "auth.json").read_text(encoding="utf-8"),
+                '{\n  "version": 2\n}',
+            )
+            self.assertEqual(
+                runtime_auth.read_text(encoding="utf-8"),
                 '{\n  "version": 2\n}',
             )
 

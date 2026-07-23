@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, ipcMain, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, ipcMain, shell, type MenuItemConstructorOptions } from "electron";
 import {
   autoUpdater,
   type ProgressInfo,
@@ -6,8 +6,15 @@ import {
   type UpdateInfo,
 } from "electron-updater";
 import { join } from "node:path";
-import { registerIpcHandlers } from "./ipc";
+import { recoverCodexSkinSessions, registerIpcHandlers } from "./ipc";
 import { invokeBackend } from "./python/launcherBackend";
+import { applyCodexSkinTheme, pauseCodexSkinSessions, stopAllCodexSkinSessions } from "./codexSkin";
+import {
+  getActiveCodexSkinTheme,
+  getCodexSkinThemeState,
+  setActiveCodexSkinTheme,
+  setCodexSkinPaused,
+} from "./codexSkinStore";
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -190,6 +197,7 @@ function createTray(): void {
   void refreshTrayMenu();
   tray.on("click", showMainWindow);
   tray.on("double-click", showMainWindow);
+  tray.on("right-click", () => void refreshTrayMenu());
 }
 
 async function refreshTrayMenu(): Promise<void> {
@@ -198,14 +206,35 @@ async function refreshTrayMenu(): Promise<void> {
   }
   let activeProfile = "未选择";
   let runningCount = 0;
+  let codexSkinEnabled = false;
+  let skinState = {
+    activeThemeId: "builtin-aurora",
+    paused: false,
+    themes: [{ id: "builtin-aurora", name: "Forge Aurora", builtIn: true, previewDataUrl: "" }],
+  };
   try {
-    const response = await invokeBackend("get_app_state", {});
+    const [response, nextSkinState] = await Promise.all([
+      invokeBackend("get_app_state", {}),
+      getCodexSkinThemeState(),
+    ]);
+    skinState = nextSkinState;
     const data = response.ok ? response.data as { activeProfile?: string; runningCount?: number } : {};
     activeProfile = data.activeProfile || "未选择";
     runningCount = data.runningCount || 0;
+    codexSkinEnabled = Boolean((data as { codexSkinEnabled?: boolean }).codexSkinEnabled);
   } catch {
     // 托盘状态是辅助入口，读取失败时保持基础菜单。
   }
+  const skinThemeItems: MenuItemConstructorOptions[] = skinState.themes.map((theme) => ({
+    label: theme.name,
+    type: "radio",
+    checked: theme.id === skinState.activeThemeId,
+    click: async () => {
+      await setActiveCodexSkinTheme(theme.id);
+      await applyCodexSkinTheme(await getActiveCodexSkinTheme());
+      await refreshTrayMenu();
+    },
+  }));
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: `当前账号：${activeProfile}`, enabled: false },
@@ -228,6 +257,24 @@ async function refreshTrayMenu(): Promise<void> {
           await invokeBackend("stop_profile", {});
           await refreshTrayMenu();
         },
+      },
+      {
+        label: "Codex 皮肤",
+        enabled: codexSkinEnabled,
+        submenu: [
+          {
+            label: skinState.paused ? "继续显示" : "暂停显示",
+            click: async () => {
+              const state = await setCodexSkinPaused(!skinState.paused);
+              await pauseCodexSkinSessions(state.paused);
+              await refreshTrayMenu();
+            },
+          },
+          { type: "separator" },
+          ...skinThemeItems,
+          { type: "separator" },
+          { label: "管理主题…", click: showMainWindow },
+        ],
       },
       {
         label: "刷新托盘状态",
@@ -256,6 +303,7 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     registerIpcHandlers();
+    void recoverCodexSkinSessions();
     registerUpdateHandlers();
     createMainWindow();
     createTray();
@@ -280,6 +328,7 @@ if (!gotSingleInstanceLock) {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  void stopAllCodexSkinSessions();
 });
 
 app.on("window-all-closed", () => {
