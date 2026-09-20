@@ -32,6 +32,7 @@ from core.codex_source import (
     _is_client_main_process,
     _find_appx_client_path,
     _replace_directory_with_retry,
+    cleanup_stale_portable_app_dirs,
     find_latest_portable_app_dir,
     find_windowsapps_codex_path_by_package,
     portable_app_needs_update,
@@ -237,12 +238,14 @@ class ChatGptCompatibilityTest(unittest.TestCase):
             patch("bridge.commands.load_config", return_value=config),
             patch("bridge.commands._resolve_codex_app_source_path", return_value=store_path),
             patch("bridge.commands.prepare_portable_codex_path", return_value=portable_path) as prepare,
+            patch("bridge.commands._cleanup_stale_portable_copies") as cleanup,
             patch("bridge.commands.db.load_profile_launch_settings", return_value={"args": [], "env": {}}),
             patch("bridge.commands.subprocess.Popen", return_value=process) as popen,
         ):
             result = _launch_default_codex("work", skin_port=19335)
 
         prepare.assert_called_once()
+        cleanup.assert_called_once_with(config, Path(portable_path).parent)
         command = popen.call_args.args[0]
         self.assertEqual(command[0], str(Path(portable_path)))
         self.assertIn("--remote-debugging-port=19335", command)
@@ -714,6 +717,74 @@ trusted_hash = "dynamic"
                 with self.assertRaisesRegex(OSError, "copy failed"):
                     prepare_portable_codex_path(source / "ChatGPT.exe", profile)
             self.assertEqual((old_copy / "ChatGPT.exe").read_bytes(), b"new-client")
+
+    def test_stale_portable_cleanup_keeps_current_active_and_unverified_directories(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            shared_root = Path(temp_dir)
+            current = shared_root / "CodexPortableApp-3.0"
+            active = shared_root / "CodexPortableApp-2.0"
+            stale = shared_root / "CodexPortableApp-1.0"
+            unverified = shared_root / "CodexPortableApp-0.9"
+            unrelated = shared_root / "OtherPortableApp-1.0"
+            for directory in (current, active, stale, unverified, unrelated):
+                directory.mkdir()
+                (directory / "ChatGPT.exe").write_bytes(b"client")
+            for directory, version in ((current, "3.0"), (active, "2.0"), (stale, "1.0")):
+                write_source_signature(directory, {"package_version": version, "source_path": "source"})
+            write_source_signature(unverified, {"unexpected": True})
+            active_path = active.resolve()
+            stale_path = stale.resolve()
+            unverified_path = unverified.resolve()
+
+            def processes_in(directory, strict=False):
+                self.assertTrue(strict)
+                return [{"pid": 123}] if Path(directory).resolve() == active_path else []
+
+            with patch("core.codex_source.read_processes_in_directory", side_effect=processes_in):
+                result = cleanup_stale_portable_app_dirs(shared_root, current)
+
+            self.assertTrue(current.exists())
+            self.assertTrue(active.exists())
+            self.assertFalse(stale.exists())
+            self.assertTrue(unverified.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertEqual(result["removed"], [str(stale_path)])
+            self.assertEqual(result["in_use"], [str(active_path)])
+            self.assertEqual(result["skipped"], [str(unverified_path)])
+            self.assertEqual(result["failed"], [])
+
+    def test_stale_portable_cleanup_keeps_directory_when_safety_check_or_delete_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            shared_root = Path(temp_dir)
+            current = shared_root / "CodexPortableApp-3.0"
+            scan_failed = shared_root / "CodexPortableApp-1.0"
+            delete_failed = shared_root / "CodexPortableApp-2.0"
+            for directory, version in ((current, "3.0"), (scan_failed, "1.0"), (delete_failed, "2.0")):
+                directory.mkdir()
+                (directory / "ChatGPT.exe").write_bytes(b"client")
+                write_source_signature(directory, {"package_version": version, "source_path": "source"})
+            scan_failed_path = scan_failed.resolve()
+            delete_failed_path = delete_failed.resolve()
+
+            def processes_in(directory, strict=False):
+                self.assertTrue(strict)
+                if Path(directory).resolve() == scan_failed_path:
+                    raise RuntimeError("scan failed")
+                return []
+
+            with (
+                patch("core.codex_source.read_processes_in_directory", side_effect=processes_in),
+                patch("core.codex_source.shutil.rmtree", side_effect=PermissionError("delete failed")),
+            ):
+                result = cleanup_stale_portable_app_dirs(shared_root, current)
+
+            self.assertTrue(current.exists())
+            self.assertTrue(scan_failed.exists())
+            self.assertTrue(delete_failed.exists())
+            self.assertEqual(
+                {item["path"] for item in result["failed"]},
+                {str(scan_failed_path), str(delete_failed_path)},
+            )
 
     def test_portable_copy_checks_free_disk_space_before_copying(self):
         with tempfile.TemporaryDirectory() as temp_dir:

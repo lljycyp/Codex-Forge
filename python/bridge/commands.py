@@ -18,6 +18,7 @@ from pathlib import Path
 from core import db
 from core.app_server_service import _exclusive_file_lock
 from core.codex_source import (
+    cleanup_stale_portable_app_dirs,
     find_running_codex_path,
     find_latest_portable_app_dir,
     find_windowsapps_codex_path,
@@ -862,6 +863,7 @@ def _launch_profile_multi(config, name, reserved_skin_ports=None):
     )
     config["active_profile"] = name
     save_config(config)
+    _cleanup_stale_portable_copies(config, Path(portable_codex_path).parent)
     logger.info("多开账号启动成功 名称=%s 目录=%s", name, profile_dir)
     result = {
         "name": name,
@@ -1850,6 +1852,21 @@ def _cleanup_orphaned_portable_processes(config, source_codex_path):
         raise RuntimeError("旧版 Codex 后台进程未能完全退出，请在任务管理器结束后重试")
 
 
+def _cleanup_stale_portable_copies(config, current_app_dir):
+    """尽力回收未运行的旧版客户端目录，不让清理失败影响启动。"""
+    try:
+        result = cleanup_stale_portable_app_dirs(_get_shared_app_root(config), current_app_dir)
+    except Exception as exc:
+        logger.warning("清理旧版 Codex 客户端副本失败 错误=%s", exc)
+        return
+    if result["removed"]:
+        logger.info("清理旧版 Codex 客户端副本完成 数量=%s", len(result["removed"]))
+    if result["in_use"]:
+        logger.info("保留仍在运行的旧版 Codex 客户端副本 数量=%s", len(result["in_use"]))
+    for item in result["failed"]:
+        logger.warning("跳过无法安全清理的 Codex 客户端副本 路径=%s 错误=%s", item["path"], item["error"])
+
+
 def _resolve_configured_codex_app_path(configured_path):
     """把用户保存的文件或目录解析为客户端主程序。"""
     if not configured_path:
@@ -1938,6 +1955,7 @@ $matches | Where-Object { $_ -match $pattern } | Sort-Object @{Expression = { $_
 def _launch_default_codex(profile_name="", skin_port=None):
     """启动默认安装的 Codex 桌面端。"""
     config = load_config()
+    portable_app_dir = None
     if skin_port is not None:
         codex_path = Path(_resolve_codex_app_source_path(config))
         if _is_windows_store_codex_path(codex_path):
@@ -1957,6 +1975,7 @@ def _launch_default_codex(profile_name="", skin_port=None):
                     ),
                 )
             )
+            portable_app_dir = codex_path.parent
         launch_spec = {
             "kind": "app",
             "command": [str(codex_path)],
@@ -1982,6 +2001,8 @@ def _launch_default_codex(profile_name="", skin_port=None):
             close_fds=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        if portable_app_dir is not None:
+            _cleanup_stale_portable_copies(config, portable_app_dir)
         logger.info("Codex 启动成功 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
         if skin_port is not None:
             return {

@@ -57,7 +57,7 @@ $processes = Get-CimInstance Win32_Process -Filter "Name = 'ChatGPT.exe' OR Name
     return [process for process in candidates if _is_client_main_process(process)]
 
 
-def read_processes_in_directory(target_dir):
+def read_processes_in_directory(target_dir, strict=False):
     """读取主程序或辅助程序位于指定目录内的进程，仅用于客户端副本更新。"""
     if os.name != "nt":
         return []
@@ -68,7 +68,7 @@ $root = [IO.Path]::GetFullPath($env:CODEX_FORGE_PROCESS_ROOT).TrimEnd('\') + '\'
 $processes = Get-CimInstance Win32_Process | Where-Object {
   $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
 }
-@($processes | Select-Object Name, ProcessId, ParentProcessId, ExecutablePath, CommandLine) | ConvertTo-Json -Compress
+ConvertTo-Json -InputObject @($processes | Select-Object Name, ProcessId, ParentProcessId, ExecutablePath, CommandLine) -Compress
 """
     try:
         result = subprocess.run(
@@ -79,13 +79,19 @@ $processes = Get-CimInstance Win32_Process | Where-Object {
             creationflags=subprocess.CREATE_NO_WINDOW,
             env=env,
         )
-    except Exception:
+    except Exception as exc:
+        if strict:
+            raise RuntimeError("无法确认 Codex 客户端副本是否仍在使用") from exc
         return []
     if result.returncode != 0 or not result.stdout.strip():
+        if strict:
+            raise RuntimeError("无法确认 Codex 客户端副本是否仍在使用")
         return []
     try:
         payload = json.loads(result.stdout)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        if strict:
+            raise RuntimeError("无法确认 Codex 客户端副本是否仍在使用") from exc
         return []
     items = payload if isinstance(payload, list) else [payload]
     return [
@@ -340,6 +346,44 @@ def find_latest_portable_app_dir(profile_dir):
         return version, modified_ns
 
     return max(ready_dirs, key=sort_key)
+
+
+def cleanup_stale_portable_app_dirs(profile_dir, current_app_dir):
+    """删除未运行的旧客户端副本，保留当前目录和无法安全确认的目录。"""
+    profile_dir = Path(profile_dir).resolve()
+    current_app_dir = Path(current_app_dir).resolve()
+    candidates = [profile_dir / PORTABLE_APP_DIR_NAME, *profile_dir.glob(f"{PORTABLE_APP_DIR_NAME}-*")]
+    result = {"removed": [], "in_use": [], "skipped": [], "failed": []}
+
+    for directory in sorted(set(candidates), key=lambda item: item.name.lower()):
+        if not directory.is_dir():
+            continue
+        try:
+            resolved_directory = directory.resolve()
+        except OSError as exc:
+            result["failed"].append({"path": str(directory), "error": str(exc)})
+            continue
+        if resolved_directory == current_app_dir:
+            continue
+        if resolved_directory.parent != profile_dir:
+            result["skipped"].append(str(directory))
+            continue
+        signature = read_source_signature(directory)
+        if not signature.get("source_path") or not (
+            (directory / "ChatGPT.exe").is_file() or (directory / "Codex.exe").is_file()
+        ):
+            result["skipped"].append(str(directory))
+            continue
+        try:
+            if read_processes_in_directory(directory, strict=True):
+                result["in_use"].append(str(directory))
+                continue
+            shutil.rmtree(directory, onerror=remove_readonly_path)
+            result["removed"].append(str(directory))
+        except Exception as exc:
+            result["failed"].append({"path": str(directory), "error": str(exc)})
+
+    return result
 
 
 def prepare_portable_codex_path(source_codex_path, profile_dir, allow_update=True, progress_callback=None):
