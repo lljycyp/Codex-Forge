@@ -8,6 +8,7 @@ import {
 import { join } from "node:path";
 import { recoverCodexSkinSessions, registerIpcHandlers } from "./ipc";
 import { invokeBackend } from "./python/launcherBackend";
+import { restoreLoadBalancer, shutdownLoadBalancer } from "./loadBalancer";
 import { applyCodexSkinTheme, pauseCodexSkinSessions, stopAllCodexSkinSessions } from "./codexSkin";
 import {
   getActiveCodexSkinTheme,
@@ -303,6 +304,7 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     registerIpcHandlers();
+    void restoreLoadBalancer();
     void recoverCodexSkinSessions();
     registerUpdateHandlers();
     createMainWindow();
@@ -328,6 +330,7 @@ if (!gotSingleInstanceLock) {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  void shutdownLoadBalancer();
   void stopAllCodexSkinSessions();
 });
 

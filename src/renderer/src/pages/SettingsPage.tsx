@@ -4,6 +4,7 @@ import { Bell, ClipboardCopy, EyeOff, FolderOpen, Github, HardDrive, Info, Power
 import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
 import type { AppState, RunCommand } from "../types";
+import { LoadBalancerSettings } from "../components/LoadBalancerSettings";
 
 type SettingsPageProps = {
   appState: AppState;
@@ -257,6 +258,8 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
             </Space.Compact>
           </Form.Item>
         </div>
+
+        <LoadBalancerSettings privacyMode={privacyMode} />
 
         <div className="mb-5 mt-8 flex items-center gap-2">
           <div className="flex h-7 w-7 items-center justify-center rounded bg-brand-50 text-brand-600">

@@ -16,6 +16,8 @@ def default_config():
         "share_system_config": True,
         "launch_mode": "switch",
         "codex_skin_enabled": False,
+        "load_balancer_enabled": False,
+        "load_balancer_port": 19380,
     }
 
 

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, type OpenDialogOptions } from "electron";
 import { invokeBackend } from "./python/launcherBackend";
+import { handleLoadBalancer } from "./loadBalancer";
 import {
   applyCodexSkinTheme,
   hasCodexSkinSessions,
@@ -58,6 +59,12 @@ async function applySelectedCodexSkinTheme(): Promise<void> {
 
 export function registerIpcHandlers(): void {
   ipcMain.handle("launcher:invoke", async (_event, command: string, payload: unknown) => {
+    if (["get_load_balancer_status", "set_load_balancer_enabled", "get_load_balancer_key", "launch_load_balancer_client"].includes(command)) {
+      return handleLoadBalancer(command, payload);
+    }
+    if (["run_load_balancer", "get_load_balancer_preferences", "disable_load_balancer"].includes(command)) {
+      return { ok: false, data: {}, error: "内部网关命令不可直接调用" };
+    }
     const result = await invokeBackend(command, payload, (progress) => {
       _event.sender.send("launcher:backend-progress", progress);
     });

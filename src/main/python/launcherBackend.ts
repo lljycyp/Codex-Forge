@@ -45,6 +45,16 @@ function getBackendCommand(): BackendCommand {
   return { command: pythonCommand, args: ["-m", "bridge.cli"], mode: "development" };
 }
 
+export function spawnLoadBalancer() {
+  const backend = getBackendCommand();
+  const projectRoot = getProjectRoot();
+  return spawn(backend.command, [...backend.args, "run_load_balancer"], {
+    cwd: backend.mode === "development" ? join(projectRoot, "python") : projectRoot,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
 export function invokeBackend(
   commandName: string,
   payload: unknown,
