@@ -10,12 +10,12 @@ from unittest.mock import Mock, call, patch
 
 from bridge.commands import (
     _append_codex_skin_args,
-    _cleanup_orphaned_portable_processes,
     _get_legacy_system_running_profile,
     get_codex_skin_sessions,
     _is_profile_running,
     _is_same_auth_account,
     _launch_default_codex,
+    _launch_profile_multi,
     _resolve_codex_app_source_path,
     _resolve_configured_codex_app_path,
     _running_multi_profile_names,
@@ -65,49 +65,6 @@ class ChatGptCompatibilityTest(unittest.TestCase):
             expected_lock_path = Path(temp_dir) / ".shared" / ".codex-client-operation.lock"
             operation_lock.assert_called_once_with(expected_lock_path, timeout_seconds=120)
             self.assertTrue(result["ok"])
-
-    def test_portable_update_stops_orphaned_helper_processes(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            profile_root = Path(temp_dir)
-            target_dir = profile_root / ".shared" / "CodexPortableApp"
-            target_dir.mkdir(parents=True)
-            config = {"profile_root": str(profile_root)}
-            orphan = {
-                "name": "codex.exe",
-                "pid": 123,
-                "command_line": f'"{target_dir / "resources" / "codex.exe"}" app-server',
-            }
-
-            with (
-                patch("bridge.commands.portable_app_needs_update", return_value=True),
-                patch("bridge.commands.read_processes_in_directory", side_effect=[[orphan], []]),
-                patch("bridge.commands.subprocess.run") as run,
-            ):
-                _cleanup_orphaned_portable_processes(config, Path("C:/Apps/ChatGPT.exe"))
-
-            self.assertEqual(run.call_args.args[0], ["taskkill", "/PID", "123", "/T", "/F"])
-
-    def test_portable_update_does_not_stop_running_main_client(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            profile_root = Path(temp_dir)
-            target_dir = profile_root / ".shared" / "CodexPortableApp"
-            target_dir.mkdir(parents=True)
-            config = {"profile_root": str(profile_root)}
-            main_process = {
-                "name": "ChatGPT.exe",
-                "pid": 123,
-                "command_line": f'"{target_dir / "ChatGPT.exe"}"',
-            }
-
-            with (
-                patch("bridge.commands.portable_app_needs_update", return_value=True),
-                patch("bridge.commands.read_processes_in_directory", return_value=[main_process]),
-                patch("bridge.commands.subprocess.run") as run,
-            ):
-                with self.assertRaisesRegex(RuntimeError, "请先关闭所有正在运行的 Codex"):
-                    _cleanup_orphaned_portable_processes(config, Path("C:/Apps/ChatGPT.exe"))
-
-            run.assert_not_called()
 
     def test_portable_directory_replace_retries_transient_windows_lock(self):
         locked = PermissionError("locked")
@@ -229,30 +186,56 @@ class ChatGptCompatibilityTest(unittest.TestCase):
         assert isinstance(skin_session, dict)
         self.assertEqual(skin_session["profileName"], "work")
 
-    def test_switch_mode_skin_uses_portable_copy_for_store_client(self):
+    def test_switch_mode_skin_launches_registered_store_client_directly(self):
         process = SimpleNamespace(pid=89)
         store_path = Path("C:/Program Files/WindowsApps/OpenAI.Codex_1.0_x64/app/ChatGPT.exe")
-        portable_path = "D:/Profiles/.shared/ChatGPTPortable/ChatGPT.exe"
         config = {"profile_root": "D:/Profiles"}
         with (
             patch("bridge.commands.load_config", return_value=config),
             patch("bridge.commands._resolve_codex_app_source_path", return_value=store_path),
-            patch("bridge.commands.prepare_portable_codex_path", return_value=portable_path) as prepare,
-            patch("bridge.commands._cleanup_stale_portable_copies") as cleanup,
             patch("bridge.commands.db.load_profile_launch_settings", return_value={"args": [], "env": {}}),
             patch("bridge.commands.subprocess.Popen", return_value=process) as popen,
         ):
             result = _launch_default_codex("work", skin_port=19335)
 
-        prepare.assert_called_once()
-        cleanup.assert_called_once_with(config, Path(portable_path).parent)
         command = popen.call_args.args[0]
-        self.assertEqual(command[0], str(Path(portable_path)))
+        self.assertEqual(command[0], str(store_path))
         self.assertIn("--remote-debugging-port=19335", command)
         skin_session = result.get("skinSession")
         self.assertIsInstance(skin_session, dict)
         assert isinstance(skin_session, dict)
         self.assertEqual(skin_session["processId"], 89)
+
+    def test_multi_mode_launches_registered_client_with_isolated_environment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir) / "profile"
+            store_path = Path("C:/Program Files/WindowsApps/OpenAI.Codex_1.0_x64/app/ChatGPT.exe")
+            config = {"profile_root": temp_dir, "codex_skin_enabled": True}
+            process = SimpleNamespace(pid=90)
+            with (
+                patch("bridge.commands._get_profile_dir", return_value=profile_dir),
+                patch("bridge.commands.read_running_codex_commands", return_value=""),
+                patch("bridge.commands._resolve_codex_app_source_path", return_value=store_path),
+                patch("bridge.commands.prepare_profile_codex_home"),
+                patch("bridge.commands.db.load_profile_launch_settings", return_value={"args": [], "env": {}}),
+                patch("bridge.commands._allocate_codex_skin_port", return_value=19336),
+                patch("bridge.commands.save_config") as save_config,
+                patch("bridge.commands.subprocess.Popen", return_value=process) as popen,
+            ):
+                result = _launch_profile_multi(config, "work")
+
+        command = popen.call_args.args[0]
+        launch_env = popen.call_args.kwargs["env"]
+        self.assertEqual(command[0], str(store_path))
+        self.assertIn(f"--user-data-dir={profile_dir / 'AppData' / 'Roaming' / 'Codex' / 'web' / 'Codex'}", command)
+        self.assertIn("--remote-debugging-port=19336", command)
+        self.assertEqual(launch_env["APPDATA"], str(profile_dir / "AppData" / "Roaming"))
+        self.assertEqual(launch_env["LOCALAPPDATA"], str(profile_dir / "AppData" / "Local"))
+        self.assertEqual(launch_env["CODEX_HOME"], str(profile_dir / "CodexHome"))
+        self.assertEqual(launch_env["CODEX_MULTI_PROFILE"], "work")
+        self.assertEqual(popen.call_args.kwargs["cwd"], str(store_path.parent))
+        self.assertEqual(result["skinSession"]["processId"], 90)
+        save_config.assert_called_once_with(config)
 
     def test_enabling_skin_restarts_running_switch_profile(self):
         config = {"launch_mode": "switch", "active_profile": "work", "codex_skin_enabled": False}

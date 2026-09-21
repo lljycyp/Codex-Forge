@@ -162,8 +162,8 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
       Modal.confirm({
         title: t("切换到多开隔离模式"),
         content: appState.runningCount > 0
-          ? (language === "en-US" ? "Codex is running. Close it first if possible. Isolated multi-instance mode creates one shared copy from the installed Codex client, then keeps each account's configuration and runtime data separate." : "检测到 Codex 正在运行。建议先关闭当前 Codex；多开隔离模式会从系统已安装的 Codex 客户端复制出一份共享副本，并分别隔离每个账号的配置和运行数据。")
-          : (language === "en-US" ? "Isolated multi-instance mode creates one shared copy from the installed Codex client, then keeps each account's configuration and runtime data separate." : "多开隔离模式会从系统已安装的 Codex 客户端复制出一份共享副本，并分别隔离每个账号的配置和运行数据。"),
+          ? (language === "en-US" ? "Codex is running. Close it first if possible. Isolated multi-instance mode launches the registered Codex client directly, then keeps each account's configuration and runtime data separate." : "检测到 Codex 正在运行。建议先关闭当前 Codex；多开隔离模式会直接启动系统已注册的 Codex 客户端，并分别隔离每个账号的配置和运行数据。")
+          : (language === "en-US" ? "Isolated multi-instance mode launches the registered Codex client directly, then keeps each account's configuration and runtime data separate." : "多开隔离模式会直接启动系统已注册的 Codex 客户端，并分别隔离每个账号的配置和运行数据。"),
         okText: t("切换"),
         cancelText: t("取消"),
         onOk: () => saveLaunchMode(mode),
@@ -286,8 +286,8 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
                 className="mt-3"
                 type="warning"
                 showIcon
-                message={t("多开账号共用一份 Codex 客户端副本")}
-                description={t("首次启动多开账号时会从系统已安装的客户端复制一份共享副本，新增账号不会重复复制。运行中的多开实例需要先关闭，才能切回账号切换模式。")}
+                message={t("多开账号直接使用系统客户端")}
+                description={t("每个账号直接启动系统已注册的 Codex 客户端，并使用独立配置和运行数据。运行中的多开实例需要先关闭，才能切回账号切换模式。")}
               />
             ) : null}
           </div>
@@ -295,7 +295,7 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
             <div className="min-w-0">
               <div className="font-semibold text-slate-700">{t("Codex 客户端来源")}</div>
               <div className="mt-1 text-sm leading-6 text-slate-500">
-                {t("重新识别系统当前安装的 Codex 客户端；共享副本会在下次启动前同步更新。")}
+                {t("重新识别系统当前安装的 Codex 客户端；之后启动的账号会直接使用该客户端。")}
               </div>
             </div>
             <Button

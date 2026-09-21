@@ -791,7 +791,7 @@ function ProfileInspector({
                 <InspectorRow label={t("账号目录")} value={maskPath(profile.profileDir, privacyMode)} />
                 <InspectorRow label="auth.json" value={profile.authExists ? t("存在") : t("缺失")} />
                 <InspectorRow label="config.toml" value={profile.configExists ? t("存在") : t("缺失")} />
-                {launchMode === "multi" ? <InspectorRow label={t("共享客户端副本")} value={profile.portableCodexExists ? profile.portableCodexSizeText || t("存在") : t("待创建")} /> : null}
+                {launchMode === "multi" ? <InspectorRow label={t("独立账号环境")} value={profile.codexHomeExists ? t("已就绪") : t("待初始化")} /> : null}
                 <Button icon={<FolderOpen size={14} />} onClick={openProfilePath}>{t("打开目录")}</Button>
                 <Button icon={<Info size={14} />} loading={detailLoading} onClick={() => onOpenDetail(profile)}>{t("查看完整详情")}</Button>
               </div>
@@ -921,9 +921,9 @@ function ProfileDetailPanel({
           />
           <DetailMetric
             icon={<Archive size={17} />}
-            label={t("共享客户端副本")}
-            value={detail.portableCodexExists ? detail.portableCodexSizeText || "0 B" : t("待创建")}
-            tone={detail.portableCodexExists ? "green" : "slate"}
+            label={t("账号运行环境")}
+            value={detail.codexHomeExists ? t("已就绪") : t("待初始化")}
+            tone={detail.codexHomeExists ? "green" : "slate"}
           />
         </div>
 
@@ -991,9 +991,6 @@ function ProfileDetailPanel({
                     <PathRow label="config.toml" path={detail.configPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
                     {detail.codexHome ? (
                       <PathRow label="CodexHome" path={detail.codexHome} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
-                    ) : null}
-                    {detail.portableCodexPath ? (
-                      <PathRow label={t("共享客户端副本")} path={detail.portableCodexPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
                     ) : null}
                   </div>
                 ),

@@ -54,10 +54,6 @@ export type ProfileSummary = {
   configExists: boolean;
   codexHome?: string;
   codexHomeExists?: boolean;
-  portableCodexPath?: string;
-  portableCodexExists?: boolean;
-  portableCodexSizeBytes?: number;
-  portableCodexSizeText?: string;
   usage: ProfileUsage | null;
 };
 

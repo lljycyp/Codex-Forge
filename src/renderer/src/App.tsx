@@ -150,21 +150,6 @@ export default function App() {
     setTaskText(t("就绪"));
   }, [t]);
 
-  useEffect(() => {
-    if (!window.launcherApi.onBackendProgress) {
-      return undefined;
-    }
-    return window.launcherApi.onBackendProgress((progress) => {
-      if (progress.operation !== "portable-client-copy") {
-        return;
-      }
-      const sizeText = progress.totalBytes
-        ? ` · ${formatBytes(progress.copiedBytes ?? 0)} / ${formatBytes(progress.totalBytes)}`
-        : "";
-      setTaskText(`${t("正在复制 Codex 客户端")} ${progress.percent}%${sizeText}`);
-    });
-  }, [t]);
-
   const loadShellState = useCallback(async () => {
     const snapshot = await invokeLauncher<ShellSnapshot>("get_shell_snapshot");
     profilesRef.current = snapshot.profiles;

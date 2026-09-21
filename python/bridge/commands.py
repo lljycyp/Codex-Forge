@@ -8,7 +8,6 @@ import re
 import shutil
 import socket
 import subprocess
-import sys
 import threading
 import time
 import tomllib
@@ -18,20 +17,12 @@ from pathlib import Path
 from core import db
 from core.app_server_service import _exclusive_file_lock
 from core.codex_source import (
-    cleanup_stale_portable_app_dirs,
     find_running_codex_path,
-    find_latest_portable_app_dir,
     find_windowsapps_codex_path,
     find_windowsapps_codex_path_by_package,
-    get_portable_app_dir,
-    portable_app_needs_update,
-    prepare_portable_codex_path,
-    read_processes_in_directory,
     request_process_close,
-    read_source_signature,
     read_running_codex_commands,
     read_running_codex_processes,
-    write_source_signature,
 )
 from core.config_store import load_config, save_config
 from core.constants import DB_PATH, DEFAULT_PROFILE_ROOT
@@ -432,7 +423,8 @@ def get_profile_health(payload):
         except (OSError, tomllib.TOMLDecodeError) as exc:
             add("config-syntax", False, f"config.toml 无法解析：{exc}")
     if _get_launch_mode(config) == "multi":
-        add("portable-client", summary["portableCodexExists"], "共享客户端已就绪" if summary["portableCodexExists"] else "共享客户端将在首次启动时创建", "warning")
+        client_available = _is_codex_command_available(config)
+        add("codex-client", client_available, "系统客户端已就绪" if client_available else "未找到系统安装的 Codex 客户端", "warning")
     usage = summary.get("usage") or {}
     add("usage", not usage.get("error"), "额度状态正常" if not usage.get("error") else str(usage.get("error")), "warning", "refresh-usage")
     return {"name": name, "healthy": all(item["ok"] for item in checks), "checks": checks}
@@ -817,21 +809,6 @@ def _launch_profile_multi(config, name, reserved_skin_ports=None):
         directory.mkdir(parents=True, exist_ok=True)
 
     prepare_profile_codex_home(profile_dir)
-    _cleanup_orphaned_portable_processes(config, codex_path)
-    portable_codex_path = prepare_portable_codex_path(
-        codex_path,
-        _get_shared_app_root(config),
-        progress_callback=lambda percent, copied, total: _emit_backend_progress(
-            {
-                "operation": "portable-client-copy",
-                "profileName": name,
-                "percent": percent,
-                "copiedBytes": copied,
-                "totalBytes": total,
-            }
-        ),
-    )
-
     env = os.environ.copy()
     env["APPDATA"] = str(appdata_dir)
     env["LOCALAPPDATA"] = str(localappdata_dir)
@@ -851,11 +828,11 @@ def _launch_profile_multi(config, name, reserved_skin_ports=None):
     if config.get("codex_skin_enabled"):
         skin_port = _allocate_codex_skin_port(reserved_skin_ports)
         extra_args = _append_codex_skin_args(extra_args, skin_port)
-    working_dir = str(launch_settings.get("workingDir") or Path(portable_codex_path).parent)
+    working_dir = str(launch_settings.get("workingDir") or codex_path.parent)
 
-    logger.info("多开账号启动开始 名称=%s 程序=%s CODEX_HOME=%s", name, portable_codex_path, codex_home_dir)
+    logger.info("多开账号启动开始 名称=%s 程序=%s CODEX_HOME=%s", name, codex_path, codex_home_dir)
     process = subprocess.Popen(
-        [portable_codex_path, f"--user-data-dir={user_data_dir}", *extra_args],
+        [str(codex_path), f"--user-data-dir={user_data_dir}", *extra_args],
         cwd=working_dir,
         env=env,
         close_fds=True,
@@ -863,7 +840,6 @@ def _launch_profile_multi(config, name, reserved_skin_ports=None):
     )
     config["active_profile"] = name
     save_config(config)
-    _cleanup_stale_portable_copies(config, Path(portable_codex_path).parent)
     logger.info("多开账号启动成功 名称=%s 目录=%s", name, profile_dir)
     result = {
         "name": name,
@@ -1033,15 +1009,6 @@ def _stop_client_processes(processes):
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
     return len(pids)
-
-
-def _emit_backend_progress(payload):
-    """通过桥接进程 stderr 向 Electron 壳发送结构化进度。"""
-    print(
-        f"CODEX_FORGE_PROGRESS:{json.dumps(payload, ensure_ascii=False)}",
-        file=sys.stderr,
-        flush=True,
-    )
 
 
 def refresh_codex_source(_payload=None):
@@ -1523,17 +1490,6 @@ def _build_profile_summary(
     )
     active_profile = config.get("active_profile", "")
     running = _is_profile_running(config, profile_name, running_commands, legacy_profile)
-    target_app_dir = find_latest_portable_app_dir(_get_shared_app_root(config))
-    portable_client_path = target_app_dir / "ChatGPT.exe"
-    if not portable_client_path.exists():
-        portable_client_path = target_app_dir / "Codex.exe"
-    source_signature = read_source_signature(target_app_dir)
-    portable_codex_size = source_signature.get("directory_size")
-    if not isinstance(portable_codex_size, int):
-        portable_codex_size = _get_directory_size(target_app_dir)
-        if source_signature:
-            source_signature["directory_size"] = portable_codex_size
-            write_source_signature(target_app_dir, source_signature)
     return {
         "id": profile_record["id"] if profile_record else "",
         "name": profile_name,
@@ -1548,10 +1504,6 @@ def _build_profile_summary(
         "configExists": status["configExists"],
         "codexHome": str(profile_dir / "CodexHome"),
         "codexHomeExists": (profile_dir / "CodexHome").exists(),
-        "portableCodexPath": str(portable_client_path),
-        "portableCodexExists": portable_client_path.exists(),
-        "portableCodexSizeBytes": portable_codex_size,
-        "portableCodexSizeText": _format_bytes(portable_codex_size),
         "errors": status["errors"],
         "warnings": status["warnings"],
         "usage": usage,
@@ -1780,7 +1732,7 @@ def _resolve_codex_launch_spec(config, *, refresh_store_source=False):
 
 
 def _resolve_codex_app_source_path(config):
-    """定位用于复制共享客户端副本的 Codex 安装源。"""
+    """定位可直接启动的 Codex 桌面客户端程序。"""
     configured_path = str(config.get("codex_path") or "").strip()
     configured_app_path = _resolve_configured_codex_app_path(configured_path)
     configured_app_path = _prefer_latest_installed_store_path(configured_app_path)
@@ -1812,59 +1764,6 @@ def _prefer_latest_installed_store_path(configured_app_path):
     if latest_path and latest_path.is_file():
         return latest_path
     return configured_app_path
-
-
-def _cleanup_orphaned_portable_processes(config, source_codex_path):
-    """更新共享副本前清理已无主窗口的残留辅助进程。"""
-    target_app_dir = get_portable_app_dir(source_codex_path, _get_shared_app_root(config))
-    if not target_app_dir.exists() or not portable_app_needs_update(source_codex_path, target_app_dir):
-        return
-    processes = read_processes_in_directory(target_app_dir)
-    if not processes:
-        return
-    main_processes = [
-        process
-        for process in processes
-        if str(process.get("name") or "").lower() in ("chatgpt.exe", "codex.exe")
-        and "--type=" not in str(process.get("command_line") or "").lower()
-        and " app-server" not in str(process.get("command_line") or "").lower()
-    ]
-    if main_processes:
-        raise RuntimeError("Codex 客户端需要更新，请先关闭所有正在运行的 Codex 实例后重试")
-
-    pids = {int(process.get("pid") or 0) for process in processes if process.get("pid")}
-    logger.info("清理旧版 Codex 残留辅助进程 数量=%s", len(pids))
-    for pid in pids:
-        subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-
-    deadline = time.monotonic() + 5
-    remaining = read_processes_in_directory(target_app_dir)
-    while remaining and time.monotonic() < deadline:
-        time.sleep(0.25)
-        remaining = read_processes_in_directory(target_app_dir)
-    if remaining:
-        raise RuntimeError("旧版 Codex 后台进程未能完全退出，请在任务管理器结束后重试")
-
-
-def _cleanup_stale_portable_copies(config, current_app_dir):
-    """尽力回收未运行的旧版客户端目录，不让清理失败影响启动。"""
-    try:
-        result = cleanup_stale_portable_app_dirs(_get_shared_app_root(config), current_app_dir)
-    except Exception as exc:
-        logger.warning("清理旧版 Codex 客户端副本失败 错误=%s", exc)
-        return
-    if result["removed"]:
-        logger.info("清理旧版 Codex 客户端副本完成 数量=%s", len(result["removed"]))
-    if result["in_use"]:
-        logger.info("保留仍在运行的旧版 Codex 客户端副本 数量=%s", len(result["in_use"]))
-    for item in result["failed"]:
-        logger.warning("跳过无法安全清理的 Codex 客户端副本 路径=%s 错误=%s", item["path"], item["error"])
 
 
 def _resolve_configured_codex_app_path(configured_path):
@@ -1955,27 +1854,8 @@ $matches | Where-Object { $_ -match $pattern } | Sort-Object @{Expression = { $_
 def _launch_default_codex(profile_name="", skin_port=None):
     """启动默认安装的 Codex 桌面端。"""
     config = load_config()
-    portable_app_dir = None
     if skin_port is not None:
         codex_path = Path(_resolve_codex_app_source_path(config))
-        if _is_windows_store_codex_path(codex_path):
-            _cleanup_orphaned_portable_processes(config, codex_path)
-            codex_path = Path(
-                prepare_portable_codex_path(
-                    codex_path,
-                    _get_shared_app_root(config),
-                    progress_callback=lambda percent, copied, total: _emit_backend_progress(
-                        {
-                            "operation": "portable-client-copy",
-                            "profileName": profile_name,
-                            "percent": percent,
-                            "copiedBytes": copied,
-                            "totalBytes": total,
-                        }
-                    ),
-                )
-            )
-            portable_app_dir = codex_path.parent
         launch_spec = {
             "kind": "app",
             "command": [str(codex_path)],
@@ -2001,8 +1881,6 @@ def _launch_default_codex(profile_name="", skin_port=None):
             close_fds=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        if portable_app_dir is not None:
-            _cleanup_stale_portable_copies(config, portable_app_dir)
         logger.info("Codex 启动成功 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
         if skin_port is not None:
             return {
