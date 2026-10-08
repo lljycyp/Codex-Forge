@@ -1,11 +1,15 @@
 ﻿import json
 import sys
+from io import TextIOWrapper
+from typing import cast
 
 from bridge.commands import invoke
 
 
 def main():
     """命令行桥接入口，供桌面壳调用 Python 白名单能力。"""
+    cast(TextIOWrapper, sys.stdout).reconfigure(encoding="utf-8")
+    cast(TextIOWrapper, sys.stderr).reconfigure(encoding="utf-8")
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     if command == "run_load_balancer":
         from core.load_balancer import run_service

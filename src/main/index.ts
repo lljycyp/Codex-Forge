@@ -303,7 +303,7 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
-    registerIpcHandlers();
+    registerIpcHandlers(refreshTrayMenu);
     void restoreLoadBalancer();
     void recoverCodexSkinSessions();
     registerUpdateHandlers();

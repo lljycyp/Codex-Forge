@@ -57,7 +57,7 @@ async function applySelectedCodexSkinTheme(): Promise<void> {
   await applyCodexSkinTheme(await getActiveCodexSkinTheme());
 }
 
-export function registerIpcHandlers(): void {
+export function registerIpcHandlers(onLauncherStateChanged: () => Promise<void>): void {
   ipcMain.handle("launcher:invoke", async (_event, command: string, payload: unknown) => {
     if (["get_load_balancer_status", "set_load_balancer_enabled", "get_load_balancer_key", "launch_load_balancer_client"].includes(command)) {
       return handleLoadBalancer(command, payload);
@@ -90,6 +90,9 @@ export function registerIpcHandlers(): void {
       await startSkinLaunches(launches as SkinLaunch[]);
     } else if (command === "set_launch_mode" && result.data.launchMode === "switch") {
       await stopAllCodexSkinSessions();
+    }
+    if (["create_profile", "delete_profile", "rename_profile", "launch_profile", "stop_profile", "set_launch_mode"].includes(command)) {
+      await onLauncherStateChanged();
     }
     return result;
   });
