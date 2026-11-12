@@ -36,7 +36,7 @@ jobs:
       - name: Build installer
         run: yarn build
 
-      - name: Publish installer and clean up old assets
+      - name: Publish installer and clean up old releases
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

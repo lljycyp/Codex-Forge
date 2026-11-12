@@ -324,7 +324,7 @@ resources/main.exe
 release/Codex-Forge-Setup-<version>.exe
 ```
 
-After uploading and confirming the current installer and `latest.yml`, the GitHub and Gitee publishing scripts each keep installer assets and update manifests for the three most recent stable versions and remove those two asset types from older versions. Release notes, Git tags, and other attachments remain available. Drafts, prereleases, and releases without installers do not count toward the retained versions. Republishing an older version skips cleanup.
+After uploading and confirming the current installer and `latest.yml`, the GitHub and Gitee publishing scripts each keep the three most recent stable releases and delete older release records and their attachments, including old records left behind by previous installer-only cleanup. Git tags remain available. Drafts and prereleases are excluded from cleanup. Republishing an older version skips cleanup.
 
 ---
 

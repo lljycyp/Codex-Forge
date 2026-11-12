@@ -24,7 +24,7 @@ function installerName(release) {
   return `Codex-Forge-Setup-${release.tag_name.replace(/^v/, "")}.exe`;
 }
 
-async function pruneReleaseAssets({ currentRelease, listReleases, listAssets, deleteAsset }) {
+async function pruneReleases({ currentRelease, listReleases, listAssets, deleteRelease }) {
   const currentVersion = releaseVersion(currentRelease);
   if (!currentVersion) {
     console.log(`Skipping release cleanup for non-stable tag ${currentRelease.tag_name}`);
@@ -34,21 +34,18 @@ async function pruneReleaseAssets({ currentRelease, listReleases, listAssets, de
   const currentAssets = await listAssets(currentRelease.id);
   for (const name of [installerName(currentRelease), "latest.yml"]) {
     if (!currentAssets.some((asset) => hasName(asset, name))) {
-      throw new Error(`Release ${currentRelease.tag_name} is missing ${name}; old assets were not cleaned`);
+      throw new Error(`Release ${currentRelease.tag_name} is missing ${name}; old releases were not deleted`);
     }
   }
 
   const releases = await listReleases();
   const candidates = [];
-  for (const release of [{ ...currentRelease, assets: currentAssets }, ...releases.filter((item) => item.id !== currentRelease.id)]) {
+  for (const release of [currentRelease, ...releases.filter((item) => item.id !== currentRelease.id)]) {
     const version = releaseVersion(release);
     if (!version) {
       continue;
     }
-    const assets = release.assets || await listAssets(release.id);
-    if (assets.some((asset) => hasName(asset, installerName(release)))) {
-      candidates.push({ release, version });
-    }
+    candidates.push({ release, version });
   }
   candidates.sort((left, right) => compareVersions(right.version, left.version));
 
@@ -57,17 +54,11 @@ async function pruneReleaseAssets({ currentRelease, listReleases, listAssets, de
     return;
   }
 
-  console.log(`Keeping installer assets for ${candidates.slice(0, KEEP_RELEASES).map((item) => item.release.tag_name).join(", ")}`);
+  console.log(`Keeping releases ${candidates.slice(0, KEEP_RELEASES).map((item) => item.release.tag_name).join(", ")}`);
   for (const { release } of candidates.slice(KEEP_RELEASES)) {
-    const assets = await listAssets(release.id);
-    for (const asset of assets) {
-      const name = [installerName(release), "latest.yml"].find((value) => hasName(asset, value));
-      if (name) {
-        console.log(`Deleting old release asset ${release.tag_name}/${name}`);
-        await deleteAsset(release.id, asset.id);
-      }
-    }
+    console.log(`Deleting old release ${release.tag_name}`);
+    await deleteRelease(release.id);
   }
 }
 
-module.exports = { pruneReleaseAssets };
+module.exports = { pruneReleases };

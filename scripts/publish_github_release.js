@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { pruneReleaseAssets } = require("./release_retention");
+const { pruneReleases } = require("./release_retention");
 
 const root = path.join(__dirname, "..");
 const apiBase = "https://api.github.com";
@@ -128,6 +128,10 @@ async function deleteAsset(assetId) {
   return api(`/repos/${owner}/${repo}/releases/assets/${assetId}`, { method: "DELETE" });
 }
 
+async function deleteRelease(releaseId) {
+  return api(`/repos/${owner}/${repo}/releases/${releaseId}`, { method: "DELETE" });
+}
+
 async function uploadAsset(releaseId, file) {
   const fileName = path.basename(file);
   const response = await fetch(
@@ -186,12 +190,7 @@ async function main() {
     console.log(`Uploaded ${fileName} to GitHub release ${tagName}`);
   }
 
-  await pruneReleaseAssets({
-    currentRelease: release,
-    listReleases,
-    listAssets,
-    deleteAsset: (_releaseId, assetId) => deleteAsset(assetId),
-  });
+  await pruneReleases({ currentRelease: release, listReleases, listAssets, deleteRelease });
 }
 
 main().catch((error) => {

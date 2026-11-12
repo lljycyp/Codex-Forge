@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const { pruneReleaseAssets } = require("../release_retention");
+const { pruneReleases } = require("../release_retention");
 
 function makeRelease(id, version) {
   return {
@@ -24,37 +24,46 @@ function fixture(releases) {
     currentRelease: releases[0],
     listReleases: async () => releases,
     listAssets: async (id) => assets.get(id),
-    deleteAsset: async (...ids) => deleted.push(ids),
+    deleteRelease: async (id) => deleted.push(id),
     deleted,
   };
 }
 
-test("keeps the three newest numeric versions and deletes only managed assets", async () => {
+test("keeps the three newest numeric versions and deletes older release records", async () => {
   const store = fixture([
     makeRelease(12, "1.0.12"), makeRelease(9, "1.0.9"), makeRelease(11, "1.0.11"),
     makeRelease(8, "1.0.8"), makeRelease(10, "1.0.10"),
   ]);
-  await pruneReleaseAssets(store);
-  assert.deepEqual(store.deleted, [[9, 90], [9, 91], [8, 80], [8, 81]]);
+  await pruneReleases(store);
+  assert.deepEqual(store.deleted, [9, 8]);
 });
 
-test("fewer than three installer versions need no cleanup", async () => {
+test("fewer than three stable releases need no cleanup", async () => {
   const store = fixture([makeRelease(2, "1.0.2"), makeRelease(1, "1.0.1")]);
-  await pruneReleaseAssets(store);
+  await pruneReleases(store);
   assert.deepEqual(store.deleted, []);
 });
 
-test("drafts, prereleases, custom tags, and empty releases do not displace usable installers", async () => {
+test("drafts, prereleases, and custom tags are excluded from cleanup", async () => {
   const store = fixture([
     makeRelease(4, "1.0.4"),
     { ...makeRelease(8, "1.0.8"), draft: true },
     { ...makeRelease(7, "1.0.7"), prerelease: true },
     { ...makeRelease(6, "1.0.6"), tag_name: "preview" },
-    { ...makeRelease(5, "1.0.5"), assets: [] },
     makeRelease(3, "1.0.3"), makeRelease(2, "1.0.2"), makeRelease(1, "1.0.1"),
   ]);
-  await pruneReleaseAssets(store);
-  assert.deepEqual(store.deleted, [[1, 10], [1, 11]]);
+  await pruneReleases(store);
+  assert.deepEqual(store.deleted, [1]);
+});
+
+test("old release records left without installers are still deleted", async () => {
+  const store = fixture([
+    makeRelease(5, "1.0.5"), makeRelease(4, "1.0.4"), makeRelease(3, "1.0.3"),
+    { ...makeRelease(2, "1.0.2"), assets: [] },
+    { id: 1, tag_name: "v1.0.1" },
+  ]);
+  await pruneReleases(store);
+  assert.deepEqual(store.deleted, [2, 1]);
 });
 
 test("republishing an older version does not clean up any releases", async () => {
@@ -62,7 +71,7 @@ test("republishing an older version does not clean up any releases", async () =>
     makeRelease(1, "1.0.1"), makeRelease(5, "1.0.5"), makeRelease(4, "1.0.4"),
     makeRelease(3, "1.0.3"), makeRelease(2, "1.0.2"),
   ]);
-  await pruneReleaseAssets(store);
+  await pruneReleases(store);
   assert.deepEqual(store.deleted, []);
 });
 
@@ -72,7 +81,7 @@ for (const missing of ["installer", "manifest"]) {
     current.assets.splice(missing === "installer" ? 0 : 1, 1);
     const store = fixture([current, makeRelease(1, "1.0.1")]);
     store.listReleases = async () => assert.fail("Old releases must not be read");
-    await assert.rejects(pruneReleaseAssets(store), /is missing/);
+    await assert.rejects(pruneReleases(store), /is missing/);
     assert.deepEqual(store.deleted, []);
   });
 }
@@ -84,21 +93,29 @@ test("Gitee filename aliases and releases without embedded assets are supported"
   }
   const store = fixture(releases);
   delete releases[3].assets;
-  await pruneReleaseAssets(store);
-  assert.deepEqual(store.deleted, [[1, 10], [1, 11]]);
+  await pruneReleases(store);
+  assert.deepEqual(store.deleted, [1]);
 });
 
 test("an inventory API failure prevents deletion", async () => {
   const store = fixture([4, 3, 2, 1].map((id) => makeRelease(id, `1.0.${id}`)));
   store.listReleases = async () => { throw new Error("API unavailable"); };
-  await assert.rejects(pruneReleaseAssets(store), /API unavailable/);
+  await assert.rejects(pruneReleases(store), /API unavailable/);
   assert.deepEqual(store.deleted, []);
+});
+
+test("release deletion errors are reported", async () => {
+  const store = fixture([4, 3, 2, 1].map((id) => makeRelease(id, `1.0.${id}`)));
+  store.deleteRelease = async () => { throw new Error("Delete denied"); };
+  await assert.rejects(pruneReleases(store), /Delete denied/);
 });
 
 async function runPublisher(provider, { failUploadAt = 0, dryRun = false, missingManifest = false } = {}) {
   const releases = [4, 3, 2, 1, 0].map((version) => makeRelease(version + 1, `1.0.${version}`));
   const current = releases[0];
   current.assets = [];
+  releases[3].assets = [];
+  releases[4].assets = [];
   const assets = new Map(releases.map((release) => [release.id, [...release.assets]]));
   const requests = [];
   const events = [];
@@ -128,9 +145,9 @@ async function runPublisher(provider, { failUploadAt = 0, dryRun = false, missin
       return response(current);
     }
     if (method === "DELETE") {
-      assert.match(url.pathname, /\/(?:assets|attach_files)\/\d+$/);
+      assert.match(url.pathname, /\/releases\/\d+$/);
       events.push({ type: "delete", id: Number(url.pathname.split("/").at(-1)) });
-      return response(null);
+      return { ok: true, status: 204, text: async () => "" };
     }
     const assetList = url.pathname.match(/\/releases\/(\d+)\/(?:assets|attach_files)$/);
     if (assetList) {
@@ -173,7 +190,7 @@ async function runPublisher(provider, { failUploadAt = 0, dryRun = false, missin
       require: (name) => {
         if (name === "node:fs") return fakeFs;
         if (name === "node:path") return path;
-        if (name === "./release_retention") return { pruneReleaseAssets };
+        if (name === "./release_retention") return { pruneReleases };
         if (name === "node:child_process") {
           return { spawnSync: (_command, args) => ({ status: upload(args.find((arg) => arg.startsWith("file=@")).split(";filename=")[1]) ? 0 : 22, stdout: "fixture" }) };
         }
@@ -193,7 +210,7 @@ for (const provider of ["github", "gitee"]) {
     assert.deepEqual(result.events.slice(0, 2), [
       { type: "upload", name: "Codex-Forge-Setup-1.0.4.exe" }, { type: "upload", name: "latest.yml" },
     ]);
-    assert.deepEqual(result.events.slice(2).map((event) => event.id), [20, 21, 10, 11]);
+    assert.deepEqual(result.events.slice(2).map((event) => event.id), [2, 1]);
     assert.ok(result.requests.some((request) => request.page === "2"));
   });
 
