@@ -427,7 +427,7 @@ class ChatGptCompatibilityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             lock_path = Path(temp_dir) / "auth.json.app-server.lock"
             lock_path.write_text("12345", encoding="utf-8")
-            with patch("core.app_server_service._is_process_running", return_value=False):
+            with patch("core.file_lock._is_process_running", return_value=False):
                 with _exclusive_file_lock(lock_path, timeout_seconds=1):
                     self.assertEqual(lock_path.read_text(encoding="utf-8"), str(os.getpid()))
             self.assertFalse(lock_path.exists())
@@ -436,7 +436,7 @@ class ChatGptCompatibilityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             lock_path = Path(temp_dir) / "auth.json.app-server.lock"
             lock_path.write_text("12345", encoding="utf-8")
-            with patch("core.app_server_service._is_process_running", return_value=True):
+            with patch("core.file_lock._is_process_running", return_value=True):
                 with self.assertRaises(TimeoutError):
                     with _exclusive_file_lock(lock_path, timeout_seconds=0):
                         pass
@@ -575,9 +575,10 @@ class ChatGptCompatibilityTest(unittest.TestCase):
 
         self.assertEqual(usage["oneWeek"]["remainingPercent"], 98)
 
-    def test_app_server_network_error_keeps_previous_successful_usage(self):
+    def test_app_server_network_error_keeps_plan_but_reports_failure(self):
         current = {
             "fetchedAt": 100,
+            "planType": "team",
             "oneWeek": {"remainingPercent": 94},
             "error": None,
         }
@@ -597,8 +598,9 @@ class ChatGptCompatibilityTest(unittest.TestCase):
         ):
             result = _merge_usage_results({"work": failed}, started_at=150)
 
-        self.assertEqual(result["work"], current)
-        save_usage_cache.assert_called_once_with({"work": current})
+        expected = {**failed, "planType": "team"}
+        self.assertEqual(result["work"], expected)
+        save_usage_cache.assert_called_once_with({"work": expected})
 
     def test_app_server_network_error_is_kept_without_successful_usage(self):
         failed = {

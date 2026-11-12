@@ -1,6 +1,4 @@
 import json
-import hashlib
-import hmac
 import difflib
 import io
 import os
@@ -26,7 +24,7 @@ from core.codex_source import (
 )
 from core.config_store import load_config, save_config
 from core.constants import CONFIG_DIR, DB_PATH, DEFAULT_PROFILE_ROOT
-from core.auth_service import auth_kind, auth_tokens, extract_auth
+from core.auth_service import auth_kind, auth_tokens, extract_auth, is_same_auth_account as _is_same_auth_account
 from core.logger import get_logger
 from core.oauth_service import login_with_browser
 from core.path_utils import check_directory_writable, format_health_status, is_reparse_point, normalize_path_for_match, remove_readonly_path, sanitize_profile_name
@@ -43,6 +41,8 @@ from core.profile_service import (
     prepare_profile_codex_home,
     get_profile_auth_path,
     sync_codex_home_to_profile,
+    sync_auth_file,
+    profile_auth_lock,
 )
 from core.instruction_service import (
     delete_instruction_template as delete_instruction_template_service,
@@ -1240,42 +1240,16 @@ def _sync_active_auth_to_profile(config, profile_name):
     if not active_auth_path.exists() or not profile_auth_path.exists():
         return
     try:
-        active_auth = json.loads(active_auth_path.read_text(encoding="utf-8"))
-        profile_auth = json.loads(profile_auth_path.read_text(encoding="utf-8"))
-        if not _is_same_auth_account(active_auth, profile_auth):
-            logger.warning("跳过当前账号认证同步 原因=账号身份不一致 名称=%s", profile_name)
-            return
-        import_active_profile(profile_dir)
-        logger.info("当前账号认证已同步 名称=%s 来源=%s 目标=%s", profile_name, active_auth_path, profile_auth_path)
+        with profile_auth_lock(profile_dir):
+            active_auth = json.loads(active_auth_path.read_text(encoding="utf-8"))
+            profile_auth = json.loads(profile_auth_path.read_text(encoding="utf-8"))
+            if not _is_same_auth_account(active_auth, profile_auth):
+                logger.warning("跳过当前账号认证同步 原因=账号身份不一致 名称=%s", profile_name)
+                return
+            if sync_auth_file(active_auth_path, profile_auth_path):
+                logger.info("当前账号认证已同步 名称=%s 来源=%s 目标=%s", profile_name, active_auth_path, profile_auth_path)
     except Exception as exc:
         logger.warning("当前账号认证同步失败 名称=%s 错误=%s", profile_name, exc)
-
-
-def _is_same_auth_account(left_auth, right_auth):
-    """确认两个 auth.json 属于同一登录用户，避免同一 Team 账号下串号。"""
-    left_kind = auth_kind(left_auth)
-    right_kind = auth_kind(right_auth)
-    if left_kind != right_kind or not left_kind:
-        return False
-    if left_kind == "api":
-        left_key = str(left_auth.get("OPENAI_API_KEY") or "").strip()
-        right_key = str(right_auth.get("OPENAI_API_KEY") or "").strip()
-        left_digest = hashlib.sha256(left_key.encode("utf-8")).digest()
-        right_digest = hashlib.sha256(right_key.encode("utf-8")).digest()
-        return bool(left_key and right_key and hmac.compare_digest(left_digest, right_digest))
-
-    left = extract_auth(left_auth) or {}
-    right = extract_auth(right_auth) or {}
-    left_claims_value = left.get("claims")
-    right_claims_value = right.get("claims")
-    left_claims = left_claims_value if isinstance(left_claims_value, dict) else {}
-    right_claims = right_claims_value if isinstance(right_claims_value, dict) else {}
-    for key in ("sub", "email"):
-        left_value = left_claims.get(key) or left.get(key)
-        right_value = right_claims.get(key) or right.get(key)
-        if left_value or right_value:
-            return bool(left_value and right_value and left_value == right_value)
-    return bool(left.get("accountId") and left.get("accountId") == right.get("accountId"))
 
 
 def set_profile_root(payload):

@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -45,7 +46,7 @@ class ProfileStorageTest(unittest.TestCase):
             ):
                 self.assertEqual(find_codex_cli_path(profile_dir), shared_cli)
 
-    def test_runtime_auth_syncs_into_the_single_persistent_source(self):
+    def test_unidentified_runtime_auth_cannot_replace_persistent_source(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             profile_dir = Path(temp_dir) / "profile"
             runtime_dir = profile_dir / "CodexHome"
@@ -57,10 +58,10 @@ class ProfileStorageTest(unittest.TestCase):
 
             self.assertEqual(
                 (profile_dir / "auth.json").read_text(encoding="utf-8"),
-                '{\n  "version": 2\n}',
+                '{"version":1}',
             )
 
-    def test_prepare_runtime_preserves_newer_runtime_auth(self):
+    def test_prepare_runtime_does_not_trust_file_modification_time(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             profile_dir = Path(temp_dir) / "profile"
             runtime_dir = profile_dir / "CodexHome"
@@ -76,11 +77,11 @@ class ProfileStorageTest(unittest.TestCase):
 
             self.assertEqual(
                 (profile_dir / "auth.json").read_text(encoding="utf-8"),
-                '{\n  "version": 2\n}',
+                '{"version":1}',
             )
             self.assertEqual(
-                runtime_auth.read_text(encoding="utf-8"),
-                '{\n  "version": 2\n}',
+                json.loads(runtime_auth.read_text(encoding="utf-8")),
+                {"version": 1},
             )
 
     def test_profiles_use_immutable_ids_and_usage_foreign_keys(self):

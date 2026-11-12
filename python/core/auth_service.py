@@ -1,10 +1,12 @@
 import base64
-import calendar
+import hashlib
+import hmac
 import json
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 
 
 DEFAULT_OAUTH_ISSUER = "https://auth.openai.com"
@@ -72,6 +74,57 @@ def auth_kind(auth_json):
     if isinstance(auth_json, dict) and clean_string(auth_json.get("OPENAI_API_KEY")):
         return "api"
     return ""
+
+
+def is_same_auth_account(left_auth, right_auth):
+    """同时校验登录用户和工作区，不能只比较 Team 的 account_id。"""
+    kind = auth_kind(left_auth)
+    if not kind or kind != auth_kind(right_auth):
+        return False
+    if kind == "api":
+        left = hashlib.sha256(left_auth["OPENAI_API_KEY"].strip().encode("utf-8")).digest()
+        right = hashlib.sha256(right_auth["OPENAI_API_KEY"].strip().encode("utf-8")).digest()
+        return hmac.compare_digest(left, right)
+    try:
+        left = extract_auth(left_auth)
+        right = extract_auth(right_auth)
+    except ValueError:
+        return False
+    if left["accountId"] != right["accountId"]:
+        return False
+    for key in ("sub", "email"):
+        left_value = left["claims"].get(key)
+        right_value = right["claims"].get(key)
+        if left_value or right_value:
+            return bool(left_value and left_value == right_value)
+    return False
+
+
+def is_newer_auth(candidate, current):
+    """只接收同一身份确实续期的令牌，不使用文件修改时间。"""
+    if not is_same_auth_account(candidate, current) or auth_kind(candidate) != "chatgpt":
+        return False
+    if auth_tokens(candidate) == auth_tokens(current):
+        return False
+    candidate_issued = _auth_issued_at(candidate)
+    current_issued = _auth_issued_at(current)
+    if candidate_issued is None or current_issued is None:
+        return False
+    if candidate_issued != current_issued:
+        return candidate_issued > current_issued
+    candidate_refresh = parse_last_refresh(candidate.get("last_refresh"))
+    current_refresh = parse_last_refresh(current.get("last_refresh"))
+    return (candidate_refresh is not None and current_refresh is not None
+            and candidate_refresh > current_refresh)
+
+
+def _auth_issued_at(auth_json):
+    tokens = auth_tokens(auth_json) or {}
+    for key in ("access_token", "id_token"):
+        issued = decode_jwt_payload(tokens.get(key)).get("iat")
+        if isinstance(issued, (int, float)):
+            return issued
+    return None
 
 
 def ensure_fresh_auth(auth_json, force=False):
@@ -239,12 +292,11 @@ def parse_last_refresh(value):
         return normalize_timestamp(int(text))
     except ValueError:
         pass
-    for pattern in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
-        try:
-            return int(calendar.timegm(time.strptime(text, pattern)))
-        except ValueError:
-            continue
-    return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.timestamp() if parsed.tzinfo else None
+    except ValueError:
+        return None
 
 
 def normalize_timestamp(value):

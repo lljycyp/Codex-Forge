@@ -1,12 +1,17 @@
 import contextlib
+import json
 import os
 import time
 from pathlib import Path
 
 from core import db
 from core.app_server_service import read_account_and_rate_limits
+from core.auth_service import extract_auth
 from core.constants import DB_PATH
-from core.profile_service import get_active_config_path, get_profile_auth_path, sync_codex_home_to_profile
+from core.profile_service import (
+    get_active_config_path, get_profile_auth_path, profile_auth_lock,
+    sync_auth_file, sync_codex_home_to_profile,
+)
 
 
 def load_usage_cache():
@@ -69,8 +74,10 @@ def _merge_usage_results(results, started_at):
             current_fetched_at = current.get("fetchedAt") if isinstance(current, dict) else None
             if isinstance(current_fetched_at, (int, float)) and current_fetched_at > started_at:
                 continue
-            if _should_keep_current_usage(current, usage):
-                continue
+            if usage.get("error") and "API Key" not in usage["error"]:
+                plan_type = (current.get("planType") if isinstance(current, dict) else None) or usage.get("planType")
+                if plan_type:
+                    usage = {**usage, "planType": plan_type}
             cache[profile_name] = usage
         save_usage_cache(cache)
         return cache
@@ -95,26 +102,31 @@ def remove_cached_usage(profile_name):
 def _build_profile_usage(profile_dir, share_system_config=False, use_codex_home_auth=False):
     """通过官方 App Server 读取账号和 Codex 额度。"""
     profile_dir = Path(profile_dir)
-    auth_path = _resolve_usage_auth_path(profile_dir, use_codex_home_auth)
-    if not auth_path.exists():
-        return _usage_error("未找到登录信息，请先保存当前账号资料")
-    config_path = _resolve_usage_config_path(profile_dir, share_system_config, use_codex_home_auth)
-
-    try:
-        account, rate_limits = read_account_and_rate_limits(profile_dir, auth_path, config_path)
-        usage = _map_app_server_usage(account, rate_limits)
-        _sync_usage_auth_to_profile(profile_dir, auth_path, use_codex_home_auth)
-        return usage
-    except Exception as exc:
-        return _usage_error(_normalize_usage_error(str(exc)))
+    with profile_auth_lock(profile_dir):
+        auth_path = _resolve_usage_auth_path(profile_dir, use_codex_home_auth)
+        if not auth_path.exists():
+            return _usage_error("未找到登录信息，请先保存当前账号资料")
+        config_path = _resolve_usage_config_path(profile_dir, share_system_config, use_codex_home_auth)
+        try:
+            account, rate_limits = read_account_and_rate_limits(profile_dir, auth_path, config_path)
+            return _map_app_server_usage(account, rate_limits)
+        except Exception as exc:
+            plan_type = None
+            try:
+                plan_type = extract_auth(json.loads(auth_path.read_text(encoding="utf-8"))).get("planType")
+            except (OSError, ValueError):
+                pass
+            message = _normalize_usage_error(str(exc))
+            return _usage_error(message, None if "API Key" in message else plan_type)
+        finally:
+            if use_codex_home_auth:
+                sync_auth_file(auth_path, profile_dir / "CodexHome" / "auth.json")
 
 
 def _resolve_usage_auth_path(profile_dir, use_codex_home_auth=False):
-    """多开模式使用运行副本，其余场景使用账号唯一持久认证。"""
+    """合并运行实例真正续期的凭证后，始终读取账号主认证。"""
     profile_dir = Path(profile_dir)
-    codex_home_auth_path = profile_dir / "CodexHome" / "auth.json"
-    if use_codex_home_auth and codex_home_auth_path.exists():
-        return codex_home_auth_path
+    sync_codex_home_to_profile(profile_dir)
     return get_profile_auth_path(profile_dir)
 
 
@@ -124,13 +136,6 @@ def _resolve_usage_config_path(profile_dir, share_system_config=False, use_codex
     if use_codex_home_auth:
         return profile_dir / "CodexHome" / "config.toml"
     return get_active_config_path()
-
-
-def _sync_usage_auth_to_profile(profile_dir, auth_path, use_codex_home_auth=False):
-    """把 App Server 刷新后的多开认证同步回账号主资料。"""
-    if not use_codex_home_auth:
-        return
-    sync_codex_home_to_profile(profile_dir)
 
 
 def _map_app_server_usage(account, payload):
@@ -228,38 +233,6 @@ def _normalize_usage_error(message):
     if message.startswith("未找到 Codex 内置 Codex App Server"):
         return message
     return f"额度读取失败：{message}"
-
-
-def _should_keep_current_usage(current, usage):
-    """临时网络失败不覆盖已有成功额度。"""
-    if not isinstance(current, dict) or current.get("error"):
-        return False
-    if not isinstance(usage, dict):
-        return False
-    error = usage.get("error")
-    return isinstance(error, str) and _is_transient_usage_error(error)
-
-
-def _is_transient_usage_error(message):
-    lowered = message.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "超时",
-            "timeout",
-            "timed out",
-            "failed to fetch",
-            "error sending request",
-            "network is unreachable",
-            "dns error",
-            "name resolution",
-            "connection reset",
-            "connection aborted",
-            "temporarily unavailable",
-            "unexpected_eof",
-            "ssl",
-        )
-    )
 
 
 def _clean_string(value):

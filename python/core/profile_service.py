@@ -8,6 +8,26 @@ import uuid
 from pathlib import Path
 
 from core.constants import DEFAULT_CODEX_ENV_PATH
+from core.auth_service import is_newer_auth
+from core.file_lock import _exclusive_file_lock
+
+
+def profile_auth_lock(profile_dir):
+    """主认证、运行副本及额度查询共用一个账号锁。"""
+    return _exclusive_file_lock(Path(profile_dir) / ".auth.json.app-server.lock", timeout_seconds=120)
+
+
+def sync_auth_file(source_path, target_path):
+    """持有账号锁时，合并同一身份的新凭证；未知或旧副本不回写。"""
+    try:
+        candidate = json.loads(Path(source_path).read_text(encoding="utf-8"))
+        current = json.loads(Path(target_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not is_newer_auth(candidate, current):
+        return False
+    write_profile_auth_json(target_path, candidate)
+    return True
 
 
 def get_active_codex_dir():
@@ -31,21 +51,27 @@ def import_active_profile(profile_dir, share_system_config=False):
     if not active_auth_path.exists():
         raise FileNotFoundError("当前 Codex 认证文件不存在，请先用默认 Codex 完成登录")
 
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(active_auth_path, profile_dir / "auth.json")
-    ensure_profile_config_path(profile_dir)
+    with profile_auth_lock(profile_dir):
+        write_profile_auth_json(profile_dir / "auth.json", json.loads(active_auth_path.read_text(encoding="utf-8")))
+        ensure_profile_config_path(profile_dir)
 
 
 def import_auth_json_profile(profile_dir, auth_json, share_system_config=False):
     """把指定授权内容保存为启动器账号资料，不改动当前默认 Codex。"""
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    write_profile_auth_json(profile_dir / "auth.json", auth_json)
-    ensure_profile_config_path(profile_dir)
+    with profile_auth_lock(profile_dir):
+        write_profile_auth_json(profile_dir / "auth.json", auth_json)
+        ensure_profile_config_path(profile_dir)
 
 
 def write_profile_auth_json(auth_path, auth_json):
     """原子写入账号 auth.json，避免刷新令牌时留下半截文件。"""
     auth_path = Path(auth_path)
+    if auth_path.exists():
+        try:
+            if json.loads(auth_path.read_text(encoding="utf-8")) == auth_json:
+                return
+        except (OSError, ValueError):
+            pass
     auth_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = auth_path.with_name(f".{auth_path.name}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(
@@ -67,6 +93,11 @@ def ensure_profile_env_file(codex_home_dir):
 def prepare_profile_codex_home(profile_dir, share_system_config=False):
     """把账号资料同步到多开模式使用的 CodexHome。"""
     profile_dir = Path(profile_dir)
+    with profile_auth_lock(profile_dir):
+        _prepare_profile_codex_home(profile_dir)
+
+
+def _prepare_profile_codex_home(profile_dir):
     source_auth_path = get_profile_auth_path(profile_dir)
     if not source_auth_path.exists():
         raise FileNotFoundError("账号认证文件不存在，无法启动")
@@ -74,29 +105,19 @@ def prepare_profile_codex_home(profile_dir, share_system_config=False):
     codex_home_dir = profile_dir / "CodexHome"
     codex_home_dir.mkdir(parents=True, exist_ok=True)
     runtime_auth_path = codex_home_dir / "auth.json"
-    if (
-        runtime_auth_path.exists()
-        and runtime_auth_path.stat().st_mtime_ns > source_auth_path.stat().st_mtime_ns
-    ):
-        sync_codex_home_to_profile(profile_dir)
+    sync_codex_home_to_profile(profile_dir)
     config_path = ensure_profile_config_path(profile_dir)
     sanitize_profile_config_file(config_path)
     require_file_auth_store(config_path)
     ensure_profile_env_file(codex_home_dir)
-    shutil.copy2(source_auth_path, runtime_auth_path)
+    write_profile_auth_json(runtime_auth_path, json.loads(source_auth_path.read_text(encoding="utf-8")))
 
 
 def sync_codex_home_to_profile(profile_dir, share_system_config=False):
     """多开实例关闭后，把 CodexHome 中刷新过的认证回写到账号根目录。"""
     profile_dir = Path(profile_dir)
-    codex_home_dir = profile_dir / "CodexHome"
-    auth_path = codex_home_dir / "auth.json"
-    if auth_path.exists():
-        try:
-            auth_json = json.loads(auth_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError("运行时 auth.json 内容不是有效的 JSON") from exc
-        write_profile_auth_json(get_profile_auth_path(profile_dir), auth_json)
+    with profile_auth_lock(profile_dir):
+        return sync_auth_file(profile_dir / "CodexHome" / "auth.json", get_profile_auth_path(profile_dir))
 
 
 def ensure_profile_config_path(profile_dir):
@@ -164,6 +185,12 @@ def sanitize_profile_config_text(text):
 
 def apply_profile(profile_dir, share_system_config=False):
     """把指定账号资料写入当前 Codex 活动配置。"""
+    with profile_auth_lock(profile_dir):
+        sync_codex_home_to_profile(profile_dir)
+        _apply_profile(profile_dir)
+
+
+def _apply_profile(profile_dir):
     source_auth_path = get_profile_auth_path(profile_dir)
     if not source_auth_path.exists():
         raise FileNotFoundError("账号认证文件不存在，无法切换")

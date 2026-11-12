@@ -1,5 +1,3 @@
-import ctypes
-import ctypes.wintypes
 import json
 import os
 import queue
@@ -14,8 +12,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from core.codex_source import find_latest_portable_app_dir
+from core.file_lock import _exclusive_file_lock
 from core.path_utils import remove_readonly_path
-from core.profile_service import sanitize_profile_config_text, write_profile_auth_json
+from core.profile_service import profile_auth_lock, sanitize_profile_config_text, sync_auth_file
 
 
 APP_SERVER_REQUEST_TIMEOUT_SECONDS = 30
@@ -31,16 +30,20 @@ CLIENT_INFO = {
 def read_account_and_rate_limits(profile_dir, auth_path, config_path):
     """通过官方 App Server 读取账号状态和 Codex 额度。"""
     auth_path = Path(auth_path)
-    lock_path = auth_path.with_name(f".{auth_path.name}.app-server.lock")
-    with _exclusive_file_lock(lock_path):
+    with profile_auth_lock(profile_dir):
         with temporary_app_server_home(auth_path, config_path) as codex_home:
             try:
                 with AppServerClient(codex_home, find_codex_cli_path(profile_dir)) as client:
                     account_result = client.request("account/read", {"refreshToken": False})
                     account = account_result.get("account") if isinstance(account_result, dict) else None
-                    account = account if isinstance(account, dict) else {}
-                    if account.get("type") != "chatgpt":
+                    if account is None:
+                        raise ValueError("未读取到有效登录账号，请重新授权后再刷新额度")
+                    if not isinstance(account, dict):
+                        raise ValueError("Codex 返回的账号状态格式无效")
+                    if account.get("type") == "apiKey":
                         raise ValueError("API Key 账号不提供 Codex 套餐额度")
+                    if account.get("type") != "chatgpt":
+                        raise ValueError("当前认证方式不支持读取 Codex 套餐额度")
                     rate_limits = client.request("account/rateLimits/read")
             finally:
                 _sync_temporary_auth(codex_home / "auth.json", auth_path)
@@ -164,82 +167,8 @@ def _remove_temporary_directory(path):
 
 
 def _sync_temporary_auth(source_path, target_path):
-    if not source_path.exists():
-        return
-    try:
-        auth_json = json.loads(source_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
-    if isinstance(auth_json, dict):
-        write_profile_auth_json(target_path, auth_json)
-
-
-@contextmanager
-def _exclusive_file_lock(lock_path, timeout_seconds=60):
-    """避免同一账号同时启动多个 App Server 刷新同一认证。"""
-    lock_path = Path(lock_path)
-    deadline = time.time() + timeout_seconds
-    file_handle = None
-    while True:
-        try:
-            file_handle = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(file_handle, str(os.getpid()).encode("utf-8"))
-            break
-        except FileExistsError:
-            if _remove_stale_process_lock(lock_path):
-                continue
-            if time.time() >= deadline:
-                raise TimeoutError(f"等待账号 App Server 锁超时：{lock_path}")
-            time.sleep(0.08)
-    try:
-        yield
-    finally:
-        if file_handle is not None:
-            os.close(file_handle)
-        try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass
-
-
-def _remove_stale_process_lock(lock_path):
-    """锁内进程已退出时清理残留锁。"""
-    try:
-        owner_pid = int(lock_path.read_text(encoding="utf-8").strip())
-    except (FileNotFoundError, OSError, TypeError, ValueError):
-        return False
-    if _is_process_running(owner_pid):
-        return False
-    try:
-        if lock_path.read_text(encoding="utf-8").strip() != str(owner_pid):
-            return False
-        lock_path.unlink()
-        return True
-    except (FileNotFoundError, OSError):
-        return False
-
-
-def _is_process_running(pid):
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
-        kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
-        kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
-        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
-        handle = kernel32.OpenProcess(0x00100000, False, pid)
-        if handle:
-            kernel32.CloseHandle(handle)
-            return True
-        return ctypes.get_last_error() != 87
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except (PermissionError, OSError):
-        return True
-    return True
+    # 额度请求失败前也可能已完成续期，只保存同一身份真正更新的令牌。
+    return sync_auth_file(source_path, target_path)
 
 
 class AppServerClient:
