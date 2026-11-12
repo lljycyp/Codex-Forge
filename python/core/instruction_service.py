@@ -21,6 +21,21 @@ BUILTIN_TEMPLATES = (
         "title": "GPT-5.6 Sol 破除限制",
         "filename": "gpt-5.6-sol-unrestricted.md",
     },
+    {
+        "id": "builtin-gpt-5.6-sol",
+        "title": "GPT-5.6 Sol",
+        "filename": "gpt-5.6-sol.md",
+    },
+    {
+        "id": "builtin-gpt-6-astra",
+        "title": "GPT-6 Astra",
+        "filename": "gpt-6-astra.md",
+    },
+    {
+        "id": "builtin-gpt-6.1-sol",
+        "title": "GPT-6.1 Sol",
+        "filename": "gpt-6.1-sol.md",
+    },
 )
 
 

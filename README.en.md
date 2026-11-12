@@ -129,12 +129,22 @@ Before saving changes, it validates the TOML content and backs up the old file t
 
 Instruction templates let you quickly switch Codex's system-level behavior prompt. You can save common workflows, coding rules, review standards, or one of the bundled restriction-breaking prompts as Markdown templates and enable them when needed.
 
-Codex Forge currently includes these restriction-breaking prompt templates:
+Codex Forge includes three prompt templates from [gpt-instruct](https://github.com/MDX-Tom/gpt-instruct):
+
+| Template name | File | Upstream status |
+| :--- | :--- | :--- |
+| GPT-5.6 Sol | `docs/propmt/gpt-5.6-sol.md` | Stable |
+| GPT-6 Astra | `docs/propmt/gpt-6-astra.md` | Prerelease |
+| GPT-6.1 Sol | `docs/propmt/gpt-6.1-sol.md` | Prerelease |
+
+Template names and filenames use only the model names. Exact upstream releases, the source commit, checksums, and license are recorded in the [template source notes](docs/propmt/README.md).
+
+Two historical templates remain available for existing configurations:
 
 - `docs/propmt/gpt5.5-unrestricted.md`
-- `docs/propmt/gpt-5.6-sol-unrestricted.md` (for GPT-5.6 SOL)
+- `docs/propmt/gpt-5.6-sol-unrestricted.md`
 
-Codex Forge automatically adds both templates to **Instruction templates** at startup, but leaves them disabled and does not overwrite existing templates with the same filenames.
+Codex Forge automatically adds any missing built-in templates at startup, for a total of five. It leaves them disabled and does not overwrite existing templates with the same filenames. Upgrading preserves existing template content and the enabled selection. To use an updated template, select its model name on the **Instruction templates** page and enable it.
 
 You can enable or disable them directly from the **Instruction templates** page. After a template is enabled, Codex Forge writes the matching `.md` file into the Codex config directory and updates `model_instructions_file` in `config.toml`.
 

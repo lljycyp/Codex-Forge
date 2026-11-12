@@ -1,1 +1,5 @@
 *.sh text eol=lf
+docs/propmt/gpt-5.6-sol.md text eol=lf
+docs/propmt/gpt-6-astra.md text eol=lf
+docs/propmt/gpt-6.1-sol.md text eol=lf
+docs/propmt/LICENSE.gpt-instruct text eol=lf

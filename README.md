@@ -129,12 +129,22 @@ Codex Forge 会读取当前生效的配置文件：
 
 指令模板用于快速切换 Codex 的系统级行为提示词。你可以把常用工作方式、代码规范、审查标准，或仓库内置的破除限制提示词保存为 Markdown（标记语言）模板，需要时一键启用。
 
-Codex Forge 当前内置破除限制提示词模板：
+Codex Forge 当前内置来自 [gpt-instruct](https://github.com/MDX-Tom/gpt-instruct) 的三份提示词模板：
+
+| 模板名称 | 文件 | 上游状态 |
+| :--- | :--- | :--- |
+| GPT-5.6 Sol | `docs/propmt/gpt-5.6-sol.md` | 稳定版 |
+| GPT-6 Astra | `docs/propmt/gpt-6-astra.md` | 预发布版 |
+| GPT-6.1 Sol | `docs/propmt/gpt-6.1-sol.md` | 预发布版 |
+
+模板名称和文件名只保留模型名。具体上游版本、来源提交、校验值和许可见 [模板来源说明](docs/propmt/README.md)。
+
+同时保留两份历史模板，供已有配置继续使用：
 
 - `docs/propmt/gpt5.5-unrestricted.md`
-- `docs/propmt/gpt-5.6-sol-unrestricted.md`（适配 GPT-5.6 SOL）
+- `docs/propmt/gpt-5.6-sol-unrestricted.md`
 
-Codex Forge 启动时会自动将这两个模板写入 **指令模板**，但不会默认启用，也不会覆盖已有的同名模板。
+Codex Forge 启动时会自动补齐这五份内置模板，但不会默认启用，也不会覆盖已有的同名模板。升级后，原有模板内容和启用状态保持不变；需要新版时，请在 **指令模板** 页面选择相应模型名并启用。
 
 你可以在 **指令模板** 页面直接点击启用 / 禁用。启用后，Codex Forge 会把对应 `.md` 写入 Codex 配置目录，并更新 `config.toml` 中的 `model_instructions_file`。
 
