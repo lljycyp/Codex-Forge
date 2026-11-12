@@ -25,7 +25,7 @@ from core.codex_source import (
     read_running_codex_processes,
 )
 from core.config_store import load_config, save_config
-from core.constants import DB_PATH, DEFAULT_PROFILE_ROOT
+from core.constants import CONFIG_DIR, DB_PATH, DEFAULT_PROFILE_ROOT
 from core.auth_service import auth_kind, auth_tokens, extract_auth
 from core.logger import get_logger
 from core.oauth_service import login_with_browser
@@ -55,6 +55,7 @@ from core.instruction_service import (
 )
 from core.toml_config_service import read_toml_config as read_toml_config_service, save_toml_config as save_toml_config_service
 from core.secure_store import protect_bytes, unprotect_bytes
+from core.shared_workspace_service import sync_shared_workspace
 from core.usage_service import (
     get_cached_profile_usage,
     refresh_all_profile_usage as refresh_all_profile_usage_cache,
@@ -767,8 +768,11 @@ def launch_profile(payload):
         if not stop_running_first:
             raise RuntimeError("检测到 Codex 正在运行，请先关闭后再切换账号")
         _stop_running_codex_processes()
+        if _running_codex_count() > 0:
+            raise RuntimeError("Codex 尚未完全退出，暂不能加载共享工作区，请稍后重试")
 
     profile_dir = _get_profile_dir(config, name)
+    _sync_shared_workspace(config, get_active_codex_dir(), get_profile_auth_path(profile_dir))
     apply_profile(
         profile_dir,
         share_system_config=True,
@@ -789,7 +793,9 @@ def stop_profile(_payload):
     config = load_config()
     if _get_launch_mode(config) == "multi":
         return _stop_profile_multi(config, _payload or {})
-    return _stop_running_codex_processes()
+    result = _stop_running_codex_processes()
+    _sync_shared_workspace(config)
+    return result
 
 
 def _launch_profile_multi(config, name, reserved_skin_ports=None):
@@ -809,6 +815,7 @@ def _launch_profile_multi(config, name, reserved_skin_ports=None):
         directory.mkdir(parents=True, exist_ok=True)
 
     prepare_profile_codex_home(profile_dir)
+    _sync_shared_workspace(config, codex_home_dir, codex_home_dir / "auth.json")
     env = os.environ.copy()
     env["APPDATA"] = str(appdata_dir)
     env["LOCALAPPDATA"] = str(localappdata_dir)
@@ -974,6 +981,7 @@ def _stop_profile_multi(config, payload):
     logger.info("多开账号关闭开始 名称=%s 匹配进程=%s", name, len(matched_processes))
     stopped = _stop_client_processes(matched_processes)
     sync_codex_home_to_profile(_get_profile_dir(config, name))
+    _sync_shared_workspace(config)
     logger.info("多开账号关闭成功 名称=%s 已关闭=%s", name, stopped)
     return {"name": name, "stopped": stopped}
 
@@ -1523,6 +1531,17 @@ def _get_shared_app_root(config):
     """返回所有多开账号共用的客户端存储目录。"""
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
     return profile_root / ".shared"
+
+
+def _sync_shared_workspace(config, target_home=None, auth_path=None):
+    """全部账号使用同一共享数据源；运行中的其他实例只读取已落盘快照。"""
+    homes = [get_active_codex_dir()]
+    homes.extend(_get_profile_dir(config, name) / "CodexHome" for name in config.get("profiles", []))
+    result = sync_shared_workspace(
+        CONFIG_DIR / "shared-workspace.json", homes, target_home=target_home, auth_path=auth_path,
+    )
+    logger.info("共享工作区已更新 项目=%s 分区=%s 备份=%s", result["projectCount"], result["sectionCount"], result["backupPath"])
+    return result
 
 
 def _normalize_profile_configs(config):

@@ -95,7 +95,11 @@
 ~/Documents/CodexProfiles/<profile_id>/CodexHome/config.toml
 ```
 
-账号切换模式只替换 `auth.json`，模型、代理等全局 Codex 配置始终使用系统 `~/.codex/config.toml`。多开隔离模式使用账号自己的 `CodexHome/config.toml`。
+账号切换模式按账号替换 `auth.json`，模型、代理等全局 Codex 配置始终使用系统 `~/.codex/config.toml`。多开隔离模式使用账号自己的 `CodexHome/config.toml`。
+
+ChatGPT 登录账号共用一份本地工作区布局，包括项目、分区、排序、项目置顶和已有聊天归属。首次启动会合并本机各账号的现有布局，按项目目录去重；后续启动、切换或关闭账号时汇总变更，并在启动前加载到目标账号。多开实例的布局在重新打开后更新，不会在运行中覆盖其状态文件。
+
+共享数据保存在 `%LOCALAPPDATA%/CodexForge/shared-workspace.json`，原始状态和共享数据的备份保存在 `%LOCALAPPDATA%/CodexForge/backups/shared-workspace/`，每份备份附有原路径清单。并发实例只提交相对上次加载的变化；同一字段的冲突以较晚落盘的快照为准，删除与修改冲突时优先保留修改。登录凭证、云端项目、聊天内容及各实例的数据库仍独立保存。API Key 账号维持原有启动行为，不参与账号快照加载。
 
 ### 3. 🔑 多样化的认证（Auth）管理
 

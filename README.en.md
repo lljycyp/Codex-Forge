@@ -95,7 +95,11 @@ Each account profile stores its own login credentials and config:
 ~/Documents/CodexProfiles/<profile-id>/CodexHome/config.toml
 ```
 
-Account-switching mode only replaces `auth.json`; global Codex settings such as model and proxy always use the system `~/.codex/config.toml`. Isolated multi-instance mode uses each account's own `CodexHome/config.toml`.
+Account-switching mode replaces `auth.json` with the selected account's credentials; global Codex settings such as model and proxy always use the system `~/.codex/config.toml`. Isolated multi-instance mode uses each account's own `CodexHome/config.toml`.
+
+ChatGPT accounts share local projects, sidebar sections, ordering, project pins, and existing chat assignments. The first launch merges existing account layouts and deduplicates projects by folder. Changes are collected when launching, switching, or stopping accounts and loaded before the target account starts. Other running instances pick up layout changes when reopened.
+
+Shared data lives in `%LOCALAPPDATA%/CodexForge/shared-workspace.json`. Original state and shared-data backups, with source-path manifests, live in `%LOCALAPPDATA%/CodexForge/backups/shared-workspace/`. Each instance contributes changes relative to its last snapshot. Later persisted snapshots win conflicting field edits; edits are preserved when they conflict with deletion. Credentials, cloud projects, chat contents, and instance databases remain separate. API-key profiles retain their existing launch behavior without loading an account snapshot.
 
 ### 3. 🔑 Auth Management
 

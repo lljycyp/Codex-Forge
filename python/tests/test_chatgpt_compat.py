@@ -219,12 +219,14 @@ class ChatGptCompatibilityTest(unittest.TestCase):
                 patch("bridge.commands.prepare_profile_codex_home"),
                 patch("bridge.commands.db.load_profile_launch_settings", return_value={"args": [], "env": {}}),
                 patch("bridge.commands._allocate_codex_skin_port", return_value=19336),
+                patch("bridge.commands._sync_shared_workspace") as sync_workspace,
                 patch("bridge.commands.save_config") as save_config,
                 patch("bridge.commands.subprocess.Popen", return_value=process) as popen,
             ):
                 result = _launch_profile_multi(config, "work")
 
         command = popen.call_args.args[0]
+        sync_workspace.assert_called_once_with(config, profile_dir / "CodexHome", profile_dir / "CodexHome" / "auth.json")
         launch_env = popen.call_args.kwargs["env"]
         self.assertEqual(command[0], str(store_path))
         self.assertIn(f"--user-data-dir={profile_dir / 'AppData' / 'Roaming' / 'Codex' / 'web' / 'Codex'}", command)
