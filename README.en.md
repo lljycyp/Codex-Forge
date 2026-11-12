@@ -293,6 +293,7 @@ cd python
 uv run python -m py_compile main.py
 cd ..
 yarn typecheck:all
+yarn test:release
 ```
 
 ### 📦 Packaging
@@ -322,6 +323,8 @@ yarn clean
 resources/main.exe
 release/Codex-Forge-Setup-<version>.exe
 ```
+
+After uploading and confirming the current installer and `latest.yml`, the GitHub and Gitee publishing scripts each keep installer assets and update manifests for the three most recent stable versions and remove those two asset types from older versions. Release notes, Git tags, and other attachments remain available. Drafts, prereleases, and releases without installers do not count toward the retained versions. Republishing an older version skips cleanup.
 
 ---
 

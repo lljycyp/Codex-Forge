@@ -1,6 +1,6 @@
 {
   "name": "codex-forge-desktop",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "description": "Codex Forge",
   "author": "Codex Forge",
   "private": true,
@@ -12,6 +12,7 @@
     "build:shell": "node scripts/build.js shell",
     "build:installer": "node scripts/build.js installer",
     "clean": "node scripts/clean.js",
+    "test:release": "node --test scripts/tests/*.test.js",
     "typecheck": "tsc --noEmit",
     "typecheck:py": "cd python && .venv/Scripts/python.exe -m basedpyright",
     "typecheck:all": "yarn typecheck && yarn typecheck:py",

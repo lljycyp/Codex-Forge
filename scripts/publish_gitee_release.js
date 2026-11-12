@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { pruneReleaseAssets } = require("./release_retention");
 
 const root = path.join(__dirname, "..");
 const apiBase = "https://gitee.com/api/v5";
@@ -115,6 +116,19 @@ async function listAssets(releaseId) {
   return api(`/repos/${owner}/${repo}/releases/${releaseId}/attach_files`);
 }
 
+async function listReleases() {
+  const releases = [];
+  for (let page = 1; ; page += 1) {
+    const items = await api(`/repos/${owner}/${repo}/releases`, {
+      params: { page: String(page), per_page: "100" },
+    });
+    releases.push(...items);
+    if (items.length < 100) {
+      return releases;
+    }
+  }
+}
+
 async function deleteAsset(releaseId, assetId) {
   return api(`/repos/${owner}/${repo}/releases/${releaseId}/attach_files/${assetId}`, { method: "DELETE" });
 }
@@ -181,6 +195,8 @@ async function main() {
     await uploadAsset(release.id, file);
     console.log(`Uploaded ${fileName} to Gitee release ${tagName}`);
   }
+
+  await pruneReleaseAssets({ currentRelease: release, listReleases, listAssets, deleteAsset });
 }
 
 main().catch((error) => {

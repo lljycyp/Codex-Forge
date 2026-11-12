@@ -293,6 +293,7 @@ cd python
 uv run python -m py_compile main.py
 cd ..
 yarn typecheck:all
+yarn test:release
 ```
 
 ### 📦 项目打包
@@ -323,6 +324,8 @@ yarn clean
 resources/main.exe
 release/Codex-Forge-Setup-<version>.exe
 ```
+
+GitHub 和 Gitee 发布脚本会在当前版本的安装包和 `latest.yml` 上传成功并确认存在后，分别保留最近三个正式版本的安装包与更新清单，清理更旧版本的这两类附件。历史发布说明、Git 标签和其他附件继续保留；草稿、预发布版以及缺少安装包的发布记录不计入保留数量。重新发布较旧版本时跳过清理。
 
 ---
 
