@@ -8,6 +8,7 @@ import ctypes
 import ctypes.wintypes
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from core.constants import PORTABLE_APP_DIR_NAME, SOURCE_VERSION_FILE_NAME
@@ -217,6 +218,40 @@ def get_windowsapps_dir():
     """获取系统微软商店应用安装目录。"""
     program_files = os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles") or r"C:\Program Files"
     return Path(program_files) / "WindowsApps"
+
+
+def resolve_codex_execution_path(codex_path):
+    """商店版使用包专属执行别名，让直接启动也保留任务栏所需的应用身份。"""
+    path = Path(codex_path)
+    package_dir = next(
+        (
+            parent for parent in path.parents
+            if parent.parent.name.lower() == "windowsapps"
+            and parent.name.lower().startswith(("openai.codex_", "openai.chatgpt_"))
+        ),
+        None,
+    )
+    if package_dir is None:
+        return path
+    try:
+        manifest = ET.parse(package_dir / "AppxManifest.xml").getroot()
+        identity = manifest.find("{*}Identity")
+        if identity is None:
+            return path
+        family_name = f"{identity.attrib['Name']}_{package_dir.name.rsplit('_', 1)[-1]}"
+        local_appdata = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+        alias_dir = local_appdata / "Microsoft" / "WindowsApps" / family_name
+        executable = path.relative_to(package_dir).as_posix().lower()
+        for application in manifest.findall("./{*}Applications/{*}Application"):
+            if application.get("Executable", "").replace("\\", "/").lower() != executable:
+                continue
+            for alias in application.findall(".//{*}AppExecutionAlias/{*}ExecutionAlias"):
+                alias_name = alias.get("Alias")
+                if alias_name and (alias_path := alias_dir / alias_name).is_file():
+                    return alias_path
+    except (OSError, ET.ParseError, KeyError):
+        pass
+    return path
 
 
 def is_windowsapps_codex_path(path):

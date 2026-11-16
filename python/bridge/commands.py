@@ -18,6 +18,7 @@ from core.codex_source import (
     find_running_codex_path,
     find_windowsapps_codex_path,
     find_windowsapps_codex_path_by_package,
+    resolve_codex_execution_path,
     request_process_close,
     read_running_codex_commands,
     read_running_codex_processes,
@@ -821,8 +822,9 @@ def _launch_profile_multi(config, name, reserved_skin_ports=None):
     env["LOCALAPPDATA"] = str(localappdata_dir)
     env["CODEX_HOME"] = str(codex_home_dir)
     env["CODEX_MULTI_PROFILE"] = name
+    env["CODEX_ELECTRON_USER_DATA_PATH"] = str(appdata_dir / "Codex")
     launch_settings = db.load_profile_launch_settings(name)
-    managed_env = {"APPDATA", "LOCALAPPDATA", "CODEX_HOME", "CODEX_MULTI_PROFILE"}
+    managed_env = {"APPDATA", "LOCALAPPDATA", "CODEX_HOME", "CODEX_MULTI_PROFILE", "CODEX_ELECTRON_USER_DATA_PATH"}
     env.update(
         {
             str(key): str(value)
@@ -839,7 +841,7 @@ def _launch_profile_multi(config, name, reserved_skin_ports=None):
 
     logger.info("多开账号启动开始 名称=%s 程序=%s CODEX_HOME=%s", name, codex_path, codex_home_dir)
     process = subprocess.Popen(
-        [str(codex_path), f"--user-data-dir={user_data_dir}", *extra_args],
+        [str(resolve_codex_execution_path(codex_path)), f"--user-data-dir={user_data_dir}", *extra_args],
         cwd=working_dir,
         env=env,
         close_fds=True,
@@ -891,6 +893,8 @@ def get_codex_skin_sessions(_payload=None):
     if not config.get("codex_skin_enabled"):
         return {"skinSessions": []}
     shared_root = _get_shared_app_root(config).resolve()
+    source_path = _resolve_configured_codex_app_path(str(config.get("codex_path") or ""))
+    source_path = source_path.resolve() if source_path else None
     launch_mode = _get_launch_mode(config)
     sessions = []
     for process in read_running_codex_processes():
@@ -903,7 +907,9 @@ def get_codex_skin_sessions(_payload=None):
         if not CODEX_SKIN_PORT_START <= port < CODEX_SKIN_PORT_START + CODEX_SKIN_PORT_COUNT:
             continue
         try:
-            Path(process.get("executable_path") or "").resolve().relative_to(shared_root)
+            executable_path = Path(process.get("executable_path") or "").resolve()
+            if executable_path != source_path:
+                executable_path.relative_to(shared_root)
         except (OSError, ValueError):
             continue
         profile_name = str(config.get("active_profile") or SYSTEM_PROFILE_NAME)
@@ -1851,7 +1857,7 @@ def _launch_default_codex(profile_name="", skin_port=None):
         codex_path = Path(_resolve_codex_app_source_path(config))
         launch_spec = {
             "kind": "app",
-            "command": [str(codex_path)],
+            "command": [str(resolve_codex_execution_path(codex_path))],
             "display": str(codex_path),
             "cwd": str(codex_path.parent),
         }
