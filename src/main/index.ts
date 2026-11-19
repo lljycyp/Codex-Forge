@@ -6,6 +6,8 @@ import {
   type UpdateInfo,
 } from "electron-updater";
 import { join } from "node:path";
+import { closeGateway, gatewayShared, restoreGateway } from "./gateway";
+import { dialog } from "electron";
 import { recoverCodexSkinSessions, registerIpcHandlers } from "./ipc";
 import { invokeBackend } from "./python/launcherBackend";
 import { applyCodexSkinTheme, pauseCodexSkinSessions, stopAllCodexSkinSessions } from "./codexSkin";
@@ -286,6 +288,8 @@ async function refreshTrayMenu(): Promise<void> {
       {
         label: "退出",
         click: () => {
+          if (gatewayShared && dialog.showMessageBoxSync({ type: "question", message: "退出 Forge 将停止局域网共享",
+            buttons: ["留在托盘", "停止共享并退出"], defaultId: 0, cancelId: 0 }) !== 1) return;
           isQuitting = true;
           app.quit();
         },
@@ -303,6 +307,7 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     registerIpcHandlers();
+    restoreGateway();
     void recoverCodexSkinSessions();
     registerUpdateHandlers();
     createMainWindow();
@@ -328,6 +333,7 @@ if (!gotSingleInstanceLock) {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  closeGateway();
   void stopAllCodexSkinSessions();
 });
 

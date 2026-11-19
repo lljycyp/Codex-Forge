@@ -11,6 +11,11 @@ def main():
     cast(TextIOWrapper, sys.stdout).reconfigure(encoding="utf-8")
     cast(TextIOWrapper, sys.stderr).reconfigure(encoding="utf-8")
     command = sys.argv[1] if len(sys.argv) > 1 else ""
+    if command == "serve_gateway":
+        import asyncio
+        from core.gateway import serve
+        asyncio.run(serve())
+        return 0
     payload_text = sys.argv[2] if len(sys.argv) > 2 else "{}"
     try:
         payload = json.loads(payload_text)

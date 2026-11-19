@@ -3,7 +3,11 @@ name = "codex-forge"
 version = "0.1.0"
 description = "Windows profile and multi-instance manager for the Codex desktop app."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "aiohttp>=3.14,<4",
+    "backports-zstd>=1 ; python_full_version < '3.14'",
+    "cryptography>=46",
+]
 
 [dependency-groups]
 dev = [

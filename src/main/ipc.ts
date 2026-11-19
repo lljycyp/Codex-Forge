@@ -1,5 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, type OpenDialogOptions } from "electron";
 import { invokeBackend } from "./python/launcherBackend";
+import { gatewayCertificate, gatewayCommand } from "./gateway";
+import { copyFile } from "node:fs/promises";
 import {
   applyCodexSkinTheme,
   hasCodexSkinSessions,
@@ -58,6 +60,14 @@ async function applySelectedCodexSkinTheme(): Promise<void> {
 
 export function registerIpcHandlers(): void {
   ipcMain.handle("launcher:invoke", async (_event, command: string, payload: unknown) => {
+    if (command === "serve_gateway") return { ok: false, data: {}, error: "未知命令" };
+    if (command === "gateway_export_ca") {
+      const choice = await dialog.showSaveDialog({ defaultPath: "forge-gateway-ca.pem",
+        filters: [{ name: "Forge Gateway CA", extensions: ["pem"] }] });
+      if (!choice.canceled && choice.filePath) await copyFile(gatewayCertificate, choice.filePath);
+      return { ok: true, data: { saved: !choice.canceled }, error: "" };
+    }
+    if (command.startsWith("gateway_")) return gatewayCommand(command.slice(8), payload);
     const result = await invokeBackend(command, payload, (progress) => {
       _event.sender.send("launcher:backend-progress", progress);
     });

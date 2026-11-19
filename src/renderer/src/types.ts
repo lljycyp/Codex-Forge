@@ -21,7 +21,7 @@ export type AppState = {
   authCredentialStore: "file" | "keyring" | "auto";
 };
 
-export type ViewKey = "home" | "profiles" | "workspace" | "instructions" | "toml" | "skin" | "settings";
+export type ViewKey = "home" | "profiles" | "gateway" | "workspace" | "instructions" | "toml" | "skin" | "settings";
 
 export type ViewMeta = {
   title: string;

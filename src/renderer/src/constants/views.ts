@@ -10,6 +10,10 @@ export function getViewMeta(t: (text: string) => string): Record<ViewKey, ViewMe
     title: t("账号管理"),
     description: t("查看运行实例、选择账号并管理账号环境")
   },
+  gateway: {
+    title: t("负载均衡"),
+    description: t("管理账号调度、局域网共享和访问 Key")
+  },
   workspace: {
     title: t("环境工作台"),
     description: t("管理额度历史、健康检查、MCP、Skills、会话与启动环境")

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Layout, Modal, Progress, message } from "antd";
-import { Boxes, Code2, FileText, Home, Palette, Settings, ShieldCheck } from "lucide-react";
+import { Boxes, Code2, FileText, Home, Network, Palette, Settings, ShieldCheck } from "lucide-react";
+
 import { AppLayout } from "./components/AppLayout";
 import { getViewMeta } from "./constants/views";
 import { invokeLauncher } from "./api/launcher";
@@ -15,6 +16,7 @@ import { WorkspacePage } from "./pages/WorkspacePage";
 import codexForgeLogo from "./assets/codex-forge-logo.png";
 import type { AppState, ProfileSummary, ProfileUsage, RunCommand, RuntimeStatus, UpdateEvent, ViewKey } from "./types";
 
+const GatewayPage = lazy(() => import("./pages/GatewayPage").then(m => ({ default: m.GatewayPage })));
 const { Content } = Layout;
 const runtimeStatusPollMs = 3 * 1000;
 const usageAutoRefreshMs = 5 * 60 * 1000;
@@ -339,6 +341,7 @@ export default function App() {
     () => [
       { key: "home" as const, label: t("首页"), icon: <Home size={18} /> },
       { key: "profiles" as const, label: t("账号"), icon: <ShieldCheck size={18} /> },
+      { key: "gateway" as const, label: t("负载均衡"), icon: <Network size={18} /> },
       { key: "workspace" as const, label: t("环境"), icon: <Boxes size={18} /> },
       { key: "instructions" as const, label: t("指令模板"), icon: <FileText size={18} /> },
       { key: "toml" as const, label: "TOML", icon: <Code2 size={18} /> },
@@ -479,6 +482,7 @@ export default function App() {
               loading={commandingView === "profiles" || refreshingView === "profiles"}
             />
           ) : null}
+          {activeView === "gateway" ? <Suspense fallback={null}><GatewayPage privacy={privacyMode} /></Suspense> : null}
           {activeView === "workspace" ? (
             <WorkspacePage appState={appState} profiles={profiles} onDirtyChange={setWorkspaceDirty} />
           ) : null}

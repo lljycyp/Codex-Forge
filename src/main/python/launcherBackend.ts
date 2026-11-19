@@ -45,6 +45,12 @@ function getBackendCommand(): BackendCommand {
   return { command: pythonCommand, args: ["-m", "bridge.cli"], mode: "development" };
 }
 
+export function spawnGateway() {
+  const backend = getBackendCommand();
+  const cwd = backend.mode === "development" ? getPythonRoot(getProjectRoot()) : getProjectRoot();
+  return spawn(backend.command, [...backend.args, "serve_gateway"], { cwd, windowsHide: true });
+}
+
 export function invokeBackend(
   commandName: string,
   payload: unknown,

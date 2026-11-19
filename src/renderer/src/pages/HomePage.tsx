@@ -1,4 +1,6 @@
-import { Button, Tooltip } from "antd";
+import { Button, Segmented, Tooltip, message } from "antd";
+import { useState } from "react";
+import { invokeLauncher } from "../api/launcher";
 import type { ReactNode } from "react";
 import {
   Check,
@@ -32,15 +34,18 @@ const panelClass =
 
 export function HomePage({ appState, profiles, onOpenView, onLaunchProfile }: HomePageProps) {
   const { t } = useI18n();
+  const [balanced, setBalanced] = useState(() => localStorage.getItem("forge.home.routing") === "balanced");
+  const [launching, setLaunching] = useState(false);
   const currentProfile =
     profiles.find((profile) => profile.name === appState.activeProfile)
     ?? profiles.find((profile) => profile.active)
     ?? null;
+  const isolated = balanced && appState.launchMode === "multi" ? currentProfile : null;
   const environmentChecks: EnvironmentCheck[] = [
     { label: t("Codex 客户端"), ok: appState.codexCommandAvailable },
     { label: t("账号资料根目录"), ok: appState.profileRootExists },
-    { label: "auth.json", ok: appState.activeAuthExists },
-    { label: "config.toml", ok: appState.activeConfigExists },
+    { label: "auth.json", ok: isolated?.authExists ?? appState.activeAuthExists },
+    { label: "config.toml", ok: isolated?.configExists ?? appState.activeConfigExists },
   ];
   const attentionCount = environmentChecks.filter((item) => !item.ok).length;
   const environmentReady = attentionCount === 0;
@@ -55,7 +60,19 @@ export function HomePage({ appState, profiles, onOpenView, onLaunchProfile }: Ho
       ? t("启动 Codex")
       : t("选择账号");
 
-  const handlePrimaryAction = () => {
+  const handlePrimaryAction = async () => {
+    if (balanced) {
+      setLaunching(true);
+      try {
+        await invokeLauncher("gateway_launch");
+        message.success(t("已通过负载均衡启动 Codex"));
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : t("启动失败"));
+      } finally {
+        setLaunching(false);
+      }
+      return;
+    }
     if (hasRunningInstance || !currentProfile) {
       onOpenView("profiles");
       return;
@@ -86,14 +103,18 @@ export function HomePage({ appState, profiles, onOpenView, onLaunchProfile }: Ho
           </div>
 
           <div className="flex items-center gap-2 max-[960px]:col-span-2 max-[960px]:ml-[88px] max-[720px]:ml-0 max-[720px]:w-full max-[720px]:flex-col">
+            <Segmented aria-label={t("请求分配")} value={balanced ? "balanced" : "account"} disabled={launching}
+              options={[{ label: t("指定账号"), value: "account" }, { label: t("负载均衡"), value: "balanced" }]}
+              onChange={(value) => { localStorage.setItem("forge.home.routing", String(value)); setBalanced(value === "balanced"); }} />
             <Button
               className="!h-10 !min-w-[144px] !rounded-[8px] !font-bold max-[720px]:!w-full"
               type="primary"
               icon={hasRunningInstance ? <UsersRound size={15} /> : <Play size={15} />}
-              disabled={!environmentReady && !hasRunningInstance}
+              loading={launching}
+              disabled={balanced ? !profiles.length : !environmentReady && !hasRunningInstance}
               onClick={handlePrimaryAction}
             >
-              {primaryText}
+              {balanced ? t("启动 Codex") : primaryText}
             </Button>
             <Button className="!h-10 !rounded-[8px] !font-semibold max-[720px]:!w-full" icon={<UsersRound size={15} />} onClick={() => onOpenView("profiles")}>
               {t("切换账号")}
