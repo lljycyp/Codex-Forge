@@ -7,25 +7,29 @@ import secrets
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from pathlib import PurePath
 
 import aiohttp
 from aiohttp import WSMsgType, web
 
 from core.gateway_accounts import CHATGPT_BASE, CapacityError
+from core.gateway_continuation import (
+    AnswerStream,
+    Attempt,
+    ProtocolError,
+    QuotaLimit,
+    add_usage,
+    quota_limit,
+    replay_item,
+)
 from core.gateway_store import MAX_RESOURCE
 
 OWNER = web.RequestKey[dict]("gateway_owner")
 AUTH = web.RequestKey[Callable[[], dict | None]]("gateway_auth")
+LISTENING = web.RequestKey[Callable[[], bool]]("gateway_listening")
 MAX_BODY = 16 * 1024 * 1024
 TERMINAL = {"response.completed", "response.failed", "response.incomplete", "response.cancelled", "error"}
-
-
-class ProtocolError(ValueError):
-    def __init__(self, message, status=400, code="invalid_request_error"):
-        super().__init__(message)
-        self.status, self.code = status, code
 
 
 def error_body(message, code):
@@ -143,6 +147,7 @@ class Protocol:
         self.sockets = {}
         self.generating = set()
         self.uploads = 0
+        self.quota_waiting = {}
 
     def app(self, local, accepting):
         @web.middleware
@@ -163,7 +168,7 @@ class Protocol:
 
                 if not (owner := auth()):
                     raise ProtocolError("凭证无效或已被停用", 401)
-                request[OWNER], request[AUTH] = owner, auth
+                request[OWNER], request[AUTH], request[LISTENING] = owner, auth, accepting
                 return await handler(request)
             except ProtocolError as exc:
                 return web.json_response(error_body(exc, exc.code), status=exc.status)
@@ -233,16 +238,23 @@ class Protocol:
         if response.status < 300:
             return
         wait = response.headers.get("Retry-After", "")
-        self.scheduler.rejected(account.id, response.status, int(wait) if wait.isdigit() else 60)
         # Provider diagnostics can contain account identifiers; expose the protocol code, never credentials.
         code = "upstream_error"
         try:
             info = json.loads(await response.content.read(8192))
-            value = (info.get("error") or {}).get("code")
+            error = info.get("error") or {}
+            limit = quota_limit(error, response.headers, response.status)
+            if limit:
+                self.scheduler.rejected(account.id, 429, limit.delay if limit.delay is not None else 60)
+                raise limit
+            value = error.get("code") or error.get("type")
             if isinstance(value, str) and value.replace("_", "").isalnum() and len(value) <= 64:
                 code = value
+        except QuotaLimit:
+            raise
         except (ValueError, AttributeError):
             pass
+        self.scheduler.rejected(account.id, response.status, int(wait) if wait.isdigit() else 60)
         raise ProtocolError(
             f"上游返回 HTTP {response.status}（{code}）",
             response.status if response.status >= 400 else 502,
@@ -268,7 +280,7 @@ class Protocol:
         body = await request.json()
         owner = request[OWNER]["id"]
         _, wire = prepare_input(self.store, owner, body)
-        async with self.scheduler.reserve(request[OWNER], request[AUTH]) as account:
+        async with self.scheduler.reserve(request[OWNER], request[AUTH], wire.get("model")) as account:
             if account.base == CHATGPT_BASE:
                 # Codex subscriptions expose remote compaction as a Responses generation.
                 headers = self.headers(account, request)
@@ -310,6 +322,136 @@ class Protocol:
                     raise ProtocolError("上游未返回压缩结果", 502)
                 return web.json_response(value)
 
+    async def answer_events(self, account, request, wire, websocket) -> AsyncGenerator[dict, None]:
+        state = AnswerStream(wire)
+        payload = wire
+        original_identity = (account.id, account.identity, account.base, account.deployment)
+        backup = ""
+        backoff = 60
+        token_budget = wire.get("max_output_tokens")
+        prior_usage = {}
+        while True:
+            adapter = Attempt(state)
+            failure = {}
+            try:
+                stream = self.upstream(account, self.headers(account, request), payload, websocket)
+                async with contextlib.aclosing(stream):
+                    async for event in stream:
+                        kind = event.get("type")
+                        if kind == "response.completed" and prior_usage and event["response"].get("usage"):
+                            response = event["response"]
+                            event = {
+                                **event,
+                                "response": {**response, "usage": add_usage(prior_usage, response["usage"])},
+                            }
+                        if kind in ("response.failed", "response.incomplete", "error"):
+                            resp = event.get("response") or {}
+                            error = (
+                                resp.get("error")
+                                or event.get("error")
+                                or resp.get("incomplete_details")
+                                or event
+                            )
+                            limit = quota_limit(error, event.get("headers"), event.get("status"))
+                            if limit:
+                                failure = event
+                                raise limit
+                        for mapped in adapter.translate(event):
+                            for output in state.publish(mapped):
+                                yield output
+                        if kind in TERMINAL:
+                            return
+                raise ProtocolError("上游在生成结束前断开", 502)
+            except QuotaLimit as limit:
+                delay = max(1, limit.delay if limit.delay is not None else backoff)
+                backoff = min(900, backoff * 2)
+                self.scheduler.rejected(account.id, 429, delay)
+                usage = (failure.get("response") or {}).get("usage") or {}
+                prior_usage = add_usage(prior_usage, usage)
+                if isinstance(token_budget, int) and (state.open or state.done or failure):
+                    spent = usage.get("output_tokens")
+                    # Resetting an explicit per-response limit could exceed the caller's budget.
+                    token_budget = token_budget - spent if type(spent) is int and spent >= 0 else 0
+                if not state.can_resume(failure) or (isinstance(token_budget, int) and token_budget <= 0):
+                    if failure:
+                        for mapped in adapter.translate(failure):
+                            for output in state.publish(mapped):
+                                yield output
+                        return
+                    for output in state.flush():
+                        yield output
+                    raise
+                use_backup = (
+                    account.spillover
+                    if (not backup and limit.deployment_limited and wire.get("model") == account.deployment)
+                    else ""
+                )
+            except (ProtocolError, aiohttp.ClientError, TimeoutError, OSError):
+                for output in state.flush():
+                    yield output
+                raise
+            # A client keeps the same response ID and sees a single terminal event.
+            state.resuming = True
+            state.closers.clear()
+            if not state.response.get("id"):
+                created = {
+                    "id": "resp_forge_" + secrets.token_hex(16),
+                    "object": "response",
+                    "created_at": int(time.time()),
+                    "model": state.model,
+                    "status": "in_progress",
+                    "output": [],
+                }
+                yield state.deliver({"type": "response.created", "response": created})
+            payload = state.continuing_input(wire)
+            if token_budget is not None:
+                payload = {**payload, "max_output_tokens": token_budget}
+            now = time.monotonic()
+            earliest = now if use_backup else now + delay
+            heartbeat = now
+            # A verified loopback request survives local token refresh. New turns still authenticate normally.
+            authorized = request[LISTENING] if request[OWNER]["id"] == "local" else request[AUTH]
+            self.quota_waiting[state] = account.id
+            try:
+                while True:
+                    if not self.scheduler.accepting or not authorized():
+                        raise ProtocolError(
+                            "网关已停止或访问 Key 已失效，续写已停止", 403, "continuation_stopped"
+                        )
+                    current = next((a for a in self.scheduler.accounts() if a.id == account.id), None)
+                    if (
+                        not current
+                        or not current.enabled
+                        or (current.id, current.identity, current.base, current.deployment)
+                        != original_identity
+                    ):
+                        raise ProtocolError(
+                            "原账号已停用或身份已变更，续写已停止", 409, "continuation_stopped"
+                        )
+                    if current.reason and not (current.quota_reset or current.token_expired):
+                        raise ProtocolError(
+                            "原账号当前不可用：" + current.reason, 409, "continuation_stopped"
+                        )
+                    until = max(earliest, time.monotonic() + current.quota_reset - time.time())
+                    if not use_backup:
+                        until = max(until, self.scheduler.cooldown.get(account.id, 0))
+                    now = time.monotonic()
+                    if now >= until and not current.reason:
+                        account = current
+                        break
+                    if now >= heartbeat:
+                        yield state.deliver({"type": "response.in_progress", "response": state.response})
+                        heartbeat = now + 10
+                    await asyncio.sleep(min(1, until - now) if until > now else 1)
+            finally:
+                self.quota_waiting.pop(state, None)
+            if use_backup:
+                backup = use_backup
+            if backup:
+                if backup != account.spillover or account.deployment != wire.get("model"):
+                    raise ProtocolError("备用部署已移除，续写已停止", 409, "continuation_stopped")
+                payload = {**payload, "model": backup}
+
     async def generate(self, request, body, send, websocket=False):
         owner = request[OWNER]
         items, wire = prepare_input(self.store, owner["id"], body)
@@ -326,10 +468,10 @@ class Protocol:
             status = "interrupted"
             checkpoint_saved = True
             outputs = {}
-            headers = self.headers(account, request)
             protocol = "WS" if websocket else "HTTP"
+            events = self.answer_events(account, request, wire, websocket)
             try:
-                async for event in self.upstream(account, headers, wire, websocket):
+                async for event in events:
                     kind = event.get("type")
                     if kind == "response.output_item.done":
                         outputs[event.get("output_index", len(outputs))] = event["item"]
@@ -338,17 +480,7 @@ class Protocol:
                         actual = resp.get("output") or [v for _, v in sorted(outputs.items())]
                         if actual and not resp.get("output"):
                             resp["output"] = actual
-                        replay = []
-                        for item in actual:
-                            item = dict(item)
-                            if item.get("type") in (
-                                "message",
-                                "function_call",
-                                "custom_tool_call",
-                                "reasoning",
-                            ):
-                                item.pop("id", None)
-                            replay.append(item)
+                        replay = [replay_item(item) for item in actual]
                         if resp.get("id"):
                             try:
                                 self.store.put(owner["id"], "response:" + resp["id"], items + replay)
@@ -372,6 +504,7 @@ class Protocol:
                 status = f"{exc.status} {exc.code}"
                 raise
             finally:
+                await events.aclose()
                 self.records.appendleft(
                     {
                         "id": uuid.uuid4().hex,
@@ -398,6 +531,11 @@ class Protocol:
                 )
             except aiohttp.WSServerHandshakeError as exc:
                 if exc.status not in (400, 404, 405, 426, 501):
+                    if exc.status == 429:
+                        # No response body is exposed by aiohttp at the WS handshake; respect Retry-After.
+                        limit = quota_limit({"code": "429"}, exc.headers, 429)
+                        if limit:
+                            raise limit from exc
                     self.scheduler.rejected(account.id, exc.status, 60)
                     raise ProtocolError(f"上游 WebSocket 握手失败（{exc.status}）", exc.status) from exc
             else:

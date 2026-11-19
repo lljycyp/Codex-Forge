@@ -173,7 +173,8 @@ class Gateway:
                     "cap": a.cap,
                     "enabled": a.enabled,
                     "active": active[a.id],
-                    "reason": a.reason
+                    "reason": (a.reason if a.token_expired else "")
+                    or ("等待额度恢复后续写" if a.id in self.proto.quota_waiting.values() else "") or a.reason
                     or ("冷却中" if self.scheduler.cooldown.get(a.id, 0) > time.monotonic() else ""),
                 }
                 for a in self.accounts()

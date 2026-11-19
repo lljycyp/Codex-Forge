@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import re
 import sqlite3
 import time
 import tomllib
@@ -26,6 +27,37 @@ class Account:
     reason: str = ""
     base: str = CHATGPT_BASE
     headers: dict = field(default_factory=dict, repr=False)
+    identity: str = field(default="", repr=False)
+    deployment: str = ""
+    spillover: str = ""
+    quota_reset: float = 0
+    token_expired: bool = False
+
+
+AZURE_V1 = re.compile(r"https://[a-zA-Z0-9-]+\.(?:openai\.azure\.com|services\.ai\.azure\.com)/openai/v1/?")
+DEPLOYMENT = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}")
+
+
+def configure_api(account, conf):
+    provider = conf.get("model_provider", "openai")
+    if provider == "openai":
+        url = str(conf.get("openai_base_url") or API_BASE)
+    else:
+        config = conf.get("model_providers", {}).get(provider, {})
+        url = str(config.get("base_url", ""))
+    if provider == "openai" and url.rstrip("/") == API_BASE:
+        account.base = API_BASE
+        return
+    if not AZURE_V1.fullmatch(url):
+        raise ValueError("该 API 提供方未参与调度")
+    options = conf.get("model_providers", {}).get(provider, {})
+    headers = {str(k).lower(): v for k, v in options.get("http_headers", {}).items()}
+    primary, backup = conf.get("model", ""), headers.get("x-ms-spillover-deployment", "")
+    if not isinstance(primary, str) or not DEPLOYMENT.fullmatch(primary):
+        raise ValueError("请在账号的 TOML 中填写 Azure 主部署名 model")
+    if backup and (not isinstance(backup, str) or not DEPLOYMENT.fullmatch(backup) or backup == primary):
+        raise ValueError("Azure 备用部署名称无效或与主部署相同")
+    account.base, account.deployment, account.spillover = url.rstrip("/"), primary, backup
 
 
 def _auth(path):
@@ -60,36 +92,33 @@ def read_accounts(policies):
             if auth_kind(auth) == "api":
                 config_path = folder / "CodexHome/config.toml"
                 conf = tomllib.loads(config_path.read_text("utf-8-sig")) if config_path.exists() else {}
-                if (
-                    conf.get("model_provider", "openai") != "openai"
-                    or str(conf.get("openai_base_url") or API_BASE).rstrip("/") != API_BASE
-                ):
-                    raise ValueError("自定义 API 提供方未参与官方接口调度")
+                configure_api(account, conf)
                 token = auth["OPENAI_API_KEY"]
                 identity = hashlib.sha256(token.encode()).hexdigest()
-                account.base = API_BASE
+                account.identity = identity
             else:
                 values = extract_auth(auth)
                 token = values["accessToken"]
-                if (jwt_expiration(token) or 0) <= time.time() + 10:
-                    raise ValueError("令牌已过期，请在账号管理刷新额度或重新授权")
                 identity = (values["accountId"], values["claims"].get("sub") or values["email"])
+                account.identity = json.dumps((identity[0], identity[1] or hashlib.sha256(token.encode()).hexdigest()))
+                if (jwt_expiration(token) or 0) <= time.time() + 10:
+                    account.token_expired = True
+                    raise ValueError("令牌已过期，请在账号管理刷新额度或重新授权")
                 account.headers["ChatGPT-Account-Id"] = values["accountId"]
                 cached = json.loads(usage or "{}")
                 window = cached.get("oneWeek") or {}
-                if (
-                    window.get("remainingPercent") == 0
-                    and (window.get("resetAt") or 0) > time.time()
-                    or cached.get("spendControlReached")
-                    and (cached.get("fetchedAt") or 0) > time.time() - 300
-                ):
+                reset = (window.get("resetAt") or 0) if window.get("remainingPercent") == 0 else 0
+                if cached.get("spendControlReached"):
+                    reset = max(reset, (cached.get("fetchedAt") or 0) + 300)
+                if reset > time.time():
+                    account.quota_reset = reset
                     raise ValueError("当前额度已用完")
             if enabled and identity in identities:
                 raise ValueError("重复的登录身份")
             if enabled:
                 identities.add(identity)
             account.headers["Authorization"] = "Bearer " + token
-        except (ValueError, OSError, KeyError) as exc:
+        except (ValueError, OSError, KeyError, TypeError, AttributeError) as exc:
             account.reason = str(exc)
     return accounts
 
@@ -126,7 +155,7 @@ class Scheduler:
 
     def rejected(self, aid, status, delay):
         if status in (401, 403, 429) or status >= 500:
-            self.cooldown[aid] = time.monotonic() + min(86400, max(1, delay))
+            self.cooldown[aid] = max(self.cooldown.get(aid, 0), time.monotonic() + max(1, delay))
             self.changed.set()
 
     @asynccontextmanager
@@ -149,7 +178,9 @@ class Scheduler:
                 online = [a for a in self.accounts() if self.eligible(a)]
 
                 def supports(account, requested):
-                    return self.unsupported.get((account.id, requested), 0) <= time.monotonic()
+                    return (not requested or not account.deployment or account.deployment == requested) and (
+                        self.unsupported.get((account.id, requested), 0) <= time.monotonic()
+                    )
 
                 candidates = [a for a in online if supports(a, model)]
                 if not candidates:
