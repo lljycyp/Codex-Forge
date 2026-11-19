@@ -5,12 +5,53 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from aiohttp import ClientSession, TCPConnector, web
 from aiohttp.test_utils import TestServer
 from core.gateway import Gateway
 from core.gateway_accounts import Account
+from core.gateway_launch import OVERRIDE, prepare_launch
 from core.gateway_store import GatewayStore
+
+
+class GatewayDesktopLaunch(unittest.TestCase):
+    def test_running_client_refused_before_touching_home_or_starting_gateway(self):
+        with (
+            patch("bridge.commands.load_config", return_value={"launch_mode": "switch", "codex_skin_enabled": True}),
+            patch("bridge.commands._running_codex_count", return_value=1),
+            patch("bridge.commands._resolve_codex_app_source_path") as resolve,
+            patch("bridge.commands._stop_running_codex_processes") as stop,
+        ):
+            with self.assertRaisesRegex(ValueError, "Codex 正在运行"):
+                prepare_launch("https://localhost/v1", "ca.pem")
+            resolve.assert_not_called()
+            stop.assert_not_called()
+
+    def test_skin_uses_original_home_and_only_the_new_process(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "auth.json").write_text("{}", encoding="utf-8")
+            (root / "resources").mkdir()
+            (root / "resources" / "app.asar").write_bytes(OVERRIDE.encode())
+            with (
+                patch.dict("os.environ", {"CODEX_HOME": temp}),
+                patch("bridge.commands.load_config", return_value={"launch_mode": "switch", "codex_skin_enabled": True}),
+                patch("bridge.commands._running_codex_count", return_value=0),
+                patch("bridge.commands._resolve_codex_app_source_path", return_value=root / "Codex.exe"),
+                patch("bridge.commands._allocate_codex_skin_port", return_value=19335),
+                patch("core.gateway_launch.resolve_codex_execution_path", return_value=root / "Codex.exe"),
+                patch("core.gateway_launch.subprocess.Popen") as spawn,
+            ):
+                spawn.return_value.pid = 789
+                plan = prepare_launch("https://127.0.0.1:19380/v1", root / "ca.pem")
+                self.assertEqual(plan.env["CODEX_HOME"], temp)
+                self.assertEqual(plan.env[OVERRIDE], "https://127.0.0.1:19380/v1")
+                self.assertIn("--remote-debugging-address=127.0.0.1", plan.command)
+                self.assertIn("--remote-debugging-port=19335", plan.command)
+                self.assertEqual(
+                    plan.start()["skinSession"], {"profileName": "__system__", "port": 19335, "processId": 789}
+                )
 
 
 class GatewayIntegration(unittest.IsolatedAsyncioTestCase):

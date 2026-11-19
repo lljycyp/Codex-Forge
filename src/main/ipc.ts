@@ -41,7 +41,7 @@ export async function recoverCodexSkinSessions(): Promise<void> {
   if (hasCodexSkinSessions()) return;
   if (skinRecovery) return skinRecovery;
   skinRecovery = (async () => {
-    const result = await invokeBackend("ensure_codex_skin_sessions", {});
+    const result = await invokeBackend("get_codex_skin_sessions", {});
     if (!result.ok) return;
     const launches = Array.isArray(result.data.skinSessions) ? result.data.skinSessions : [];
     await startSkinLaunches(launches as SkinLaunch[]);
@@ -67,14 +67,15 @@ export function registerIpcHandlers(): void {
       if (!choice.canceled && choice.filePath) await copyFile(gatewayCertificate, choice.filePath);
       return { ok: true, data: { saved: !choice.canceled }, error: "" };
     }
-    if (command.startsWith("gateway_")) return gatewayCommand(command.slice(8), payload);
-    const result = await invokeBackend(command, payload, (progress) => {
-      _event.sender.send("launcher:backend-progress", progress);
-    });
+    const result = command.startsWith("gateway_")
+      ? await gatewayCommand(command.slice(8), payload)
+      : await invokeBackend(command, payload, (progress) => {
+          _event.sender.send("launcher:backend-progress", progress);
+        });
     if (!result.ok) {
       return result;
     }
-    if (command === "launch_profile") {
+    if (command === "launch_profile" || command === "gateway_launch") {
       const launch = result.data.skinSession as SkinLaunch | undefined;
       if (launch) await startSkinLaunches([launch]);
     } else if (command === "stop_profile") {

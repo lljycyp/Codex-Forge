@@ -223,15 +223,18 @@ class Gateway:
             )
             was_running = True in self.listeners
             await self.start()
+            registered = plan.auth_path in self.auth_paths
             self.auth_paths.add(plan.auth_path)
             try:
-                pid = await asyncio.to_thread(plan.start)
+                launched = await asyncio.to_thread(plan.start)
             except OSError:
+                if not registered:
+                    self.auth_paths.discard(plan.auth_path)
                 if not was_running:
                     await self.command("service", {"enabled": False})
                 raise
             self.store.set_option("localHomes", sorted(map(str, self.auth_paths)))
-            return {"pid": pid}
+            return launched
         else:
             raise ValueError("未知网关操作")
         return self.status()

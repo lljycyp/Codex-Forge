@@ -25,6 +25,8 @@ class DesktopLaunch:
     command: list
     cwd: str
     env: dict = field(repr=False)
+    profile_name: str
+    skin_port: int | None
 
     def start(self):
         process = subprocess.Popen(
@@ -37,7 +39,12 @@ class DesktopLaunch:
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        return process.pid
+        result: dict[str, object] = {"pid": process.pid}
+        if self.skin_port is not None:
+            result["skinSession"] = {
+                "profileName": self.profile_name, "port": self.skin_port, "processId": process.pid
+            }
+        return result
 
 
 def prepare_launch(url, certificate):
@@ -104,9 +111,15 @@ def prepare_launch(url, certificate):
         for k in ("CODEX_HOME", "CODEX_SQLITE_HOME", "CODEX_ELECTRON_USER_DATA_PATH")
     ):
         raise ValueError("启动参数自定义了数据目录，请先在环境页确认会话目录")
+    skin_port = None
+    if config.get("codex_skin_enabled"):
+        skin_port = commands._allocate_codex_skin_port()
+        extra = commands._append_codex_skin_args(extra, skin_port)
     return DesktopLaunch(
         home / "auth.json",
         [str(resolve_codex_execution_path(path)), *args, *extra],
         settings.get("workingDir") or str(path.parent),
         env,
+        name or commands.SYSTEM_PROFILE_NAME,
+        skin_port,
     )
