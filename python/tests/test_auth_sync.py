@@ -8,16 +8,16 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
-from bridge.commands import _sync_active_auth_to_profile, set_launch_mode
+from bridge.commands import _sync_active_auth_to_profile
 from core.app_server_service import read_account_and_rate_limits
 from core.auth_service import is_newer_auth, is_same_auth_account, parse_last_refresh
 from core.profile_service import (
-    apply_profile, prepare_profile_codex_home, profile_auth_lock,
+    apply_profile, profile_auth_lock,
     sync_codex_home_to_profile, write_profile_auth_json,
 )
-from core.usage_service import _build_profile_usage, _merge_usage_results
+from core.usage_service import _build_profile_usage, _merge_usage_results, _reset_account_scope, reset_profile_usage
 
 
 def make_auth(issued=100, user="user-a", workspace="team-a", refresh=None):
@@ -48,7 +48,6 @@ class AuthSyncTest(unittest.TestCase):
         self.system.mkdir()
         self.addCleanup(patch.stopall)
         patch("core.profile_service.get_active_codex_dir", return_value=self.system).start()
-        patch("core.profile_service.DEFAULT_CODEX_ENV_PATH", self.root / "missing.env").start()
         write_profile_auth_json(self.main, make_auth(200))
         write_profile_auth_json(self.runtime, make_auth(100))
         (self.runtime.parent / "config.toml").write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
@@ -74,18 +73,18 @@ class AuthSyncTest(unittest.TestCase):
         patch("core.app_server_service.find_codex_cli_path", return_value=Path("unused.exe")).start()
         return client
 
-    def test_old_runtime_with_new_mtime_cannot_overwrite_main_on_start_or_stop(self):
+    def test_old_runtime_with_new_mtime_cannot_overwrite_main_on_switch(self):
         newer_mtime = self.main.stat().st_mtime_ns + 10_000_000_000
         os.utime(self.runtime, ns=(newer_mtime, newer_mtime))
         self.assertFalse(sync_codex_home_to_profile(self.profile))
-        prepare_profile_codex_home(self.profile)
+        apply_profile(self.profile)
         self.assertEqual(self.read(self.main), make_auth(200))
-        self.assertEqual(self.read(self.runtime), make_auth(200))
+        self.assertEqual(self.read(self.runtime), make_auth(100))
 
     def test_newer_tokens_are_saved_even_if_runtime_file_is_older(self):
         write_profile_auth_json(self.runtime, make_auth(300))
         os.utime(self.runtime, ns=(1_000_000_000, 1_000_000_000))
-        prepare_profile_codex_home(self.profile)
+        apply_profile(self.profile)
         self.assertEqual(self.read(self.main), make_auth(300))
 
     def test_workspace_and_user_must_both_match(self):
@@ -137,27 +136,27 @@ class AuthSyncTest(unittest.TestCase):
 
     def test_failed_quota_query_can_preserve_actual_token_refresh(self):
         self.server(result={"type": "chatgpt"}, error="network error", updated=make_auth(300))
-        usage = _build_profile_usage(self.profile, use_codex_home_auth=True)
+        usage = _build_profile_usage(self.profile)
         self.assertIn("network error", usage["error"])
         self.assertEqual(usage["planType"], "team")
         self.assertEqual(self.read(self.main), make_auth(300))
-        self.assertEqual(self.read(self.runtime), make_auth(300))
+        self.assertEqual(self.read(self.runtime), make_auth(100))
 
     def test_failed_query_cannot_install_another_users_tokens(self):
         self.server(result=None, updated=make_auth(300, user="user-b"))
-        _build_profile_usage(self.profile, use_codex_home_auth=True)
+        _build_profile_usage(self.profile)
         self.assertEqual(self.read(self.main), make_auth(200))
 
-    def test_multi_query_uses_fresh_main_and_keeps_plan_on_failure(self):
+    def test_query_uses_fresh_main_and_keeps_plan_on_failure(self):
         client = self.server()
         before = self.main.stat().st_mtime_ns
-        usage = _build_profile_usage(self.profile, use_codex_home_auth=True)
+        usage = _build_profile_usage(self.profile)
         self.assertIn("未读取到有效登录账号", usage["error"])
         self.assertEqual(usage["planType"], "team")
         self.assertEqual(self.read(self.main), make_auth(200))
         self.assertEqual(self.main.stat().st_mtime_ns, before)
         client.request.assert_called_once_with("account/read", {"refreshToken": False})
-        self.assertEqual(self.read(self.runtime), make_auth(200))
+        self.assertEqual(self.read(self.runtime), make_auth(100))
 
     def test_active_system_auth_cannot_roll_back_the_main_file(self):
         system_auth = self.system / "auth.json"
@@ -171,27 +170,6 @@ class AuthSyncTest(unittest.TestCase):
             write_profile_auth_json(system_auth, make_auth(300))
             _sync_active_auth_to_profile({"active_profile": "work"}, "work")
             self.assertEqual(self.read(self.main), make_auth(300))
-
-    def test_repeated_switch_multi_switch_preserves_tokens_and_workspace_data(self):
-        workspace = self.runtime.parent / ".codex-global-state.json"
-        workspace.write_bytes(b'{"projects":["existing"],"sections":["work"]}')
-        before = workspace.read_bytes()
-        config = {"active_profile": "work", "launch_mode": "switch", "profiles": ["work"]}
-        with (
-            patch("bridge.commands.load_config", return_value=config),
-            patch("bridge.commands.save_config"),
-            patch("bridge.commands._get_profile_dir", return_value=self.profile),
-            patch("bridge.commands._running_multi_profile_names", return_value=[]),
-        ):
-            for _ in range(3):
-                apply_profile(self.profile)
-                set_launch_mode({"mode": "multi"})
-                prepare_profile_codex_home(self.profile)
-                write_profile_auth_json(self.runtime, make_auth(100))
-                sync_codex_home_to_profile(self.profile)
-                set_launch_mode({"mode": "switch"})
-                self.assertEqual(self.read(self.main), make_auth(200))
-        self.assertEqual(workspace.read_bytes(), before)
 
     def test_query_and_launch_share_lock_and_preserve_the_latest_refresh(self):
         entered = threading.Event()
@@ -211,10 +189,10 @@ class AuthSyncTest(unittest.TestCase):
 
         def prepare():
             launch_started.set()
-            prepare_profile_codex_home(self.profile)
+            apply_profile(self.profile)
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            query = pool.submit(_build_profile_usage, self.profile, use_codex_home_auth=True)
+            query = pool.submit(_build_profile_usage, self.profile)
             self.assertTrue(entered.wait(3))
             launch = pool.submit(prepare)
             self.assertTrue(launch_started.wait(3))
@@ -225,7 +203,8 @@ class AuthSyncTest(unittest.TestCase):
             self.assertIsNone(query.result(timeout=5)["error"])
             launch.result(timeout=5)
         self.assertEqual(self.read(self.main), make_auth(300))
-        self.assertEqual(self.read(self.runtime), make_auth(300))
+        self.assertEqual(self.read(self.system / "auth.json"), make_auth(300))
+        self.assertEqual(self.read(self.runtime), make_auth(100))
 
     def test_profile_lock_is_shared_across_processes(self):
         script = (
@@ -253,6 +232,97 @@ class AuthSyncTest(unittest.TestCase):
         self.assertEqual(result["planType"], "team")
         self.assertTrue(result["error"])
         self.assertIsNone(result["oneWeek"])
+
+    def test_reset_consumes_selected_card_even_when_usage_has_no_card_details(self):
+        client = self.server()
+        responses = {
+            "account/read": {"account": {"type": "chatgpt", "workspaceName": "Team A"}},
+            "account/rateLimitResetCredit/consume": {"outcome": "reset"},
+            "account/rateLimits/read": {
+                "rateLimits": {"secondary": {"windowDurationMins": 10080, "usedPercent": 0}},
+                "rateLimitResetCredits": {"availableCount": 3, "credits": None},
+            },
+        }
+        client.request.side_effect = lambda method, *_: responses[method]
+        with patch("core.usage_service._merge_usage_results", side_effect=lambda values, _: values):
+            result = reset_profile_usage("work", self.profile, _reset_account_scope(self.main), "second", "attempt", retry=False)
+        self.assertEqual(client.request.call_args_list[1:], [
+            call("account/rateLimitResetCredit/consume", {"idempotencyKey": "attempt", "creditId": "second"}),
+            call("account/rateLimits/read"),
+        ])
+        self.assertEqual(result["outcome"], "reset")
+        self.assertEqual(result["usage"]["resetCreditItems"], [])
+        self.assertEqual(result["usage"]["resetCredits"], 3)
+        self.assertEqual(result["usage"]["oneWeek"]["remainingPercent"], 100)
+
+    def test_retry_uses_same_attempt_and_card_after_consume_timeout(self):
+        client = self.server()
+        account = {"account": {"type": "chatgpt"}}
+        client.request.side_effect = [
+            account, TimeoutError(),
+            account, {"outcome": "alreadyRedeemed"}, {"rateLimitResetCredits": {"availableCount": 2}},
+        ]
+        scope = _reset_account_scope(self.main)
+        with patch("core.usage_service._merge_usage_results", side_effect=lambda values, _: values):
+            with self.assertRaises(TimeoutError):
+                reset_profile_usage("work", self.profile, scope, "second", "attempt", retry=False)
+            result = reset_profile_usage("work", self.profile, scope, "second", "attempt", retry=True)
+        self.assertEqual(client.request.call_args_list, [
+            call("account/read", {"refreshToken": False}),
+            call("account/rateLimitResetCredit/consume", {"idempotencyKey": "attempt", "creditId": "second"}),
+            call("account/read", {"refreshToken": False}),
+            call("account/rateLimitResetCredit/consume", {"idempotencyKey": "attempt", "creditId": "second"}),
+            call("account/rateLimits/read"),
+        ])
+        self.assertEqual(result["outcome"], "alreadyRedeemed")
+        self.assertEqual(result["usage"]["resetCredits"], 2)
+
+    def test_reset_reports_success_when_usage_read_fails(self):
+        client = self.server()
+        client.request.side_effect = [
+            {"account": {"type": "chatgpt"}}, {"outcome": "reset"}, TimeoutError(),
+        ]
+        with (
+            patch("core.usage_service._merge_usage_results", side_effect=lambda values, _: values),
+            self.assertLogs("core.usage_service") as logs,
+        ):
+            result = reset_profile_usage("work", self.profile, _reset_account_scope(self.main), "second", "attempt", retry=False)
+        self.assertEqual(result["outcome"], "reset")
+        self.assertEqual(result["usage"]["error"], "暂时无法读取最新额度，请重新查询额度")
+        self.assertIn("结果=reset", logs.output[0])
+        self.assertIn("额度更新失败", logs.output[1])
+
+    def test_reset_reports_success_when_usage_cache_write_fails(self):
+        client = self.server()
+        client.request.side_effect = [
+            {"account": {"type": "chatgpt"}}, {"outcome": "reset"}, {"rateLimitResetCredits": {"availableCount": 2}},
+        ]
+        with patch("core.usage_service._merge_usage_results", side_effect=OSError):
+            result = reset_profile_usage("work", self.profile, _reset_account_scope(self.main), "second", "attempt", retry=False)
+        self.assertEqual(result["outcome"], "reset")
+        self.assertEqual(result["usage"]["resetCredits"], 2)
+
+    def test_reset_does_not_consume_when_account_changed(self):
+        scope = _reset_account_scope(self.main)
+        write_profile_auth_json(self.main, make_auth(300, workspace="team-b"))
+        client = self.server()
+        for retry in (False, True):
+            with self.subTest(retry=retry):
+                changed = reset_profile_usage("work", self.profile, scope, "second", "attempt", retry=retry)
+                self.assertEqual(changed["outcome"], "accountChanged")
+        client.request.assert_not_called()
+
+    def test_reset_without_selected_card_still_offers_newly_loaded_cards(self):
+        client = self.server()
+        client.request.side_effect = [
+            {"account": {"type": "chatgpt"}},
+            {"rateLimitResetCredits": {"availableCount": 1, "credits": [{"id": "first", "status": "available"}]}},
+        ]
+        with patch("core.usage_service._merge_usage_results", side_effect=lambda values, _: values):
+            result = reset_profile_usage("work", self.profile, _reset_account_scope(self.main), None, "attempt", retry=False)
+        self.assertEqual(result["outcome"], "chooseCredit")
+        self.assertEqual(result["usage"]["resetCreditItems"], [{"id": "first", "expiresAt": None}])
+        self.assertEqual(client.request.call_count, 2)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,6 @@ OLD_META_NAME = "chatgpt-forge-profile.json"
 NEW_META_NAME = "codex-forge-profile.json"
 REPLACEMENTS = (
     ("ChatGPT Forge", "Codex Forge"),
-    ("ChatGPTPortableApp", "CodexPortableApp"),
     ("ChatGPTForge", "CodexForge"),
     ("chatgptForge", "codexForge"),
     ("chatgpt-forge", "codex-forge"),

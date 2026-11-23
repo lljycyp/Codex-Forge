@@ -10,11 +10,11 @@
 <h1 align="center">Codex Forge</h1>
 
 <p align="center">
-  <b>Codex multi-account and multi-instance management · Auth management · Visual TOML / instruction workspace</b>
+  <b>Codex account switching · Load balancing · Configuration and usage management</b>
 </p>
 
 <p align="center">
-  A local multi-account and multi-instance manager for the Codex desktop app on Windows. It brings the runtime environment, Codex instances, login profiles, <code>auth.json</code>, <code>config.toml</code>, instruction templates, and usage snapshots into one desktop workspace. You can switch accounts before launching Codex or run multiple isolated Codex clients.
+  A local manager for the Codex desktop app on Windows. Launch the installed client with a selected account, or route requests across available accounts through the Forge gateway. Manage account profiles, usage, <code>config.toml</code>, instruction templates, and skins from one desktop workspace.
 </p>
 
 <p align="center">
@@ -34,43 +34,45 @@
 
 ## 📖 Overview
 
-**Codex Forge** is a local workspace for Codex accounts, multi-instance launches, and configuration. It turns common terminal-side operations into desktop app workflows:
+**Codex Forge** is a local workspace for Codex accounts and configuration. It turns common terminal-side operations into desktop app workflows:
 
 - ✨ **Multiple accounts**: Manage multiple Codex account profiles in one place.
 - 🔑 **Flexible auth import**: Add accounts through browser OAuth, the current default account, or a local `auth.json` file.
 - 🔄 **Smooth switching**: Write the selected account to `~/.codex/auth.json` automatically.
-- 🛡️ **Config isolation**: Account-switching mode always uses the system `~/.codex/config.toml`; isolated multi-instance mode uses each account's `CodexHome/config.toml`.
+- 🌐 **Load balancing and LAN sharing** — Launch Codex through the gateway, route each request to an available account, and connect Windows clients on your network with a setup bundle and individual keys.
+- 🛡️ **System configuration**: Codex launches use the system `~/.codex/config.toml`.
 - 🛠️ **Visual editing**: View and edit the active `~/.codex/config.toml`.
 - 📝 **Instruction templates (prompt injection)**: Save common prompts as Markdown templates and switch Codex's global behavior profile with one click. The built-in prompt can break restrictions and support effects such as SQL injection testing and reverse engineering.
 - 📊 **Status monitoring**: Check the current workspace and running instances on the home page, then inspect account health, weekly remaining usage, available resets, and expiration times from profile management.
 - 🧰 **Environment workspace**: Review 30-day usage trends and account health, then manage MCP, Skills, AGENTS.md, the read-only session index, and per-account launch settings.
 - 🎨 **Codex skins**: Includes the Forge Aurora theme and supports importing, switching, pausing, and deleting background themes stored only on your device.
-- 🚀 **Selectable launch modes**: Supports account switching and isolated multi-instance mode for running multiple Codex clients.
 - 🌐 **Bilingual UI**: Built-in Chinese / English switching for different language environments.
 - 🔔 **Version updates**: Check for updates in the app, review release notes, download in the background, and restart to install.
 
 ## 🖼️ Software Preview
 
 <p align="center">
-  <img src="docs/images/home.png" alt="Codex Forge home page" />
+  <img src="docs/images/home-en.png" alt="Codex Forge home page with load balancing selected" />
 </p>
+
+The screenshots use example accounts, usage figures, and LAN addresses.
 
 ## ⚡ Features
 
 | Module | Details |
 | :--- | :--- |
-| 🧭 **Runtime workspace** | Check the Codex client, profile root, authentication, and configuration from the home page, view running instances, and quickly launch the current account or open common tools. |
+| 🧭 **Runtime workspace** | Check the Codex client, profile root, and local environment, see whether Codex is running, and launch with a selected account or load balancing. |
+| 🌐 **Load balancing** | Route requests across available accounts and resume a response through the same account after a recoverable quota limit. Export a LAN setup bundle, manage individual access keys, and edit per-key concurrency limits. |
 | 👥 **Profile management** | Search, filter, and sort accounts, then use the profile inspector to launch or close an account, refresh usage, view details, export a backup, rename, or delete it. Data is stored in `~/Documents/CodexProfiles` by default. |
 | 🔑 **Auth import** | Uses the official Codex App Server for Codex browser sign-in, and supports saving the current account or importing `auth.json`. |
 | 🚀 **One-click switch and launch** | Writes the selected account into the current user's `.codex` directory and launches Codex. If Codex is running, the app prompts you to close it first. |
-| 📦 **Isolated multi-instance launch** | Featured capability. Creates one shared copy from the installed Codex client. All accounts use that copy with separate `CodexHome`, `APPDATA`, `LOCALAPPDATA`, and `--user-data-dir` environments. |
-| 📊 **Usage snapshots** | Uses the official Codex App Server to read and cache weekly remaining usage, available resets, each reset's expiration time, and limit status. |
-| 🧰 **Environment workspace** | Keeps 30 days of usage history, provides threshold alerts, config diffs and field-level sync, health checks and repairs, and manages MCP, Skills, AGENTS.md, a read-only session index, and launch settings. It remembers the last open tab and asks for confirmation before discarding unsaved changes or performing destructive actions. |
+| 📊 **Usage and resets** | Check remaining weekly usage and reset credits through the Codex App Server. When a credit is available, confirm its use in the account inspector. |
+| 🧰 **Environment workspace** | Keep 30 days of usage history, set threshold alerts, and check and repair account health. Manage system-wide MCP settings, Skills, and AGENTS.md, view the read-only session index, and edit per-account launch settings. |
 | 🔐 **Encrypted profile backups** | Protects profile backups with Windows DPAPI while keeping legacy ZIP restore compatibility; sessions, logs, caches, and client files stay excluded. |
 | 🛠️ **TOML editor** | Opens and saves the active `config.toml`, backs it up automatically before saving, and warns about unsaved changes before switching configurations or leaving the page. |
 | 📝 **Instruction templates (prompt injection)** | Saves Markdown prompt templates locally. Enabling a template copies it into the active Codex config directory and points `model_instructions_file` in `config.toml` to that template. |
-| 🎨 **Codex skins** | Includes the Forge Aurora theme and supports importing, switching, pausing, and deleting local background themes. Images stay in the local Forge data directory, with support for both account-switch and isolated multi-instance modes. |
-| ⚙️ **Launch and directory settings** | Switch launch modes, migrate the account profile root, and enable Codex Forge to start after Windows sign-in. |
+| 🎨 **Codex skins** | Includes the Forge Aurora theme and supports importing, switching, pausing, and deleting local background themes. Images stay in the local Forge data directory. |
+| ⚙️ **Launch and directory settings** | Detect the installed Codex client, migrate the account profile root, and enable Codex Forge to start after Windows sign-in. |
 | 🔔 **In-app updates** | Supports silent update checks, manual update checks, release notes, background downloads, and restart-to-install. |
 | 🌐 **Language and project links** | Supports Chinese / English UI switching and provides GitHub and Gitee project links in the About area. |
 
@@ -78,15 +80,35 @@
 
 ### 1. 🧭 Runtime Workspace and Profile Inspector
 
-The home page brings together the current workspace, launch mode, selected account, and Codex instances. It checks whether the client, profile root, `auth.json`, and `config.toml` are ready. From there, you can launch the current account or quickly open profile management, the TOML editor, instruction templates, and app settings.
+The home page shows the current workspace, selected account, and Codex client status. Choose **Selected account** to launch with the current profile or **Load balancing** to use the gateway. Quit the running Codex client before switching launch options.
 
 The profile management page supports account search, status filters, and multiple sort orders. After you select an account, the profile inspector groups its information and actions into:
 
-- **Overview**: Plan, runtime and authentication status, weekly remaining usage, available resets, and each reset's expiration time.
-- **Runtime**: Profile directory, authentication file, configuration file, and shared client-copy status.
+- **Overview** — Plan, runtime and authentication status, remaining weekly usage, available resets, and each reset credit's expiration date.
+- **Runtime** — Profile directory, authentication and configuration file status, and access to full profile details.
 - **Maintenance**: Export backup, rename, open directory, and delete account.
 
-### 2. 🛡️ Isolated Account Profiles
+Select **Check usage** in **Overview**. If your Codex client supports resets and the account has an available credit, select **Use** next to the credit. If Codex only returns a count, select **Use one reset**. The confirmation dialog shows that the operation uses one credit. If Forge could not verify the result, select **Retry usage reset** to check the same attempt.
+
+<p align="center">
+  <img src="docs/images/profiles-en.png" alt="Account inspector showing weekly usage and Use buttons for two reset credits" />
+</p>
+
+### 2. 🌐 Load Balancing and LAN Sharing
+
+On the home page, select **Load balancing** and click **Launch with load balancing**. Forge starts the local gateway, routes model requests to available accounts, and uses the local Codex session history. When the system Codex client uses file-based ChatGPT authentication, it keeps that sign-in and the native sidebar. Other supported setups use a local Forge key.
+
+If a ChatGPT response hits a recoverable quota limit mid-generation and can be safely resumed, Forge waits for quota to recover while the connection stays open, then continues the response through the original account. The **Participating accounts** table shows which accounts are waiting.
+
+To connect another Windows PC, enable **LAN sharing**, create a personal key, and select **Export Codex setup bundle**. Give the recipient the ZIP and the personal key separately. On the other PC, extract the ZIP, quit Codex, and run `Apply-Forge-Gateway.cmd`. Reopen Codex and sign in with the personal API key. Each LAN key can have a concurrency limit or use **Unlimited**. You can edit that setting after creating the key.
+
+<p align="center">
+  <img src="docs/images/load-balancing-en.png" alt="Load balancing page showing the LAN setup bundle, access keys, participating accounts, and recent requests" />
+</p>
+
+[See setup, restoration, and response resumption details in the Chinese guide](docs/load-balancing.md)
+
+### 3. 🛡️ Account Profiles and Shared Workspace
 
 Each account profile stores its own login credentials and config:
 
@@ -95,13 +117,17 @@ Each account profile stores its own login credentials and config:
 ~/Documents/CodexProfiles/<profile-id>/CodexHome/config.toml
 ```
 
-Account-switching mode replaces `auth.json` with the selected account's credentials; global Codex settings such as model and proxy always use the system `~/.codex/config.toml`. Isolated multi-instance mode uses each account's own `CodexHome/config.toml`.
+Launching with a selected account writes its credentials to the system `~/.codex/auth.json` and opens the installed Codex client. Global settings such as model and proxy use the system `~/.codex/config.toml`. Forge keeps the profile configuration for backups and gateway use.
 
-ChatGPT accounts share local projects, sidebar sections, ordering, project pins, and existing chat assignments. The first launch merges existing account layouts and deduplicates projects by folder. Changes are collected when launching, switching, or stopping accounts and loaded before the target account starts. Other running instances pick up layout changes when reopened.
+When upgrading from a version with isolated launches, existing account folders stay in place. Their session databases stay in their respective `CodexHome` directories, and the system client continues to read its own session database.
 
-Shared data lives in `%LOCALAPPDATA%/CodexForge/shared-workspace.json`. Original state and shared-data backups, with source-path manifests, live in `%LOCALAPPDATA%/CodexForge/backups/shared-workspace/`. Each instance contributes changes relative to its last snapshot. Later persisted snapshots win conflicting field edits; edits are preserved when they conflict with deletion. Credentials, cloud projects, chat contents, and instance databases remain separate. API-key profiles retain their existing launch behavior without loading an account snapshot.
+ChatGPT accounts share local projects, sidebar sections, ordering, project pins, and existing chat assignments. The first launch merges existing account layouts and deduplicates projects by folder. Changes are collected when launching, switching, or stopping accounts and loaded before the target account starts.
 
-### 3. 🔑 Auth Management
+Shared data lives in `%LOCALAPPDATA%/CodexForge/shared-workspace.json`. Original state and shared-data backups, with source-path manifests, live in `%LOCALAPPDATA%/CodexForge/backups/shared-workspace/`. Later persisted snapshots win conflicting field edits; edits are preserved when they conflict with deletion. Credentials and cloud projects are not shared.
+
+When local load balancing uses ChatGPT sign-in, Forge loads the shared workspace just as it does when switching accounts. With the Forge API key, Codex shows its built-in project and chat lists.
+
+### 4. 🔑 Auth Management
 
 There are three ways to add an account:
 
@@ -111,7 +137,7 @@ There are three ways to add an account:
 
 > 💡 Usage refresh runs through the official App Server. Updated authentication is written back to the matching profile.
 
-### 4. 🛠️ Visual TOML Editing with Backups
+### 5. 🛠️ Visual TOML Editing with Backups
 
 Codex Forge reads the active config file:
 
@@ -125,7 +151,7 @@ Before saving changes, it validates the TOML content and backs up the old file t
 %LOCALAPPDATA%/CodexForge/backups/config-toml/
 ```
 
-### 5. 📝 Instruction Template Management (Prompt Injection)
+### 6. 📝 Instruction Template Management (Prompt Injection)
 
 Instruction templates let you quickly switch Codex's system-level behavior prompt. You can save common workflows, coding rules, review standards, or one of the bundled restriction-breaking prompts as Markdown templates and enable them when needed.
 
@@ -168,46 +194,28 @@ Before enabling -> More likely to refuse or answer generically
 After enabling -> More likely to provide security research methodology, testing steps, and verification ideas
 ```
 
-When a template is enabled, Codex Forge does three things:
+When a template is enabled, Codex Forge:
 - Copies the template into the active Codex config directory.
 - Writes `model_instructions_file = "./template-file-name.md"` into `config.toml`.
-- In isolated multi-instance mode, supports syncing to the current account, a selected account, or all accounts.
 
 This means you can switch between default instructions, team rules, and a less restrictive prompt style without editing `config.toml` by hand. Disabling a template only removes the `model_instructions_file` setting; it does not delete saved template files.
-
-### 6. 📦 Isolated Multi-instance Launch
-
-In addition to the default account-switching mode, Codex Forge's featured launch capability is isolated multi-instance mode:
-
-- **Account-switching mode**: The default mode. Switching accounts writes into the system `~/.codex`; one Codex client is recommended.
-- **Isolated multi-instance mode**: On first launch, Forge creates one shared copy from the installed Codex client. All accounts use that copy with separate configuration and runtime data.
-
-Isolated multi-instance mode separates `CodexHome`, `APPDATA`, `LOCALAPPDATA`, and the browser `--user-data-dir`. The copied shared client is stored once under the profile root:
-
-```text
-CodexProfiles/.shared/CodexPortableApp
-CodexProfiles/<profile-id>/CodexHome
-CodexProfiles/<profile-id>/AppData
-```
 
 ### 7. 🎨 Codex Skins
 
 The Codex Skins page includes the built-in **Forge Aurora** theme and lets you import and switch local background images. Imported images stay in the local Forge data directory and are never uploaded.
 
 <p align="center">
-  <img src="docs/images/codex-skin.png" alt="Codex Forge Codex Skins page" />
+  <img src="docs/images/codex-skin-en.png" alt="Codex Forge Skins page showing the built-in Forge Aurora theme" />
 </p>
 
-- Works with both account-switch and isolated multi-instance modes.
 - Supports switching themes, pausing their display, and deleting custom themes.
-- Enabling or disabling skins safely restarts running Codex clients to apply the theme or restore the official appearance.
+- Switching skins on or off may restart a normally launched Codex client. A load-balanced client keeps running. Forge applies the change to an existing managed session or loads the skin the next time you launch Codex from the home page.
 
 ### 8. ⚙️ Settings, Updates, and Project Links
 
 The Settings page centralizes Codex Forge's own configuration:
 
 - **Account profile location**: Change the account profile root. The app prompts you to close running Codex instances before migration.
-- **Launch mode**: Switch between account-switching and isolated multi-instance mode. The first multi-instance launch copies one shared client from the installed app.
 - **Auto start**: Start Codex Forge automatically after Windows sign-in.
 - **Language switching**: Switch between Chinese and English UI.
 - **Version updates**: Show the current version and check for updates manually. When a new version is available, you can view release notes, download in the background, and restart to install.

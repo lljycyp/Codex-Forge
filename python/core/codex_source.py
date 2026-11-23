@@ -1,18 +1,15 @@
 import os
 import json
 import re
-import shutil
 import subprocess
 import sys
 import ctypes
 import ctypes.wintypes
-import time
-import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from core.constants import PORTABLE_APP_DIR_NAME, SOURCE_VERSION_FILE_NAME
-from core.path_utils import get_directory_size, normalize_path_for_match, remove_readonly_path
+from core.path_utils import normalize_path_for_match
 
 
 def read_running_codex_commands():
@@ -56,56 +53,6 @@ $processes = Get-CimInstance Win32_Process -Filter "Name = 'ChatGPT.exe' OR Name
         if isinstance(item, dict) and item.get("ProcessId") and item.get("CommandLine")
     ]
     return [process for process in candidates if _is_client_main_process(process)]
-
-
-def read_processes_in_directory(target_dir, strict=False):
-    """读取主程序或辅助程序位于指定目录内的进程，仅用于客户端副本更新。"""
-    if os.name != "nt":
-        return []
-    env = os.environ.copy()
-    env["CODEX_FORGE_PROCESS_ROOT"] = os.path.abspath(target_dir)
-    script = r"""
-$root = [IO.Path]::GetFullPath($env:CODEX_FORGE_PROCESS_ROOT).TrimEnd('\') + '\'
-$processes = Get-CimInstance Win32_Process | Where-Object {
-  $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
-}
-ConvertTo-Json -InputObject @($processes | Select-Object Name, ProcessId, ParentProcessId, ExecutablePath, CommandLine) -Compress
-"""
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True,
-            text=True,
-            timeout=8,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            env=env,
-        )
-    except Exception as exc:
-        if strict:
-            raise RuntimeError("无法确认 Codex 客户端副本是否仍在使用") from exc
-        return []
-    if result.returncode != 0 or not result.stdout.strip():
-        if strict:
-            raise RuntimeError("无法确认 Codex 客户端副本是否仍在使用")
-        return []
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        if strict:
-            raise RuntimeError("无法确认 Codex 客户端副本是否仍在使用") from exc
-        return []
-    items = payload if isinstance(payload, list) else [payload]
-    return [
-        {
-            "name": str(item.get("Name") or ""),
-            "pid": int(item.get("ProcessId") or 0),
-            "parent_pid": int(item.get("ParentProcessId") or 0),
-            "executable_path": str(item.get("ExecutablePath") or ""),
-            "command_line": str(item.get("CommandLine") or ""),
-        }
-        for item in items
-        if isinstance(item, dict) and item.get("ProcessId")
-    ]
 
 
 def _is_client_main_process(process):
@@ -273,41 +220,6 @@ def find_running_codex_path():
     return ""
 
 
-def get_source_signature(codex_path):
-    """读取源程序关键特征，用于判断账号副本是否需要更新。"""
-    codex_path = Path(codex_path)
-    try:
-        stat = codex_path.stat()
-    except OSError:
-        return {}
-    return {
-        "source_path": str(codex_path),
-        "source_dir": str(codex_path.parent),
-        "package_version": _get_appx_package_version(codex_path),
-        "file_version": get_file_version(codex_path),
-        "size": stat.st_size,
-        "modified_ns": stat.st_mtime_ns,
-    }
-
-
-def _get_appx_package_version(path):
-    """从 WindowsApps 包目录名提取应用版本。"""
-    normalized_parts = Path(path).parts
-    for part in normalized_parts:
-        match = re.match(r"OpenAI\.(?:Codex|ChatGPT)_([^_]+)_", part, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    return ""
-
-
-def get_file_version(path):
-    """读取可执行文件版本号；读取失败时返回空文本。"""
-    try:
-        return read_windows_file_version(Path(path))
-    except Exception:
-        return ""
-
-
 def read_source_signature(target_app_dir):
     """读取共享客户端副本记录的安装源版本信息。"""
     version_path = Path(target_app_dir) / SOURCE_VERSION_FILE_NAME
@@ -319,50 +231,14 @@ def read_source_signature(target_app_dir):
         return {}
 
 
-def write_source_signature(target_app_dir, signature):
-    """写入共享客户端副本对应的安装源版本信息。"""
-    version_path = Path(target_app_dir) / SOURCE_VERSION_FILE_NAME
-    version_path.write_text(json.dumps(signature, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def portable_app_needs_update(source_codex_path, target_app_dir):
-    """判断共享客户端副本是否缺失或落后于安装源。"""
-    source_codex_path = Path(source_codex_path)
-    target_app_dir = Path(target_app_dir)
-    target_codex_path = target_app_dir / source_codex_path.name
-    if not target_codex_path.exists():
-        return True
-    current_signature = get_source_signature(source_codex_path)
-    saved_signature = read_source_signature(target_app_dir)
-    if not saved_signature:
-        return True
-    if "package_version" not in saved_signature and all(
-        saved_signature.get(key) == current_signature.get(key)
-        for key in ("source_path", "file_version", "size", "modified_ns")
-    ):
-        saved_signature["package_version"] = current_signature.get("package_version", "")
-        write_source_signature(target_app_dir, saved_signature)
-        return False
-    return any(
-        saved_signature.get(key) != current_signature.get(key)
-        for key in ("source_path", "package_version", "file_version", "size", "modified_ns")
-    )
-
-
-def get_portable_app_dir(source_codex_path, profile_dir):
-    """商店版按包版本使用独立目录，避免升级时移动仍被外部程序占用的旧目录。"""
-    profile_dir = Path(profile_dir)
-    package_version = _get_appx_package_version(source_codex_path)
-    if not package_version:
-        return profile_dir / PORTABLE_APP_DIR_NAME
-    safe_version = re.sub(r"[^0-9A-Za-z._-]+", "-", package_version).strip("-.")
-    return profile_dir / f"{PORTABLE_APP_DIR_NAME}-{safe_version}"
-
-
 def find_latest_portable_app_dir(profile_dir):
-    """查找当前已准备好的最新共享客户端目录，兼容旧的固定目录。"""
+    """定位旧版客户端副本中的 App Server。"""
     profile_dir = Path(profile_dir)
-    candidates = [profile_dir / PORTABLE_APP_DIR_NAME, *profile_dir.glob(f"{PORTABLE_APP_DIR_NAME}-*")]
+    candidates = [
+        profile_dir / PORTABLE_APP_DIR_NAME,
+        *profile_dir.glob(f"{PORTABLE_APP_DIR_NAME}-*"),
+        profile_dir / "ChatGPTPortableApp",
+    ]
     ready_dirs = [
         directory
         for directory in candidates
@@ -381,161 +257,6 @@ def find_latest_portable_app_dir(profile_dir):
         return version, modified_ns
 
     return max(ready_dirs, key=sort_key)
-
-
-def cleanup_stale_portable_app_dirs(profile_dir, current_app_dir):
-    """删除未运行的旧客户端副本，保留当前目录和无法安全确认的目录。"""
-    profile_dir = Path(profile_dir).resolve()
-    current_app_dir = Path(current_app_dir).resolve()
-    candidates = [profile_dir / PORTABLE_APP_DIR_NAME, *profile_dir.glob(f"{PORTABLE_APP_DIR_NAME}-*")]
-    result = {"removed": [], "in_use": [], "skipped": [], "failed": []}
-
-    for directory in sorted(set(candidates), key=lambda item: item.name.lower()):
-        if not directory.is_dir():
-            continue
-        try:
-            resolved_directory = directory.resolve()
-        except OSError as exc:
-            result["failed"].append({"path": str(directory), "error": str(exc)})
-            continue
-        if resolved_directory == current_app_dir:
-            continue
-        if resolved_directory.parent != profile_dir:
-            result["skipped"].append(str(directory))
-            continue
-        signature = read_source_signature(directory)
-        if not signature.get("source_path") or not (
-            (directory / "ChatGPT.exe").is_file() or (directory / "Codex.exe").is_file()
-        ):
-            result["skipped"].append(str(directory))
-            continue
-        try:
-            if read_processes_in_directory(directory, strict=True):
-                result["in_use"].append(str(directory))
-                continue
-            shutil.rmtree(directory, onerror=remove_readonly_path)
-            result["removed"].append(str(directory))
-        except Exception as exc:
-            result["failed"].append({"path": str(directory), "error": str(exc)})
-
-    return result
-
-
-def prepare_portable_codex_path(source_codex_path, profile_dir, allow_update=True, progress_callback=None):
-    """从安装源原子复制多开账号共用的 Codex 客户端副本。"""
-    source_codex_path = Path(source_codex_path)
-    source_app_dir = source_codex_path.parent
-    profile_dir = Path(profile_dir)
-    target_app_dir = get_portable_app_dir(source_codex_path, profile_dir)
-    target_codex_path = target_app_dir / source_codex_path.name
-    _recover_portable_copy(profile_dir, target_app_dir)
-    if target_codex_path.exists() and not portable_app_needs_update(source_codex_path, target_app_dir):
-        return str(target_codex_path)
-    legacy_app_dir = profile_dir / PORTABLE_APP_DIR_NAME
-    legacy_codex_path = legacy_app_dir / source_codex_path.name
-    if (
-        target_app_dir != legacy_app_dir
-        and legacy_codex_path.exists()
-        and not portable_app_needs_update(source_codex_path, legacy_app_dir)
-    ):
-        return str(legacy_codex_path)
-    if target_codex_path.exists() and not allow_update:
-        return str(target_codex_path)
-
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    source_size = get_directory_size(source_app_dir)
-    required_bytes = source_size + 128 * 1024 * 1024
-    free_bytes = shutil.disk_usage(profile_dir).free
-    if free_bytes < required_bytes:
-        raise OSError(
-            "磁盘空间不足：复制 Codex 客户端需要至少 "
-            f"{required_bytes / 1024 ** 3:.2f} GB，当前可用 {free_bytes / 1024 ** 3:.2f} GB"
-        )
-
-    staging_dir = profile_dir / f".{target_app_dir.name}.new-{uuid.uuid4().hex}"
-    backup_dir = profile_dir / f".{target_app_dir.name}.old-{uuid.uuid4().hex}"
-    try:
-        _copy_app_directory(source_app_dir, staging_dir, source_size, progress_callback)
-        staging_codex_path = staging_dir / source_codex_path.name
-        if not staging_codex_path.is_file():
-            raise FileNotFoundError("Codex 客户端复制不完整，未找到主程序")
-        signature = get_source_signature(source_codex_path)
-        signature["directory_size"] = get_directory_size(staging_dir)
-        write_source_signature(staging_dir, signature)
-        if target_app_dir.exists():
-            _replace_directory_with_retry(target_app_dir, backup_dir)
-        try:
-            _replace_directory_with_retry(staging_dir, target_app_dir)
-        except Exception:
-            if backup_dir.exists() and not target_app_dir.exists():
-                _replace_directory_with_retry(backup_dir, target_app_dir)
-            raise
-        if backup_dir.exists():
-            shutil.rmtree(backup_dir, onerror=remove_readonly_path)
-    finally:
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir, onerror=remove_readonly_path)
-        if backup_dir.exists() and target_app_dir.exists():
-            shutil.rmtree(backup_dir, onerror=remove_readonly_path)
-
-    return str(target_codex_path)
-
-
-def _replace_directory_with_retry(source_dir, target_dir, timeout_seconds=3):
-    """短暂重试 Windows 目录交换，并把持续占用转换为可操作的错误。"""
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        try:
-            os.replace(source_dir, target_dir)
-            return
-        except PermissionError as exc:
-            if getattr(exc, "winerror", None) not in (5, 32) or time.monotonic() >= deadline:
-                raise RuntimeError("Codex 客户端副本仍被后台进程占用，请完全退出 Codex 后重试") from exc
-            time.sleep(0.25)
-
-
-def _recover_portable_copy(profile_dir, target_app_dir):
-    """恢复上次异常中断留下的副本交换目录。"""
-    old_dirs = sorted(profile_dir.glob(f".{target_app_dir.name}.old-*"))
-    if not target_app_dir.exists() and old_dirs:
-        os.replace(old_dirs[-1], target_app_dir)
-        old_dirs = old_dirs[:-1]
-    for directory in old_dirs:
-        if directory.is_dir():
-            shutil.rmtree(directory, onerror=remove_readonly_path)
-    for directory in profile_dir.glob(f".{target_app_dir.name}.new-*"):
-        if directory.is_dir():
-            shutil.rmtree(directory, onerror=remove_readonly_path)
-
-
-def _copy_app_directory(source_dir, target_dir, total_bytes, progress_callback=None):
-    """复制客户端目录并按文件字节报告进度。"""
-    copied_bytes = 0
-    last_percent = 0
-    if progress_callback:
-        progress_callback(0, 0, total_bytes)
-    for root, dirs, files in os.walk(source_dir):
-        root_path = Path(root)
-        relative = root_path.relative_to(source_dir)
-        target_root = target_dir / relative
-        target_root.mkdir(parents=True, exist_ok=True)
-        dirs[:] = [name for name in dirs if not (root_path / name).is_symlink()]
-        for file_name in files:
-            source_file = root_path / file_name
-            if source_file.is_symlink():
-                continue
-            target_file = target_root / file_name
-            shutil.copy2(source_file, target_file)
-            try:
-                copied_bytes += source_file.stat().st_size
-            except OSError:
-                pass
-            percent = 100 if total_bytes <= 0 else min(100, int(copied_bytes * 100 / total_bytes))
-            if progress_callback and percent != last_percent:
-                progress_callback(percent, copied_bytes, total_bytes)
-                last_percent = percent
-    if progress_callback and last_percent < 100:
-        progress_callback(100, copied_bytes, total_bytes)
 
 
 def request_process_close(pid):
@@ -558,55 +279,3 @@ def request_process_close(pid):
 
     user32.EnumWindows(callback_type(callback), 0)
     return matched
-
-
-class VS_FIXEDFILEINFO(ctypes.Structure):
-    _fields_ = [
-        ("dwSignature", ctypes.wintypes.DWORD),
-        ("dwStrucVersion", ctypes.wintypes.DWORD),
-        ("dwFileVersionMS", ctypes.wintypes.DWORD),
-        ("dwFileVersionLS", ctypes.wintypes.DWORD),
-        ("dwProductVersionMS", ctypes.wintypes.DWORD),
-        ("dwProductVersionLS", ctypes.wintypes.DWORD),
-        ("dwFileFlagsMask", ctypes.wintypes.DWORD),
-        ("dwFileFlags", ctypes.wintypes.DWORD),
-        ("dwFileOS", ctypes.wintypes.DWORD),
-        ("dwFileType", ctypes.wintypes.DWORD),
-        ("dwFileSubtype", ctypes.wintypes.DWORD),
-        ("dwFileDateMS", ctypes.wintypes.DWORD),
-        ("dwFileDateLS", ctypes.wintypes.DWORD),
-    ]
-
-
-def read_windows_file_version(path):
-    """通过 Windows Version API 读取文件版本号。"""
-    if sys.platform != "win32":
-        return ""
-    version = ctypes.windll.version
-    file_path = str(path)
-    handle = ctypes.wintypes.DWORD()
-    size = version.GetFileVersionInfoSizeW(file_path, ctypes.byref(handle))
-    if not size:
-        return ""
-
-    buffer = ctypes.create_string_buffer(size)
-    if not version.GetFileVersionInfoW(file_path, 0, size, buffer):
-        return ""
-
-    value = ctypes.wintypes.LPVOID()
-    value_size = ctypes.wintypes.UINT()
-    if not version.VerQueryValueW(buffer, "\\", ctypes.byref(value), ctypes.byref(value_size)):
-        return ""
-    if value_size.value < ctypes.sizeof(VS_FIXEDFILEINFO):
-        return ""
-
-    info = ctypes.cast(value, ctypes.POINTER(VS_FIXEDFILEINFO)).contents
-    return ".".join(
-        str(part)
-        for part in (
-            info.dwFileVersionMS >> 16,
-            info.dwFileVersionMS & 0xFFFF,
-            info.dwFileVersionLS >> 16,
-            info.dwFileVersionLS & 0xFFFF,
-        )
-    )

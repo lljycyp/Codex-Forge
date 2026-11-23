@@ -58,27 +58,6 @@ def check_directory_writable(path):
         return False
 
 
-def get_directory_size(path):
-    """统计目录文件总大小；遇到不可读文件时跳过。"""
-    total = 0
-    for root, dirs, files in os.walk(path):
-        root_path = Path(root)
-        dirs[:] = [
-            directory_name
-            for directory_name in dirs
-            if not is_reparse_point(root_path / directory_name)
-        ]
-        for file_name in files:
-            file_path = root_path / file_name
-            if is_reparse_point(file_path):
-                continue
-            try:
-                total += file_path.stat().st_size
-            except OSError:
-                continue
-    return total
-
-
 def format_size(size):
     """把字节数格式化为更适合提示用户的大小。"""
     if size >= 1024 * 1024 * 1024:

@@ -13,6 +13,8 @@ from core import shared_workspace_service
 
 ACCOUNT_STATE = "electron-account-renderer-state-v1"
 ATOMS = "electron-persisted-atom-state"
+OWNER_ATOMS = "electron-owner-atoms:"
+RENDERER_OWNER = "electron-renderer-content-owner"
 SECTIONS = "sidebar-custom-sections-v3"
 
 
@@ -126,6 +128,56 @@ class SharedWorkspaceTest(unittest.TestCase):
         self.assertEqual(state[ATOMS]["chatgpt-sidebar-state-v2"], {"secret": "account-only"})
         self.assertIn("chatgpt:project:cloud", state[ATOMS][SECTIONS]["another-team"]["sections"][0]["itemKeys"])
         self.assertEqual(auth_path.read_bytes(), original_auth)
+
+    def test_owner_scoped_sidebar_is_shared_when_switching_accounts(self):
+        current = snapshot({"p": project("p", "D:\\Code")}, account="first-team")
+        source_bucket = current["atoms"][SECTIONS]["first-team"]
+        source_bucket["sections"][0]["hostSectionIds"] = {"local": "server-section"}
+        source_bucket["sections"][0]["itemKeys"].append("chatgpt:project:private-source")
+        source_bucket["collapsedSectionIds"] = ["section"]
+        source_key = OWNER_ATOMS + owner("a", "first-team")
+        target_key = OWNER_ATOMS + owner("b", "second-team")
+        target = {"chatgpt-sidebar-state-v2": {"private": True}}
+        state = {**current["globals"], source_key: current["atoms"], target_key: target,
+                 RENDERER_OWNER: owner("a", "first-team")}
+        write_json(self.state_path, state)
+
+        result = self.sync(account="second-team")
+        projected = json.loads(self.state_path.read_bytes())
+        target_bucket = projected[target_key][SECTIONS]["second-team"]
+
+        self.assertEqual(result["sectionCount"], 1)
+        self.assertEqual(target_bucket["sections"][0]["name"], "后端服务")
+        self.assertEqual(target_bucket["sections"][0]["itemKeys"], ["codex:project:p"])
+        self.assertEqual(target_bucket["sections"][0]["hostSectionIds"], {"local": "server-section"})
+        self.assertEqual(target_bucket["sectionOrder"], source_bucket["sectionOrder"])
+        self.assertEqual(target_bucket["collapsedSectionIds"], ["section"])
+        self.assertEqual(projected[target_key]["chatgpt-sidebar-state-v2"], target["chatgpt-sidebar-state-v2"])
+        self.assertEqual(projected[source_key], state[source_key])
+        self.assertEqual(projected[RENDERER_OWNER], state[RENDERER_OWNER])
+        self.assertNotIn(ACCOUNT_STATE, projected)
+
+        projected[RENDERER_OWNER] = owner("b", "second-team")
+        target_bucket["sections"][0]["name"] = "共享分区"
+        write_json(self.state_path, projected)
+        self.sync("a", "first-team")
+        restored = json.loads(self.state_path.read_bytes())[source_key][SECTIONS]["first-team"]
+        self.assertEqual(restored["sections"][0]["name"], "共享分区")
+        self.assertIn("chatgpt:project:private-source", restored["sections"][0]["itemKeys"])
+
+    def test_owner_scoped_sections_in_new_home_are_queued_for_local_migration(self):
+        current = snapshot({"p": project("p", "D:\\Code")})
+        current["atoms"][SECTIONS]["team"]["sections"][0]["hostSectionIds"] = {"local": "server-section"}
+        write_json(self.state_path, {**current["globals"], OWNER_ATOMS + owner("a"): current["atoms"],
+                                     RENDERER_OWNER: owner("a")})
+        other = self.root / "other"
+
+        self.sync(target=other)
+        projected = json.loads((other / self.state_path.name).read_bytes())
+        bucket = projected[OWNER_ATOMS + owner("b")][SECTIONS]["team"]
+        self.assertNotIn("hostSectionIds", bucket["sections"][0])
+        self.assertEqual(bucket["appServerLegacySectionIds"], ["section"])
+        self.assertNotIn(ACCOUNT_STATE, projected)
 
     def test_edits_and_deletions_survive_a_b_a_without_reviving_inactive_snapshots(self):
         self.install_state(snapshot({"p": project("p", "D:\\Code"), "q": project("q", "D:\\Other")}))

@@ -18,6 +18,7 @@ import {
 } from "antd";
 import {
   Archive,
+  ChevronRight,
   Download,
   FolderOpen,
   Info,
@@ -36,14 +37,15 @@ import {
 } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
-import type { ProfileSummary, ProfileUsage, ProfileUsageWindow, RunCommand } from "../types";
+import type { AppState, ProfileSummary, ProfileUsage, ProfileUsageWindow, ResetCredit, RunCommand } from "../types";
 
 type ProfilesProps = {
   profiles: ProfileSummary[];
   runningCount: number;
-  launchMode: "switch" | "multi";
+  systemAuthMode: AppState["systemAuthMode"];
   privacyMode: boolean;
   runCommand: RunCommand;
+  onUsageUpdated: (profileId: string, usage: ProfileUsage) => void;
   loading: boolean;
 };
 
@@ -60,13 +62,36 @@ type ProfileDetail = ProfileSummary & {
   };
 };
 
+type ResetAttempt = {
+  attemptId: string;
+  scope: string;
+  credit: ResetCredit | null;
+  workspaceName?: string | null;
+};
+
+type ResetResult = {
+  outcome: "reset" | "alreadyRedeemed" | "nothingToReset" | "noCredit" | "creditUnavailable" | "chooseCredit" | "accountChanged" | "unsupported" | "unavailable";
+  usage?: ProfileUsage;
+};
+
+const resetAttemptsKey = "codexForge.resetAttempts";
+
+function readResetAttempts(): Record<string, ResetAttempt> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(resetAttemptsKey) || "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch {
+    return {};
+  }
+}
+
 const profileRowBaseClass =
   "relative grid cursor-pointer grid-cols-[minmax(150px,1fr)_minmax(150px,0.62fr)_auto] items-center gap-3 overflow-hidden rounded-[10px] border border-slate-200/80 bg-white px-3.5 py-3 transition-[border-color,background-color,box-shadow] duration-200 hover:border-slate-300 hover:shadow-[0_5px_16px_rgba(15,23,42,0.04)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 max-[960px]:grid-cols-1";
 
 const profilePillBaseClass =
   "inline-flex h-[22px] items-center rounded-[6px] px-2 text-[11.5px] font-bold leading-none border";
 
-export function Profiles({ profiles, runningCount, launchMode, privacyMode, runCommand, loading }: ProfilesProps) {
+export function Profiles({ profiles, runningCount, systemAuthMode, privacyMode, runCommand, onUsageUpdated, loading }: ProfilesProps) {
   const { language, t } = useI18n();
   const [createOpen, setCreateOpen] = useState(false);
   const [createMode, setCreateMode] = useState<"oauth" | "current" | "file">("oauth");
@@ -82,6 +107,7 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
     Set<string>
   >(() => new Set());
   const [refreshingAllUsage, setRefreshingAllUsage] = useState(false);
+  const [resetAttempts, setResetAttempts] = useState(readResetAttempts);
   const [detailLoading, setDetailLoading] = useState(false);
   const [profileDetail, setProfileDetail] = useState<ProfileDetail | null>(null);
   const [selectedProfileName, setSelectedProfileName] = useState("");
@@ -118,7 +144,7 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
     profile: ProfileSummary,
     stopRunningFirst = false,
   ) => {
-    const hasRunningCodex = launchMode === "switch" && runningCount > 0;
+    const hasRunningCodex = runningCount > 0;
     const pendingText = profile.running
       ? t("停止中")
       : hasRunningCodex
@@ -157,7 +183,7 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
   };
 
   const toggleProfileRunning = (profile: ProfileSummary) => {
-    if (profile.running || launchMode === "multi" || runningCount === 0) {
+    if (profile.running || runningCount === 0) {
       void executeProfileToggle(profile);
       return;
     }
@@ -203,6 +229,72 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
         return next;
       });
     }
+  };
+
+  const confirmResetCredit = (profile: ProfileSummary, credit: ResetCredit | null) => {
+    const pending = resetAttempts[profile.id];
+    const scope = pending?.scope ?? profile.usage?.resetAccountScope;
+    if (!scope) return;
+
+    const attempt = pending ?? {
+      attemptId: crypto.randomUUID(),
+      scope,
+      credit,
+      workspaceName: profile.usage?.workspaceName,
+    };
+    const saveAttempt = (value: ResetAttempt | null) => {
+      const stored = readResetAttempts();
+      if (value) stored[profile.id] = value;
+      else delete stored[profile.id];
+      localStorage.setItem(resetAttemptsKey, JSON.stringify(stored));
+      setResetAttempts(stored);
+    };
+
+    Modal.confirm({
+      title: t(pending ? "重试重置额度" : "确认重置额度"),
+      content: (
+        <div className="grid gap-2">
+          <div>{t("账号")} · {maskSensitive(profile.name, privacyMode)}</div>
+          {attempt.workspaceName ? <div>{t("工作区")} · {attempt.workspaceName}</div> : null}
+          {attempt.credit ? <div>{t("所选卡到期时间")} · {attempt.credit.expiresAt == null ? t("无到期时间") : formatTimestamp(attempt.credit.expiresAt, language)}</div> : null}
+          <div>{t(pending ? "将核对上次重置结果，已完成的操作不会再次扣次。" : "将消耗 1 次重置权益。")}</div>
+        </div>
+      ),
+      okText: t(pending ? "重试" : "确认重置"),
+      cancelText: t("取消"),
+      onOk: async () => {
+        try {
+          saveAttempt(attempt);
+          const result = await invokeLauncher<ResetResult>("reset_profile_usage", {
+            name: profile.name,
+            profileId: profile.id,
+            scope: attempt.scope,
+            attemptId: attempt.attemptId,
+            creditId: attempt.credit?.id ?? null,
+            retry: Boolean(pending),
+          });
+          saveAttempt(null);
+          if (result.usage) onUsageUpdated(profile.id, result.usage);
+          if (result.outcome === "reset" || result.outcome === "alreadyRedeemed") {
+            if (result.usage?.error) message.warning(t("重置成功，额度待更新。请重新查询额度。"));
+            else message.success(t("Codex 额度已重置"));
+            return;
+          }
+          const notices = {
+            nothingToReset: "当前没有可重置的额度窗口",
+            noCredit: "该账号没有可用的重置次数",
+            creditUnavailable: "所选卡已不可用，请重新选择",
+            chooseCredit: "已取得卡片明细，请选择一张使用",
+            accountChanged: "账号认证已变化，请重新查询额度后再选择",
+            unsupported: "当前 Codex 版本不支持重置额度，请更新 Codex",
+            unavailable: "暂时无法核对重置权益，请重新查询额度",
+          };
+          message.warning(t(notices[result.outcome]));
+        } catch {
+          message.error(t("未能确认重置结果，请重试同一次操作"));
+        }
+      },
+    });
   };
 
   const chooseAuthJsonFile = async () => {
@@ -274,6 +366,10 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
   );
   const recommendedProfileName = getRecommendedProfileName(profiles);
   const runningProfiles = profiles.filter((profile) => profile.running);
+  const detailProfile = profiles.find((profile) => profile.id === profileDetail?.id);
+  const currentDetail = profileDetail && detailProfile
+    ? { ...profileDetail, active: detailProfile.active, running: detailProfile.running }
+    : profileDetail;
   const selectedProfile =
     profiles.find((profile) => profile.name === selectedProfileName)
     ?? profiles.find((profile) => profile.running)
@@ -299,8 +395,9 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
   return (
     <div className="mx-auto grid w-full max-w-[1480px] gap-4">
       <RuntimeWorkspace
-        launchMode={launchMode}
         runningProfiles={runningProfiles}
+        runningCount={runningCount}
+        systemAuthMode={systemAuthMode}
         abnormalCount={abnormalProfileCount}
         t={t}
         onSelectProfile={setSelectedProfileName}
@@ -362,7 +459,7 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
               visibleProfiles.map((profile) => {
                 const isSelected = selectedProfile?.name === profile.name;
                 const isPending = pendingProfileNames.has(profile.name);
-                const launchText = getProfileLaunchText(profile, runningCount, launchMode, t);
+                const launchText = getProfileLaunchText(profile, runningCount, t);
                 return (
                   <article
                     key={profile.name}
@@ -385,7 +482,7 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11.5px] text-slate-500">
                         <span className={profile.running ? "font-semibold text-emerald-600" : ""}>{profile.running ? t("运行中") : t("就绪")}</span>
                         {!profile.authExists ? <span className="font-semibold text-amber-600">{t("认证缺失")}</span> : null}
-                        {launchMode === "switch" && profile.active ? <span className="font-semibold text-blue-600">{t("当前账号")}</span> : null}
+                        {profile.active ? <span className="font-semibold text-blue-600">{t("当前账号")}</span> : null}
                       </div>
                     </div>
                     <div className="grid min-w-0 gap-2">
@@ -423,15 +520,17 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
         <aside className="sticky top-0 min-w-0 overflow-hidden rounded-panel border border-shell-line bg-white shadow-[0_10px_28px_rgba(15,23,42,0.045)] max-[1050px]:static" aria-label={t("账号检查器")}>
           <ProfileInspector
             profile={selectedProfile}
-            launchMode={launchMode}
             recommendedProfileName={recommendedProfileName}
             privacyMode={privacyMode}
             language={language}
             t={t}
             refreshing={selectedProfile ? pendingUsageProfileNames.has(selectedProfile.name) : false}
+            refreshingAllUsage={refreshingAllUsage}
+            resetPending={selectedProfile ? Boolean(resetAttempts[selectedProfile.id]) : false}
             detailLoading={detailLoading}
             onToggleRunning={toggleProfileRunning}
             onRefreshUsage={refreshProfileUsage}
+            onResetCredit={confirmResetCredit}
             onOpenDetail={openDetail}
             onExportBackup={exportBackup}
             onRename={setRenameTarget}
@@ -508,7 +607,7 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
           ) : (
             <Typography.Paragraph className="!mt-0 text-sm text-slate-500">
               {language === "en-US" ? "Save the current Codex " : "将保存当前 Codex 的 "}<Typography.Text code>auth.json</Typography.Text>{language === "en-US" ? ". The system " : "；系统 "}
-              <Typography.Text code>config.toml</Typography.Text>{language === "en-US" ? " will be used as the initial isolated-mode config." : " 会作为多开隔离模式的初始账号配置。"}
+              <Typography.Text code>config.toml</Typography.Text>{language === "en-US" ? " will be copied as the initial account configuration." : " 会作为初始账号配置。"}
             </Typography.Paragraph>
           )}
           <Form.Item
@@ -604,9 +703,9 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
         onClose={() => setProfileDetail(null)}
         styles={{ body: { padding: 0 } }}
       >
-        {profileDetail ? (
+        {currentDetail ? (
           <ProfileDetailPanel
-            detail={profileDetail}
+            detail={currentDetail}
             language={language}
             privacyMode={privacyMode}
             t={t}
@@ -629,19 +728,20 @@ export function Profiles({ profiles, runningCount, launchMode, privacyMode, runC
 }
 
 function RuntimeWorkspace({
-  launchMode,
   runningProfiles,
+  runningCount,
+  systemAuthMode,
   abnormalCount,
   t,
   onSelectProfile,
 }: {
-  launchMode: "switch" | "multi";
   runningProfiles: ProfileSummary[];
+  runningCount: number;
+  systemAuthMode: AppState["systemAuthMode"];
   abnormalCount: number;
   t: (text: string) => string;
   onSelectProfile: (name: string) => void;
 }) {
-  const isMulti = launchMode === "multi";
   return (
     <section className="grid grid-cols-[minmax(250px,0.8fr)_minmax(0,1.35fr)_168px] overflow-hidden rounded-panel border border-shell-line bg-[linear-gradient(115deg,rgba(238,252,248,0.9),#fff_45%)] shadow-[0_8px_24px_rgba(15,23,42,0.04)] max-[960px]:grid-cols-1" aria-label={t("运行工作台")}>
       <div className="flex items-center gap-3.5 border-r border-slate-100 px-4 py-3.5 max-[960px]:border-b max-[960px]:border-r-0">
@@ -650,11 +750,9 @@ function RuntimeWorkspace({
         </span>
         <div className="min-w-0">
           <div className="text-[10.5px] font-bold tracking-[0.08em] text-slate-400">{t("当前模式")}</div>
-          <div className="mt-0.5 truncate text-[14px] font-extrabold text-slate-900">{isMulti ? t("多开隔离模式") : t("账号切换模式")}</div>
+          <div className="mt-0.5 truncate text-[14px] font-extrabold text-slate-900">{t("账号切换模式")}</div>
           <div className="mt-0.5 truncate text-[11px] text-slate-500">
-            {isMulti
-              ? t("每个账号使用独立运行环境")
-              : t("单实例共用系统配置")}
+            {t("单实例共用系统配置")}
           </div>
         </div>
       </div>
@@ -670,13 +768,15 @@ function RuntimeWorkspace({
                 <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.13)]" />
                 <span className="truncate">{profile.name}</span>
               </button>
-            )) : (
+            )) : runningCount ? (
+              <StatusPill tone="green" text={t(systemAuthMode === "api" ? "API Key 登录" : "系统 Codex")} />
+            ) : (
               <span className="text-[13px] font-medium text-slate-400">{t("暂无运行实例")}</span>
             )}
           </div>
       </div>
       <div className="grid grid-cols-2 gap-2 border-l border-slate-100 px-3 py-3.5 max-[960px]:border-l-0">
-        <RuntimeMetric label={t("运行中")} value={runningProfiles.length} tone={runningProfiles.length ? "green" : "slate"} />
+        <RuntimeMetric label={t("运行中")} value={runningCount} tone={runningCount ? "green" : "slate"} />
         <RuntimeMetric label={t("需处理")} value={abnormalCount} tone={abnormalCount ? "red" : "slate"} />
       </div>
     </section>
@@ -695,15 +795,17 @@ function RuntimeMetric({ label, value, tone }: { label: string; value: number; t
 
 function ProfileInspector({
   profile,
-  launchMode,
   recommendedProfileName,
   privacyMode,
   language,
   t,
   refreshing,
+  refreshingAllUsage,
+  resetPending,
   detailLoading,
   onToggleRunning,
   onRefreshUsage,
+  onResetCredit,
   onOpenDetail,
   onExportBackup,
   onRename,
@@ -711,15 +813,17 @@ function ProfileInspector({
   onOpenPath,
 }: {
   profile: ProfileSummary | null;
-  launchMode: "switch" | "multi";
   recommendedProfileName: string;
   privacyMode: boolean;
   language: "zh-CN" | "en-US";
   t: (text: string) => string;
   refreshing: boolean;
+  refreshingAllUsage: boolean;
+  resetPending: boolean;
   detailLoading: boolean;
   onToggleRunning: (profile: ProfileSummary) => void;
   onRefreshUsage: (profile: ProfileSummary) => Promise<void>;
+  onResetCredit: (profile: ProfileSummary, credit: ResetCredit | null) => void;
   onOpenDetail: (profile: ProfileSummary) => void;
   onExportBackup: (profile: ProfileSummary) => Promise<void>;
   onRename: (profile: ProfileSummary) => void;
@@ -732,7 +836,7 @@ function ProfileInspector({
 
   const healthy = isHealthyProfile(profile) && !profile.usage?.error;
   const isRecommended = profile.name === recommendedProfileName;
-  const launchText = profile.running ? t("关闭") : launchMode === "multi" ? t("启动") : t("切换");
+  const launchText = profile.running ? t("关闭") : t("切换");
   const openProfilePath = () => onOpenPath(profile.profileDir);
 
   return (
@@ -771,15 +875,21 @@ function ProfileInspector({
                 ) : null}
                 <div className="grid gap-3">
                   {profile.usage?.oneWeek ? <UsageMeter label={t("一周额度")} language={language} window={profile.usage.oneWeek} /> : null}
-                  <ResetCreditSummary usage={profile.usage} language={language} />
+                  <ResetCreditSummary
+                    usage={profile.usage}
+                    language={language}
+                    onUseCredit={(credit) => onResetCredit(profile, credit)}
+                    disabled={refreshing || refreshingAllUsage}
+                    resetPending={resetPending}
+                  />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <InspectorStat label={t("套餐")} value={formatPlanType(profile.usage?.planType, t)} />
                   <InspectorStat label={t("运行状态")} value={profile.running ? t("运行中") : t("就绪")} />
                   <InspectorStat label={t("认证状态")} value={profile.authExists ? t("认证正常") : t("认证缺失")} />
-                  <InspectorStat label={t("当前账号")} value={launchMode === "switch" && profile.active ? t("是") : t("否")} />
+                  <InspectorStat label={t("当前账号")} value={profile.active ? t("是") : t("否")} />
                 </div>
-                <Button icon={<RefreshCw size={14} />} loading={refreshing} onClick={() => void onRefreshUsage(profile)}>{t("刷新额度")}</Button>
+                <Button icon={<RefreshCw size={14} />} loading={refreshing} onClick={() => void onRefreshUsage(profile)}>{t("查询额度")}</Button>
               </div>
             ),
           },
@@ -791,7 +901,6 @@ function ProfileInspector({
                 <InspectorRow label={t("账号目录")} value={maskPath(profile.profileDir, privacyMode)} />
                 <InspectorRow label="auth.json" value={profile.authExists ? t("存在") : t("缺失")} />
                 <InspectorRow label="config.toml" value={profile.configExists ? t("存在") : t("缺失")} />
-                {launchMode === "multi" ? <InspectorRow label={t("独立账号环境")} value={profile.codexHomeExists ? t("已就绪") : t("待初始化")} /> : null}
                 <Button icon={<FolderOpen size={14} />} onClick={openProfilePath}>{t("打开目录")}</Button>
                 <Button icon={<Info size={14} />} loading={detailLoading} onClick={() => onOpenDetail(profile)}>{t("查看完整详情")}</Button>
               </div>
@@ -906,7 +1015,7 @@ function ProfileDetailPanel({
       </div>
 
       <div className="grid gap-4 p-6">
-        <div className="grid grid-cols-3 gap-3 max-[960px]:grid-cols-1">
+        <div className="grid grid-cols-2 gap-3 max-[960px]:grid-cols-1">
           <DetailMetric
             icon={<KeyRound size={17} />}
             label={t("认证状态")}
@@ -918,12 +1027,6 @@ function ProfileDetailPanel({
             label={t("套餐")}
             value={planText}
             tone="blue"
-          />
-          <DetailMetric
-            icon={<Archive size={17} />}
-            label={t("账号运行环境")}
-            value={detail.codexHomeExists ? t("已就绪") : t("待初始化")}
-            tone={detail.codexHomeExists ? "green" : "slate"}
           />
         </div>
 
@@ -989,9 +1092,6 @@ function ProfileDetailPanel({
                     <PathRow label={t("账号目录")} path={detail.profileDir} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
                     <PathRow label="auth.json" path={detail.authPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
                     <PathRow label="config.toml" path={detail.configPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
-                    {detail.codexHome ? (
-                      <PathRow label="CodexHome" path={detail.codexHome} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
-                    ) : null}
                   </div>
                 ),
               },
@@ -1125,15 +1225,10 @@ function isHealthyProfile(profile: ProfileSummary) {
 function getProfileLaunchText(
   profile: ProfileSummary,
   runningCount: number,
-  launchMode: "switch" | "multi",
   t: (text: string) => string,
 ) {
   if (profile.running) {
     return t("关闭");
-  }
-
-  if (launchMode === "multi") {
-    return t("启动");
   }
 
   return runningCount > 0 ? t("切换") : t("启动");
@@ -1281,16 +1376,21 @@ function ResetCreditSummary({
   usage,
   language,
   compact = false,
+  onUseCredit,
+  disabled,
+  resetPending,
 }: {
   usage: ProfileUsage | null;
   language: "zh-CN" | "en-US";
   compact?: boolean;
+  onUseCredit?: (credit: ResetCredit | null) => void;
+  disabled?: boolean;
+  resetPending?: boolean;
 }) {
+  const { t } = useI18n();
   const count = usage?.resetCredits;
-  const expiries = usage?.resetCreditExpiresAt ?? [];
+  const cards = usage?.resetCreditItems ?? [];
   const countText = count == null ? "-" : language === "en-US" ? `${count} available` : `${count} 次可用`;
-  const expiryDates = expiries.map((value) => formatTimestamp(value, language));
-  const emptyExpiryText = language === "en-US" ? "No expiration returned" : "未返回过期时间";
 
   if (compact) {
     return (
@@ -1303,6 +1403,11 @@ function ResetCreditSummary({
       </div>
     );
   }
+
+  const canUseCredit = Boolean(onUseCredit && usage?.resetAccountScope && (count ?? 0) > 0 && !resetPending);
+  const rows = cards.length
+    ? cards.map((card) => ({ key: card.id, expiresAt: card.expiresAt, card }))
+    : (usage?.resetCreditExpiresAt ?? []).map((expiresAt, index) => ({ key: `expiry-${index}`, expiresAt, card: null }));
 
   return (
     <section className="overflow-hidden rounded-[9px] border border-brand-100 bg-brand-50/55">
@@ -1318,11 +1423,36 @@ function ResetCreditSummary({
         </div>
         <strong className="shrink-0 text-[22px] font-bold tracking-[-0.04em] text-brand-700 tabular-nums">{countText}</strong>
       </div>
-      {expiryDates.length ? (
-        <div className="grid gap-1 border-t border-brand-100/80 bg-white/60 px-3.5 py-2 text-[11px] text-slate-500">
-          {expiryDates.map((date, index) => <div key={`${date}-${index}`}><span className="mr-2 font-semibold text-slate-400">#{index + 1}</span>{date}</div>)}
-        </div>
-      ) : <div className="border-t border-brand-100/80 bg-white/60 px-3.5 py-2 text-[11px] text-slate-400">{emptyExpiryText}</div>}
+      <div className="grid gap-1 border-t border-brand-100/80 bg-white/60 px-3.5 py-2 text-[11px] text-slate-500">
+        {rows.map(({ key, expiresAt, card }, index) => (
+          <div key={key} className="flex min-w-0 items-center justify-between gap-2">
+            <span>
+              <span className="mr-2 font-semibold text-slate-400">#{index + 1}</span>
+              {expiresAt == null ? t("无到期时间") : formatTimestamp(expiresAt, language)}
+            </span>
+            {card && canUseCredit ? (
+              <Button
+                size="small"
+                color="primary"
+                variant="text"
+                icon={<ChevronRight size={13} aria-hidden />}
+                iconPosition="end"
+                autoInsertSpace={false}
+                className="shrink-0 !gap-1 !px-2 !text-xs !font-medium enabled:!text-teal-700 enabled:hover:!bg-brand-50"
+                disabled={disabled || (expiresAt != null && expiresAt <= Date.now() / 1000)}
+                onClick={() => onUseCredit?.(card)}
+              >
+                {t("使用")}
+              </Button>
+            ) : null}
+          </div>
+        ))}
+        {resetPending ? (
+          <Button size="small" className="justify-self-start" disabled={disabled} onClick={() => onUseCredit?.(null)}>{t("重试重置额度")}</Button>
+        ) : canUseCredit && !cards.length ? (
+          <Button size="small" className="justify-self-start" disabled={disabled} onClick={() => onUseCredit?.(null)}>{t("使用 1 次")}</Button>
+        ) : !rows.length ? <div className="text-slate-400">{t("未返回过期时间")}</div> : null}
+      </div>
     </section>
   );
 }

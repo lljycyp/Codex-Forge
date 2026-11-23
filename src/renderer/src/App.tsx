@@ -31,13 +31,15 @@ const emptyState: AppState = {
   activeConfigPath: "",
   activeConfigExists: false,
   activeProfile: "",
+  systemAuthMode: "",
   shareSystemConfig: true,
-  launchMode: "switch",
   codexSkinEnabled: false,
   profileRoot: "",
   profileRootExists: false,
   profileCount: 0,
   runningCount: 0,
+  balancedRunning: false,
+  balancedUsesSystemAuth: false,
   authCredentialStore: "file"
 };
 
@@ -160,6 +162,16 @@ export default function App() {
     return snapshot.profiles;
   }, []);
 
+  const updateProfileUsage = useCallback((profileId: string, usage: ProfileUsage) => {
+    const nextProfiles = profilesRef.current.map((profile) => (
+      profile.id === profileId && usage.fetchedAt >= (profile.usage?.fetchedAt ?? 0)
+        ? { ...profile, usage }
+        : profile
+    ));
+    profilesRef.current = nextProfiles;
+    setProfiles(nextProfiles);
+  }, []);
+
   const refresh = useCallback(async (view?: ViewKey | null) => {
     const refreshToken = view ? ++refreshTokenRef.current : refreshTokenRef.current;
     if (view) {
@@ -233,11 +245,12 @@ export default function App() {
       autoUsageRefreshingRef.current = true;
       try {
         const result = await invokeLauncher<{ profiles: Record<string, ProfileUsage | null> }>("refresh_all_profile_usage");
-        const nextProfiles = profilesRef.current.map((profile) => (
-          Object.prototype.hasOwnProperty.call(result.profiles, profile.name)
-            ? { ...profile, usage: result.profiles[profile.name] }
-            : profile
-        ));
+        const nextProfiles = profilesRef.current.map((profile) => {
+          const usage = result.profiles[profile.name];
+          return usage && usage.fetchedAt >= (profile.usage?.fetchedAt ?? 0)
+            ? { ...profile, usage }
+            : profile;
+        });
         profilesRef.current = nextProfiles;
         setProfiles(nextProfiles);
         await notifyLowUsage(nextProfiles, t);
@@ -256,7 +269,7 @@ export default function App() {
   }, [initialLoading, t]);
 
   useEffect(() => {
-    if (initialLoading || activeView !== "profiles") {
+    if (initialLoading || (activeView !== "profiles" && activeView !== "home")) {
       return undefined;
     }
 
@@ -267,18 +280,25 @@ export default function App() {
       runtimeStatusRefreshingRef.current = true;
       try {
         const runtimeStatus = await invokeLauncher<RuntimeStatus>("get_runtime_status");
+        const { runningCount, balancedRunning, balancedUsesSystemAuth, activeProfile, systemAuthMode } = runtimeStatus;
         setAppState((current) => (
-          current.runningCount === runtimeStatus.runningCount
+          current.runningCount === runningCount &&
+          current.balancedRunning === balancedRunning &&
+          current.balancedUsesSystemAuth === balancedUsesSystemAuth &&
+          current.activeProfile === activeProfile &&
+          current.systemAuthMode === systemAuthMode
             ? current
-            : { ...current, runningCount: runtimeStatus.runningCount }
+            : { ...current, runningCount, balancedRunning, balancedUsesSystemAuth, activeProfile, systemAuthMode }
         ));
-        const runningChanged = profilesRef.current.some(
-          (profile) => profile.running !== (runtimeStatus.profiles[profile.name] ?? false),
+        const runtimeChanged = profilesRef.current.some(
+          (profile) => profile.running !== (runtimeStatus.profiles[profile.name] ?? false) ||
+            profile.active !== (profile.name === activeProfile),
         );
-        if (runningChanged) {
+        if (runtimeChanged) {
           const nextProfiles = profilesRef.current.map((profile) => ({
             ...profile,
             running: runtimeStatus.profiles[profile.name] ?? false,
+            active: profile.name === activeProfile,
           }));
           profilesRef.current = nextProfiles;
           setProfiles(nextProfiles);
@@ -451,7 +471,6 @@ export default function App() {
     <>
       <AppLayout
         activeView={activeView}
-        launchMode={appState.launchMode}
         menuItems={menuItems}
         taskText={taskText}
         onChangeView={changeView}
@@ -476,9 +495,10 @@ export default function App() {
             <Profiles
               profiles={profiles}
               runningCount={appState.runningCount}
-              launchMode={appState.launchMode}
+              systemAuthMode={appState.systemAuthMode}
               privacyMode={privacyMode}
               runCommand={runCommand}
+              onUsageUpdated={updateProfileUsage}
               loading={commandingView === "profiles" || refreshingView === "profiles"}
             />
           ) : null}
@@ -487,10 +507,10 @@ export default function App() {
             <WorkspacePage appState={appState} profiles={profiles} onDirtyChange={setWorkspaceDirty} />
           ) : null}
           {activeView === "instructions" ? (
-            <InstructionsPage appState={appState} profiles={profiles} />
+            <InstructionsPage />
           ) : null}
           {activeView === "toml" ? (
-            <TomlConfigPage appState={appState} profiles={profiles} onDirtyChange={setTomlDirty} />
+            <TomlConfigPage onDirtyChange={setTomlDirty} />
           ) : null}
           {activeView === "skin" ? (
             <CodexSkinPage appState={appState} runCommand={runCommand} />

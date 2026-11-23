@@ -10,36 +10,23 @@ from unittest.mock import Mock, call, patch
 
 from bridge.commands import (
     _append_codex_skin_args,
-    _get_legacy_system_running_profile,
     get_codex_skin_sessions,
-    _is_profile_running,
     _is_same_auth_account,
     _launch_default_codex,
-    _launch_profile_multi,
     _resolve_codex_app_source_path,
     _resolve_configured_codex_app_path,
-    _running_multi_profile_names,
     _stop_client_processes,
     export_profile_backup,
     ensure_codex_skin_sessions,
     invoke,
     refresh_codex_source,
-    set_launch_mode,
     set_codex_skin_enabled,
 )
 from core.codex_source import (
-    _get_appx_package_version,
     _is_client_main_process,
     _find_appx_client_path,
-    _replace_directory_with_retry,
-    cleanup_stale_portable_app_dirs,
-    find_latest_portable_app_dir,
     find_windowsapps_codex_path_by_package,
-    portable_app_needs_update,
-    prepare_portable_codex_path,
     read_running_codex_processes,
-    read_source_signature,
-    write_source_signature,
 )
 from core.auth_service import auth_kind
 from core.app_server_service import AppServerClient, _exclusive_file_lock, _remove_temporary_directory
@@ -65,29 +52,6 @@ class ChatGptCompatibilityTest(unittest.TestCase):
             expected_lock_path = Path(temp_dir) / ".shared" / ".codex-client-operation.lock"
             operation_lock.assert_called_once_with(expected_lock_path, timeout_seconds=120)
             self.assertTrue(result["ok"])
-
-    def test_portable_directory_replace_retries_transient_windows_lock(self):
-        locked = PermissionError("locked")
-        locked.winerror = 32
-        with (
-            patch("core.codex_source.os.replace", side_effect=[locked, None]) as replace,
-            patch("core.codex_source.time.monotonic", return_value=0),
-            patch("core.codex_source.time.sleep") as sleep,
-        ):
-            _replace_directory_with_retry(Path("old"), Path("backup"))
-
-        self.assertEqual(replace.call_count, 2)
-        sleep.assert_called_once_with(0.25)
-
-    def test_portable_directory_replace_reports_persistent_windows_lock(self):
-        locked = PermissionError("locked")
-        locked.winerror = 32
-        with (
-            patch("core.codex_source.os.replace", side_effect=locked),
-            patch("core.codex_source.time.monotonic", side_effect=[0, 4]),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "Codex 客户端副本仍被后台进程占用"):
-                _replace_directory_with_retry(Path("old"), Path("backup"))
 
     def test_store_source_prefers_latest_installed_package(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -213,75 +177,12 @@ class ChatGptCompatibilityTest(unittest.TestCase):
         assert isinstance(skin_session, dict)
         self.assertEqual(skin_session["processId"], 89)
 
-    def test_multi_mode_launches_registered_client_with_isolated_environment(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            profile_dir = Path(temp_dir) / "profile"
-            store_path = Path("C:/Program Files/WindowsApps/OpenAI.Codex_1.0_x64/app/ChatGPT.exe")
-            alias_path = Path("C:/Local/Microsoft/WindowsApps/OpenAI.Codex_test/chatgpt-desktop.exe")
-            config = {"profile_root": temp_dir, "codex_skin_enabled": True}
-            process = SimpleNamespace(pid=90)
-            with (
-                patch("bridge.commands._get_profile_dir", return_value=profile_dir),
-                patch("bridge.commands.read_running_codex_commands", return_value=""),
-                patch("bridge.commands._resolve_codex_app_source_path", return_value=store_path),
-                patch("bridge.commands.resolve_codex_execution_path", return_value=alias_path) as resolve_execution,
-                patch("bridge.commands.prepare_profile_codex_home"),
-                patch("bridge.commands.db.load_profile_launch_settings", return_value={"args": ["--lang=en-US"], "env": {"CODEX_ELECTRON_USER_DATA_PATH": "C:/must-not-use", "CUSTOM_ENV": "value"}}),
-                patch("bridge.commands._allocate_codex_skin_port", return_value=19336),
-                patch("bridge.commands._sync_shared_workspace") as sync_workspace,
-                patch("bridge.commands.save_config") as save_config,
-                patch("bridge.commands.subprocess.Popen", return_value=process) as popen,
-            ):
-                result = _launch_profile_multi(config, "work")
-
-        command = popen.call_args.args[0]
-        sync_workspace.assert_called_once_with(config, profile_dir / "CodexHome", profile_dir / "CodexHome" / "auth.json")
-        launch_env = popen.call_args.kwargs["env"]
-        resolve_execution.assert_called_once_with(store_path)
-        self.assertEqual(command[0], str(alias_path))
-        self.assertIn("--lang=en-US", command)
-        self.assertIn(f"--user-data-dir={profile_dir / 'AppData' / 'Roaming' / 'Codex' / 'web' / 'Codex'}", command)
-        self.assertIn("--remote-debugging-port=19336", command)
-        self.assertEqual(launch_env["APPDATA"], str(profile_dir / "AppData" / "Roaming"))
-        self.assertEqual(launch_env["LOCALAPPDATA"], str(profile_dir / "AppData" / "Local"))
-        self.assertEqual(launch_env["CODEX_HOME"], str(profile_dir / "CodexHome"))
-        self.assertEqual(launch_env["CODEX_MULTI_PROFILE"], "work")
-        self.assertEqual(launch_env["CODEX_ELECTRON_USER_DATA_PATH"], str(profile_dir / "AppData" / "Roaming" / "Codex"))
-        self.assertEqual(launch_env["CUSTOM_ENV"], "value")
-        self.assertEqual(popen.call_args.kwargs["cwd"], str(store_path.parent))
-        self.assertEqual(result["skinSession"]["processId"], 90)
-        save_config.assert_called_once_with(config)
-
-    def test_multi_mode_without_skin_keeps_alias_and_profile_isolation(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            profile_dir = Path(temp_dir) / "profile"
-            store_path = Path("C:/Program Files/WindowsApps/OpenAI.Codex_1.0_x64/app/ChatGPT.exe")
-            alias_path = Path("C:/Local/Microsoft/WindowsApps/OpenAI.Codex_test/chatgpt-desktop.exe")
-            with (
-                patch("bridge.commands._get_profile_dir", return_value=profile_dir),
-                patch("bridge.commands.read_running_codex_commands", return_value=""),
-                patch("bridge.commands._resolve_codex_app_source_path", return_value=store_path),
-                patch("bridge.commands.resolve_codex_execution_path", return_value=alias_path),
-                patch("bridge.commands.prepare_profile_codex_home"),
-                patch("bridge.commands._sync_shared_workspace"),
-                patch("bridge.commands.db.load_profile_launch_settings", return_value={}),
-                patch("bridge.commands._allocate_codex_skin_port") as allocate_port,
-                patch("bridge.commands.save_config"),
-                patch("bridge.commands.subprocess.Popen") as popen,
-            ):
-                result = _launch_profile_multi({"codex_skin_enabled": False}, "work")
-
-        command = popen.call_args.args[0]
-        self.assertEqual(command, [str(alias_path), f"--user-data-dir={profile_dir / 'AppData' / 'Roaming' / 'Codex' / 'web' / 'Codex'}"])
-        self.assertEqual(popen.call_args.kwargs["env"]["CODEX_ELECTRON_USER_DATA_PATH"], str(profile_dir / "AppData" / "Roaming" / "Codex"))
-        self.assertNotIn("skinSession", result)
-        allocate_port.assert_not_called()
-
     def test_enabling_skin_restarts_running_switch_profile(self):
-        config = {"launch_mode": "switch", "active_profile": "work", "codex_skin_enabled": False}
+        config = {"active_profile": "work", "codex_skin_enabled": False}
         with (
             patch("bridge.commands.load_config", return_value=config),
             patch("bridge.commands._running_codex_count", return_value=1),
+            patch("bridge.commands.read_running_codex_commands", return_value="ChatGPT.exe"),
             patch("bridge.commands._sync_active_auth_to_profile") as sync_auth,
             patch("bridge.commands._stop_running_codex_processes") as stop_clients,
             patch("bridge.commands.save_config") as save_config,
@@ -298,81 +199,6 @@ class ChatGptCompatibilityTest(unittest.TestCase):
         save_config.assert_called_once_with(config)
         launch_client.assert_called_once_with("work", skin_port=19335)
         self.assertEqual(result["skinSessions"][0]["port"], 19335)
-
-    @patch("bridge.commands._launch_profile_multi", return_value={})
-    @patch("bridge.commands._stop_profile_multi")
-    @patch("bridge.commands._running_multi_profile_names", return_value=["alpha"])
-    @patch("bridge.commands.save_config")
-    @patch("bridge.commands.load_config", return_value={"launch_mode": "multi", "codex_skin_enabled": True})
-    def test_disabling_skin_restarts_multi_profile_without_cdp(
-        self,
-        _load_config,
-        save_config,
-        _running_profiles,
-        stop_profile,
-        launch_profile_multi,
-    ):
-        result = set_codex_skin_enabled({"enabled": False})
-
-        config = {"launch_mode": "multi", "codex_skin_enabled": False}
-        save_config.assert_called_once_with(config)
-        stop_profile.assert_called_once_with(config, {"name": "alpha"})
-        launch_profile_multi.assert_called_once_with(config, "alpha", set())
-        self.assertEqual(result["skinSessions"], [])
-
-    def test_entering_multi_mode_syncs_the_active_system_auth(self):
-        config = {"launch_mode": "switch", "active_profile": "work"}
-        with (
-            patch("bridge.commands.load_config", return_value=config),
-            patch("bridge.commands.save_config") as save_config,
-            patch("bridge.commands._sync_active_auth_to_profile") as sync_auth,
-        ):
-            self.assertEqual(set_launch_mode({"mode": "multi"}), {"launchMode": "multi"})
-
-        sync_auth.assert_called_once_with(config, "work")
-        save_config.assert_called_once_with(config)
-
-    @patch("bridge.commands._launch_profile_multi")
-    @patch("bridge.commands._stop_profile_multi")
-    @patch("bridge.commands._running_multi_profile_names", return_value=["alpha", "beta"])
-    @patch("bridge.commands.save_config")
-    @patch("bridge.commands.load_config", return_value={"launch_mode": "multi", "codex_skin_enabled": False})
-    def test_enabling_codex_skin_restarts_running_multi_profiles(
-        self,
-        _load_config,
-        save_config,
-        _running_profiles,
-        stop_profile,
-        launch_profile_multi,
-    ):
-        seen_reserved_ports = []
-
-        def launch_with_reserved_port(_config, profile_name, reserved_ports):
-            seen_reserved_ports.append(set(reserved_ports))
-            offset = len(seen_reserved_ports) - 1
-            return {
-                "skinSession": {
-                    "profileName": profile_name,
-                    "port": 19335 + offset,
-                    "processId": 101 + offset,
-                }
-            }
-
-        launch_profile_multi.side_effect = launch_with_reserved_port
-
-        result = set_codex_skin_enabled({"enabled": True})
-
-        config = {"launch_mode": "multi", "codex_skin_enabled": True}
-        save_config.assert_called_once_with(config)
-        self.assertEqual(
-            stop_profile.call_args_list,
-            [call(config, {"name": "alpha"}), call(config, {"name": "beta"})],
-        )
-        self.assertEqual(seen_reserved_ports, [set(), {19335}])
-        self.assertEqual(
-            [session["profileName"] for session in result["skinSessions"]],
-            ["alpha", "beta"],
-        )
 
     def test_codex_skin_appends_loopback_debugging_arguments(self):
         self.assertEqual(
@@ -394,7 +220,6 @@ class ChatGptCompatibilityTest(unittest.TestCase):
             executable = shared_root / "CodexPortableApp" / "ChatGPT.exe"
             config = {
                 "profile_root": temp_dir,
-                "launch_mode": "switch",
                 "active_profile": "work",
                 "codex_skin_enabled": True,
             }
@@ -444,35 +269,25 @@ class ChatGptCompatibilityTest(unittest.TestCase):
             source = root / "WindowsApps" / "OpenAI.Codex_1.0_x64__test" / "app" / "ChatGPT.exe"
             source.parent.mkdir(parents=True)
             source.write_bytes(b"client")
-            for mode in ("switch", "multi"):
-                with self.subTest(mode=mode):
-                    config = {"profile_root": str(root), "codex_path": str(source), "launch_mode": mode,
-                              "active_profile": "work", "profiles": ["work"], "codex_skin_enabled": True}
-                    user_data = root / "work" / "AppData" / "Roaming" / "Codex" / "web" / "Codex"
-                    process = {"pid": 91, "executable_path": str(source), "command_line": (
-                        f'"C:/Local/Microsoft/WindowsApps/OpenAI.Codex_test/chatgpt-desktop.exe" '
-                        f'--user-data-dir="{user_data}" --remote-debugging-address=127.0.0.1 '
-                        '--remote-debugging-port=19335'
-                    )}
-                    with (
-                        patch("bridge.commands.load_config", return_value=config),
-                        patch("bridge.commands._get_profile_dir", return_value=root / "work"),
-                        patch("bridge.commands.read_running_codex_processes", return_value=[process]),
-                        patch("bridge.commands._running_codex_count", return_value=1),
-                        patch("bridge.commands._running_multi_profile_names", return_value=["work"]),
-                        patch("bridge.commands._sync_active_auth_to_profile"),
-                        patch("bridge.commands._stop_running_codex_processes") as stop_clients,
-                        patch("bridge.commands._stop_profile_multi") as stop_multi,
-                        patch("bridge.commands._launch_default_codex") as launch_default,
-                        patch("bridge.commands._launch_profile_multi") as launch_multi,
-                    ):
-                        result = ensure_codex_skin_sessions()
+            config = {"profile_root": str(root), "codex_path": str(source),
+                      "active_profile": "work", "profiles": ["work"], "codex_skin_enabled": True}
+            process = {"pid": 91, "executable_path": str(source), "command_line": (
+                f'"C:/Local/Microsoft/WindowsApps/OpenAI.Codex_test/chatgpt-desktop.exe" '
+                '--remote-debugging-address=127.0.0.1 --remote-debugging-port=19335'
+            )}
+            with (
+                patch("bridge.commands.load_config", return_value=config),
+                patch("bridge.commands.read_running_codex_processes", return_value=[process]),
+                patch("bridge.commands._running_codex_count", return_value=1),
+                patch("bridge.commands._sync_active_auth_to_profile"),
+                patch("bridge.commands._stop_running_codex_processes") as stop_clients,
+                patch("bridge.commands._launch_default_codex") as launch_default,
+            ):
+                result = ensure_codex_skin_sessions()
 
-                    self.assertEqual(result["skinSessions"], [{"profileName": "work", "port": 19335, "processId": 91}])
-                    stop_clients.assert_not_called()
-                    stop_multi.assert_not_called()
-                    launch_default.assert_not_called()
-                    launch_multi.assert_not_called()
+            self.assertEqual(result["skinSessions"], [{"profileName": "work", "port": 19335, "processId": 91}])
+            stop_clients.assert_not_called()
+            launch_default.assert_not_called()
 
     def test_ensure_skin_session_restarts_running_switch_client_without_cdp(self):
         config = {
@@ -485,6 +300,7 @@ class ChatGptCompatibilityTest(unittest.TestCase):
             patch("bridge.commands.get_codex_skin_sessions", return_value={"skinSessions": []}),
             patch("bridge.commands.load_config", return_value=config),
             patch("bridge.commands._running_codex_count", return_value=1),
+            patch("bridge.commands.read_running_codex_commands", return_value="ChatGPT.exe"),
             patch("bridge.commands._sync_active_auth_to_profile") as sync_auth,
             patch("bridge.commands._stop_running_codex_processes") as stop_clients,
             patch("bridge.commands._allocate_codex_skin_port", return_value=19335),
@@ -516,7 +332,7 @@ class ChatGptCompatibilityTest(unittest.TestCase):
                         pass
             self.assertEqual(lock_path.read_text(encoding="utf-8"), "12345")
 
-    def test_new_client_entry_processes_and_portable_copy(self):
+    def test_new_client_entry_processes_and_install_source(self):
         self.assertTrue(_is_client_main_process({
             "name": "ChatGPT.exe",
             "command_line": '"C:\\Apps\\ChatGPT.exe"',
@@ -552,24 +368,6 @@ class ChatGptCompatibilityTest(unittest.TestCase):
                 _resolve_configured_codex_app_path(resources / "codex.exe"),
                 package_app / "ChatGPT.exe",
             )
-
-            profile_dir = root / "profile"
-            old_copy = profile_dir / "CodexPortableApp"
-            old_copy.mkdir(parents=True)
-            (old_copy / "Codex.exe").write_bytes(b"old")
-            portable_path = Path(prepare_portable_codex_path(package_app / "ChatGPT.exe", profile_dir))
-            current_copy = profile_dir / "CodexPortableApp-1.0"
-            self.assertEqual(portable_path, current_copy / "ChatGPT.exe")
-            self.assertTrue(portable_path.exists())
-            self.assertEqual((old_copy / "Codex.exe").read_bytes(), b"old")
-            self.assertEqual(find_latest_portable_app_dir(profile_dir), current_copy)
-            self.assertGreater(read_source_signature(current_copy)["directory_size"], 0)
-            self.assertEqual(_get_appx_package_version(package_app / "ChatGPT.exe"), "1.0")
-            legacy_signature = read_source_signature(current_copy)
-            legacy_signature.pop("package_version")
-            write_source_signature(current_copy, legacy_signature)
-            self.assertFalse(portable_app_needs_update(package_app / "ChatGPT.exe", current_copy))
-            self.assertEqual(read_source_signature(current_copy)["package_version"], "1.0")
 
     def test_cim_process_and_appx_manifest_payloads_are_parsed(self):
         process_payload = json.dumps([
@@ -752,114 +550,6 @@ trusted_hash = "dynamic"
         self.assertNotIn("trusted_hash", sanitized)
         self.assertNotIn("notify =", sanitized)
 
-    def test_portable_copy_reports_progress_and_keeps_old_copy_on_failure(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            source = root / "source"
-            source.mkdir()
-            (source / "ChatGPT.exe").write_bytes(b"new-client")
-            profile = root / "profile"
-            old_copy = profile / "CodexPortableApp"
-            old_copy.mkdir(parents=True)
-            (old_copy / "ChatGPT.exe").write_bytes(b"old-client")
-            progress = []
-
-            result = prepare_portable_codex_path(
-                source / "ChatGPT.exe",
-                profile,
-                progress_callback=lambda percent, _copied, _total: progress.append(percent),
-            )
-            self.assertEqual(Path(result).read_bytes(), b"new-client")
-            self.assertEqual(progress[0], 0)
-            self.assertEqual(progress[-1], 100)
-
-            (source / "ChatGPT.exe").write_bytes(b"newer-client")
-            with patch("core.codex_source._copy_app_directory", side_effect=OSError("copy failed")):
-                with self.assertRaisesRegex(OSError, "copy failed"):
-                    prepare_portable_codex_path(source / "ChatGPT.exe", profile)
-            self.assertEqual((old_copy / "ChatGPT.exe").read_bytes(), b"new-client")
-
-    def test_stale_portable_cleanup_keeps_current_active_and_unverified_directories(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            shared_root = Path(temp_dir)
-            current = shared_root / "CodexPortableApp-3.0"
-            active = shared_root / "CodexPortableApp-2.0"
-            stale = shared_root / "CodexPortableApp-1.0"
-            unverified = shared_root / "CodexPortableApp-0.9"
-            unrelated = shared_root / "OtherPortableApp-1.0"
-            for directory in (current, active, stale, unverified, unrelated):
-                directory.mkdir()
-                (directory / "ChatGPT.exe").write_bytes(b"client")
-            for directory, version in ((current, "3.0"), (active, "2.0"), (stale, "1.0")):
-                write_source_signature(directory, {"package_version": version, "source_path": "source"})
-            write_source_signature(unverified, {"unexpected": True})
-            active_path = active.resolve()
-            stale_path = stale.resolve()
-            unverified_path = unverified.resolve()
-
-            def processes_in(directory, strict=False):
-                self.assertTrue(strict)
-                return [{"pid": 123}] if Path(directory).resolve() == active_path else []
-
-            with patch("core.codex_source.read_processes_in_directory", side_effect=processes_in):
-                result = cleanup_stale_portable_app_dirs(shared_root, current)
-
-            self.assertTrue(current.exists())
-            self.assertTrue(active.exists())
-            self.assertFalse(stale.exists())
-            self.assertTrue(unverified.exists())
-            self.assertTrue(unrelated.exists())
-            self.assertEqual(result["removed"], [str(stale_path)])
-            self.assertEqual(result["in_use"], [str(active_path)])
-            self.assertEqual(result["skipped"], [str(unverified_path)])
-            self.assertEqual(result["failed"], [])
-
-    def test_stale_portable_cleanup_keeps_directory_when_safety_check_or_delete_fails(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            shared_root = Path(temp_dir)
-            current = shared_root / "CodexPortableApp-3.0"
-            scan_failed = shared_root / "CodexPortableApp-1.0"
-            delete_failed = shared_root / "CodexPortableApp-2.0"
-            for directory, version in ((current, "3.0"), (scan_failed, "1.0"), (delete_failed, "2.0")):
-                directory.mkdir()
-                (directory / "ChatGPT.exe").write_bytes(b"client")
-                write_source_signature(directory, {"package_version": version, "source_path": "source"})
-            scan_failed_path = scan_failed.resolve()
-            delete_failed_path = delete_failed.resolve()
-
-            def processes_in(directory, strict=False):
-                self.assertTrue(strict)
-                if Path(directory).resolve() == scan_failed_path:
-                    raise RuntimeError("scan failed")
-                return []
-
-            with (
-                patch("core.codex_source.read_processes_in_directory", side_effect=processes_in),
-                patch("core.codex_source.shutil.rmtree", side_effect=PermissionError("delete failed")),
-            ):
-                result = cleanup_stale_portable_app_dirs(shared_root, current)
-
-            self.assertTrue(current.exists())
-            self.assertTrue(scan_failed.exists())
-            self.assertTrue(delete_failed.exists())
-            self.assertEqual(
-                {item["path"] for item in result["failed"]},
-                {str(scan_failed_path), str(delete_failed_path)},
-            )
-
-    def test_portable_copy_checks_free_disk_space_before_copying(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            source = root / "source"
-            source.mkdir()
-            (source / "ChatGPT.exe").write_bytes(b"client")
-            with (
-                patch("core.codex_source.get_directory_size", return_value=1024),
-                patch("core.codex_source.shutil.disk_usage", return_value=SimpleNamespace(free=0)),
-            ):
-                with self.assertRaisesRegex(OSError, "磁盘空间不足"):
-                    prepare_portable_codex_path(source / "ChatGPT.exe", root / "profile")
-
     def test_profile_backup_excludes_portable_client_copy(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -913,36 +603,3 @@ trusted_hash = "dynamic"
         self.assertTrue(_is_same_auth_account(first, {"OPENAI_API_KEY": "sk-first"}))
         self.assertFalse(_is_same_auth_account(first, {"OPENAI_API_KEY": "sk-second"}))
         self.assertFalse(_is_same_auth_account(first, {"tokens": {"access_token": "token"}}))
-
-    def test_switch_mode_client_remains_associated_after_entering_multi_mode(self):
-        config = {"launch_mode": "multi", "profiles": ["first", "second"]}
-        with (
-            patch("bridge.commands.read_running_codex_commands", return_value=""),
-            patch("bridge.commands._get_legacy_system_running_profile", return_value="first"),
-            patch("bridge.commands.db.get_profile", side_effect=lambda name: {"dir_name": name}),
-        ):
-            self.assertTrue(_is_profile_running(config, "first"))
-            self.assertFalse(_is_profile_running(config, "second"))
-            self.assertEqual(_running_multi_profile_names(config), ["first"])
-
-    def test_legacy_system_client_is_matched_by_its_authenticated_account(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            system_auth_path = root / "system-auth.json"
-            (root / "first").mkdir()
-            (root / "second").mkdir()
-            system_auth_path.write_text(json.dumps({"account": "first"}), encoding="utf-8")
-            (root / "first" / "auth.json").write_text(json.dumps({"account": "first"}), encoding="utf-8")
-            (root / "second" / "auth.json").write_text(json.dumps({"account": "second"}), encoding="utf-8")
-            config = {"launch_mode": "multi", "profile_root": str(root), "profiles": ["first", "second"]}
-            with (
-                patch("bridge.commands.get_active_auth_path", return_value=system_auth_path),
-                patch("bridge.commands.read_running_codex_processes", return_value=[{"command_line": '"C:\\Apps\\ChatGPT.exe"'}]),
-                patch("bridge.commands._is_same_auth_account", side_effect=lambda left, right: left == right),
-                patch("bridge.commands.db.get_profile", side_effect=lambda name: {"dir_name": name}),
-            ):
-                self.assertEqual(_get_legacy_system_running_profile(config), "first")
-
-
-if __name__ == "__main__":
-    unittest.main()

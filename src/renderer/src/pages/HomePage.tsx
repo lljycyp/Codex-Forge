@@ -3,9 +3,9 @@ import { useState } from "react";
 import { invokeLauncher } from "../api/launcher";
 import type { ReactNode } from "react";
 import {
+  Code2,
   Check,
   ChevronRight,
-  Code2,
   FileText,
   FolderOpen,
   Play,
@@ -40,40 +40,49 @@ export function HomePage({ appState, profiles, onOpenView, onLaunchProfile }: Ho
     profiles.find((profile) => profile.name === appState.activeProfile)
     ?? profiles.find((profile) => profile.active)
     ?? null;
-  const isolated = balanced && appState.launchMode === "multi" ? currentProfile : null;
+  const currentAccountLabel = appState.balancedRunning
+    ? t(appState.balancedUsesSystemAuth ? "负载均衡 · ChatGPT 登录" : "负载均衡 · API Key 登录")
+    : appState.activeProfile || t(appState.systemAuthMode === "api" ? "API Key 登录" : "未选择");
+  const hasRunningInstance = appState.runningCount > 0;
+  const usesGateway = hasRunningInstance ? appState.balancedRunning : balanced;
   const environmentChecks: EnvironmentCheck[] = [
     { label: t("Codex 客户端"), ok: appState.codexCommandAvailable },
     { label: t("账号资料根目录"), ok: appState.profileRootExists },
-    { label: "auth.json", ok: isolated?.authExists ?? appState.activeAuthExists },
-    { label: "config.toml", ok: isolated?.configExists ?? appState.activeConfigExists },
+    ...(usesGateway ? [] : [
+      { label: "auth.json", ok: appState.activeAuthExists },
+      { label: "config.toml", ok: appState.activeConfigExists },
+    ]),
   ];
   const attentionCount = environmentChecks.filter((item) => !item.ok).length;
   const environmentReady = attentionCount === 0;
-  const hasRunningInstance = appState.runningCount > 0;
   const heroTitle = environmentReady ? t("Codex Forge 已就绪") : t("当前工作环境存在需要处理的问题");
-  const heroDescription = environmentReady
-    ? t("当前工作环境可以正常使用")
-    : t("请先处理环境问题后再启动 Codex");
+  const heroDescription = hasRunningInstance && balanced !== appState.balancedRunning
+    ? t("请退出当前 Codex，再切换启动模式")
+    : environmentReady
+      ? t("当前工作环境可以正常使用")
+      : t("请先处理环境问题后再启动 Codex");
   const primaryText = hasRunningInstance
-    ? t("查看运行实例")
-    : currentProfile
-      ? t("启动 Codex")
-      : t("选择账号");
+    ? t(appState.balancedRunning ? "查看负载均衡" : "查看运行实例")
+    : t(balanced ? "使用负载均衡启动" : currentProfile ? "启动 Codex" : "选择账号");
 
   const handlePrimaryAction = async () => {
+    if (hasRunningInstance) {
+      onOpenView(appState.balancedRunning ? "gateway" : "profiles");
+      return;
+    }
     if (balanced) {
       setLaunching(true);
       try {
         await invokeLauncher("gateway_launch");
         message.success(t("已通过负载均衡启动 Codex"));
       } catch (error) {
-        message.error(error instanceof Error ? error.message : t("启动失败"));
+        message.error(t(error instanceof Error ? error.message : "启动失败"));
       } finally {
         setLaunching(false);
       }
       return;
     }
-    if (hasRunningInstance || !currentProfile) {
+    if (!currentProfile) {
       onOpenView("profiles");
       return;
     }
@@ -96,9 +105,8 @@ export function HomePage({ appState, profiles, onOpenView, onLaunchProfile }: Ho
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-[12px] font-semibold text-slate-500">
               <HeroMeta tone={hasRunningInstance ? "green" : "slate"} text={hasRunningInstance ? t("运行中") : t("空闲")} />
               <span className="h-4 w-px bg-slate-200" aria-hidden />
-              <HeroMeta icon={<Code2 size={13} />} text={formatLaunchMode(appState.launchMode, t)} />
               <span className="h-4 w-px bg-slate-200" aria-hidden />
-              <HeroMeta icon={<UsersRound size={13} />} text={appState.activeProfile || t("未选择")} />
+              <HeroMeta icon={<UsersRound size={13} />} text={currentAccountLabel} />
             </div>
           </div>
 
@@ -111,10 +119,10 @@ export function HomePage({ appState, profiles, onOpenView, onLaunchProfile }: Ho
               type="primary"
               icon={hasRunningInstance ? <UsersRound size={15} /> : <Play size={15} />}
               loading={launching}
-              disabled={balanced ? !profiles.length : !environmentReady && !hasRunningInstance}
+              disabled={!hasRunningInstance && (balanced ? !appState.codexCommandAvailable : !environmentReady)}
               onClick={handlePrimaryAction}
             >
-              {balanced ? t("启动 Codex") : primaryText}
+              {primaryText}
             </Button>
             <Button className="!h-10 !rounded-[8px] !font-semibold max-[720px]:!w-full" icon={<UsersRound size={15} />} onClick={() => onOpenView("profiles")}>
               {t("切换账号")}
@@ -133,10 +141,9 @@ export function HomePage({ appState, profiles, onOpenView, onLaunchProfile }: Ho
         <section className={`${panelClass} flex min-h-[292px] flex-col p-5`}>
           <PanelHeading icon={<FolderOpen size={16} />} title={t("当前工作区")} />
           <div className="mt-4 divide-y divide-slate-100">
-            <WorkspaceRow label={t("当前账号")} value={appState.activeProfile || t("未选择")} />
-            <WorkspaceRow label={t("启动模式")} value={formatLaunchMode(appState.launchMode, t)} />
-            <WorkspaceRow label={t("配置来源")} value={appState.launchMode === "multi" ? t("账号 CodexHome 配置") : t("系统 config.toml")} />
-            <WorkspaceRow label={t("认证存储")} value={appState.authCredentialStore === "file" ? "auth.json" : appState.authCredentialStore} />
+            <WorkspaceRow label={t("当前账号")} value={currentAccountLabel} />
+            <WorkspaceRow label={t("配置来源")} value={t(appState.balancedRunning ? "负载均衡配置" : "系统 config.toml")} />
+            <WorkspaceRow label={t("认证存储")} value={appState.balancedRunning || appState.authCredentialStore === "file" ? "auth.json" : appState.authCredentialStore} />
           </div>
           <div className="mt-auto grid grid-cols-2 gap-2 pt-4 max-[600px]:grid-cols-1">
             <Button icon={<UsersRound size={14} />} onClick={() => onOpenView("profiles")}>{t("管理账号")}</Button>
@@ -227,8 +234,4 @@ function QuickEntry({ icon, label, onClick }: { icon: ReactNode; label: string; 
       <ChevronRight size={14} className="shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5" />
     </button>
   );
-}
-
-function formatLaunchMode(mode: AppState["launchMode"], t: (text: string) => string) {
-  return mode === "multi" ? t("多开隔离模式") : t("账号切换模式");
 }

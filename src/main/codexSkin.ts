@@ -168,12 +168,13 @@ html[data-codex-forge-skin="active"] aside.app-shell-left-panel a {
   transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease !important;
 }
 
-html[data-codex-forge-skin="active"] aside.app-shell-left-panel button:hover,
-html[data-codex-forge-skin="active"] aside.app-shell-left-panel a:hover {
+html[data-codex-forge-skin="active"] aside.app-shell-left-panel
+  :is(button, a):hover:not([aria-current="page"], [data-thread-title-trigger] *) {
   background-color: rgb(var(--forge-skin-accent) / .10) !important;
 }
 
-html[data-codex-forge-skin="active"] aside.app-shell-left-panel [aria-current="page"] {
+/* Codex marks both the conversation row and its title as the current page. */
+html[data-codex-forge-skin="active"] aside.app-shell-left-panel [aria-current="page"]:not([aria-current="page"] *) {
   background-color: rgb(var(--forge-skin-accent) / .14) !important;
   box-shadow: inset 0 0 0 1px rgb(var(--forge-skin-accent) / .20);
 }
@@ -512,7 +513,10 @@ async function withCdp<T>(webSocketUrl: string, action: (send: (method: string, 
   let nextId = 1;
 
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("CDP WebSocket open timed out")), 3000);
+    const timeout = setTimeout(() => {
+      socket.close();
+      reject(new Error("CDP WebSocket open timed out"));
+    }, 3000);
     socket.addEventListener("open", () => {
       clearTimeout(timeout);
       resolve();
@@ -538,8 +542,21 @@ async function withCdp<T>(webSocketUrl: string, action: (send: (method: string, 
 
   const send = (method: string, params: object = {}) => new Promise<Record<string, unknown>>((resolve, reject) => {
     const id = nextId++;
-    pending.set(id, { resolve, reject });
-    socket.send(JSON.stringify({ id, method, params }));
+    const timeout = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error("CDP request timed out"));
+    }, 3000);
+    pending.set(id, {
+      resolve: (value) => { clearTimeout(timeout); resolve(value); },
+      reject: (error) => { clearTimeout(timeout); reject(error); },
+    });
+    try {
+      socket.send(JSON.stringify({ id, method, params }));
+    } catch (error) {
+      clearTimeout(timeout);
+      pending.delete(id);
+      reject(error);
+    }
   });
 
   try {

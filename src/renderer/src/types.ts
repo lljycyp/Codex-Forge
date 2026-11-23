@@ -11,13 +11,15 @@ export type AppState = {
   activeConfigPath: string;
   activeConfigExists: boolean;
   activeProfile: string;
+  systemAuthMode: "" | "api" | "chatgpt";
   shareSystemConfig: boolean;
-  launchMode: "switch" | "multi";
   codexSkinEnabled: boolean;
   profileRoot: string;
   profileRootExists: boolean;
   profileCount: number;
   runningCount: number;
+  balancedRunning: boolean;
+  balancedUsesSystemAuth: boolean;
   authCredentialStore: "file" | "keyring" | "auto";
 };
 
@@ -52,13 +54,15 @@ export type ProfileSummary = {
   authExists: boolean;
   configPath: string;
   configExists: boolean;
-  codexHome?: string;
-  codexHomeExists?: boolean;
   usage: ProfileUsage | null;
 };
 
 export type RuntimeStatus = {
   runningCount: number;
+  balancedRunning: boolean;
+  balancedUsesSystemAuth: boolean;
+  activeProfile: string;
+  systemAuthMode: AppState["systemAuthMode"];
   profiles: Record<string, boolean>;
 };
 
@@ -69,12 +73,20 @@ export type ProfileUsageWindow = {
   resetAt: number | null;
 };
 
+export type ResetCredit = {
+  id: string;
+  expiresAt: number | null;
+};
+
 export type ProfileUsage = {
   fetchedAt: number;
   planType: string | null;
   oneWeek: ProfileUsageWindow | null;
   resetCredits?: number | null;
   resetCreditExpiresAt?: number[];
+  resetCreditItems?: ResetCredit[];
+  resetAccountScope?: string | null;
+  workspaceName?: string | null;
   hasCredits?: boolean;
   creditsUnlimited?: boolean;
   spendControlReached?: boolean;

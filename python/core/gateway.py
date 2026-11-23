@@ -5,6 +5,7 @@ import contextlib
 import hmac
 import ipaddress
 import json
+import secrets
 import socket
 import sys
 import time
@@ -12,14 +13,19 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
+from core.auth_service import auth_tokens, jwt_expiration
 
 from core.constants import CONFIG_DIR
 from core.gateway_accounts import Scheduler, read_accounts
+from core.gateway_client_bundle import export_client_bundle
 from core.gateway_launch import prepare_launch
 from core.gateway_protocol import Protocol
-from core.gateway_store import GatewayStore
+from core.gateway_store import GatewayStore, digest
 from core.gateway_tls import server_tls
 from core.profile_service import get_active_auth_path
+
+
+LOCAL_OWNER = {"id": "local", "name": "本机", "cap": 8}
 
 
 def addresses():
@@ -51,7 +57,8 @@ class Gateway:
         self.port = int(store.option("port", 19380))
         self.lan_port = int(store.option("lanPort", 19381))
         self.address = store.option("address", "")
-        self.auth_paths = {get_active_auth_path(), *(Path(p) for p in store.option("localHomes", []))}
+        self.local_key_hash = digest(self.local_key()) if store.option("localKey") else ""
+        self.local_chatgpt = store.option("localChatgpt") is True
         self.housekeeping = asyncio.create_task(self.purge_expired())
 
     async def purge_expired(self):
@@ -59,15 +66,22 @@ class Gateway:
             await asyncio.sleep(60)
             self.store.purge()
 
+    def local_key(self):
+        return self.store.secret("localKey", lambda: ("fg_" + secrets.token_urlsafe(32)).encode()).decode()
+
     def identify_local(self, bearer):
-        for path in self.auth_paths:
+        if self.local_key_hash and hmac.compare_digest(digest(bearer), self.local_key_hash):
+            return LOCAL_OWNER.copy()
+        if self.local_chatgpt:
             try:
-                data = json.loads(path.read_text("utf-8-sig"))
-                secret = (data.get("tokens") or data).get("access_token") or data.get("OPENAI_API_KEY")
-                if isinstance(secret, str) and hmac.compare_digest(bearer.encode(), secret.encode()):
-                    return {"id": "local", "name": "本机", "cap": 8}
-            except (ValueError, OSError, AttributeError):
-                pass
+                auth = json.loads(get_active_auth_path().read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                return None
+            token = (auth_tokens(auth) or {}).get("access_token")
+            if isinstance(token, str) and (jwt_expiration(token) or 0) > time.time() and hmac.compare_digest(
+                digest(bearer), digest(token)
+            ):
+                return LOCAL_OWNER.copy()
         return None
 
     def accounts(self):
@@ -145,6 +159,9 @@ class Gateway:
 
     def status(self):
         active = self.scheduler.active
+        keys = self.store.list_keys()
+        if self.local_key_hash:
+            keys.insert(0, {**LOCAL_OWNER, "enabled": True, "expires": 0, "calls": self.store.option("localCalls", 0)})
         return {
             "enabled": True in self.listeners,
             "shared": False in self.listeners,
@@ -160,7 +177,7 @@ class Gateway:
                     "active": self.scheduler.owner_active[k["id"]],
                     "waiting": len(self.scheduler.waiters.get(k["id"], ())),
                 }
-                for k in self.store.list_keys()
+                for k in keys
             ],
             "waiting": self.scheduler.waiting,
             "error": self.error,
@@ -181,7 +198,7 @@ class Gateway:
             ],
         }
 
-    async def command(self, cmd, p):
+    async def command(self, cmd, p) -> dict[str, object]:
         if cmd == "status":
             return self.status()
         if cmd == "service":
@@ -201,6 +218,14 @@ class Gateway:
             else:
                 await self.unlisten(False)
                 self.store.set_option("shared", False)
+        elif cmd == "export_client_bundle":
+            if False not in self.listeners:
+                raise ValueError("请先开启局域网共享")
+            export_client_bundle(
+                p["destination"], f"https://{self.address}:{self.lan_port}/v1",
+                self.store.directory / "forge-gateway-ca.pem", p["script"],
+            )
+            return {"saved": True}
         elif cmd == "key":
             result = self.store.change_key(p["action"], p)
             self.scheduler.changed.set()
@@ -216,26 +241,28 @@ class Gateway:
             self.scheduler.changed.set()
         elif cmd == "launch":
             if not any(self.scheduler.eligible(a) for a in self.accounts()):
-                raise ValueError("没有可用账号，请检查账号管理或参与状态")
+                raise ValueError("没有可用账号，请前往「负载均衡」检查并启用参与调度的账号")
+            key = self.local_key()
+            self.local_key_hash = digest(key)
             plan = await asyncio.to_thread(
                 prepare_launch,
                 f"https://127.0.0.1:{self.port}/v1",
                 self.store.directory / "forge-gateway-ca.pem",
+                key,
             )
             was_running = True in self.listeners
             await self.start()
-            registered = plan.auth_path in self.auth_paths
-            self.auth_paths.add(plan.auth_path)
+            previous_login = self.local_chatgpt
             try:
-                launched = await asyncio.to_thread(plan.start)
-            except OSError:
-                if not registered:
-                    self.auth_paths.discard(plan.auth_path)
+                self.store.set_option("localChatgpt", plan.native_auth)
+                self.local_chatgpt = plan.native_auth
+                return await asyncio.to_thread(plan.start)
+            except Exception:
+                self.local_chatgpt = previous_login
+                self.store.set_option("localChatgpt", previous_login)
                 if not was_running:
                     await self.command("service", {"enabled": False})
                 raise
-            self.store.set_option("localHomes", sorted(map(str, self.auth_paths)))
-            return launched
         else:
             raise ValueError("未知网关操作")
         return self.status()

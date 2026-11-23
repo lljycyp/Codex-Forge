@@ -41,7 +41,6 @@ type WorkspaceSnapshot = {
 };
 type WorkspaceTab = "insights" | "resources" | "sessions" | "launch";
 
-const SYSTEM_PROFILE_NAME = "__system__";
 const workspaceTabStorageKey = "codexForgeWorkspaceTab";
 const workspaceSections: Record<WorkspaceTab, string[]> = {
   insights: ["history", "health"],
@@ -80,14 +79,11 @@ export function WorkspacePage({ appState, profiles, onDirtyChange }: WorkspacePa
     if (!profileName && profiles[0]?.name) setProfileName(profiles[0].name);
   }, [profileName, profiles]);
 
-  const workspacePayload = appState.launchMode === "multi" ? { profileName } : {};
-
   const refresh = useCallback(async (options?: { preserveEdits?: boolean }) => {
     if (!profileName) return;
     setLoading(true);
     try {
       const snapshot = await invokeLauncher<WorkspaceSnapshot>("get_workspace_snapshot", {
-        ...workspacePayload,
         name: profileName,
         days: 30,
         limit: 300,
@@ -110,7 +106,7 @@ export function WorkspacePage({ appState, profiles, onDirtyChange }: WorkspacePa
     } finally {
       setLoading(false);
     }
-  }, [activeTab, appState.launchMode, profileName, t]);
+  }, [activeTab, profileName, t]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -165,7 +161,7 @@ export function WorkspacePage({ appState, profiles, onDirtyChange }: WorkspacePa
           onChange={changeTab}
           items={[
             { key: "insights", label: t("额度与健康"), children: <InsightsPanel history={history} health={health} onRefresh={() => refresh({ preserveEdits: true })} /> },
-            { key: "resources", label: t("MCP / Skills / AGENTS"), children: workspace ? <ResourcesPanel state={workspace} agents={agents} onAgentsChange={setAgents} payload={workspacePayload} onRefresh={() => refresh({ preserveEdits: true })} /> : null },
+            { key: "resources", label: t("MCP / Skills / AGENTS"), children: workspace ? <ResourcesPanel state={workspace} agents={agents} onAgentsChange={setAgents} onRefresh={() => refresh({ preserveEdits: true })} /> : null },
             { key: "sessions", label: t("会话索引"), children: <SessionsPanel items={sessions} /> },
             { key: "launch", label: t("启动环境"), children: <LaunchPanel name={profileName} value={launchSettings} onChange={setLaunchSettings} onSaved={(next) => { setLaunchSettings(next); setSavedLaunchSettings(next); }} /> },
           ]}
@@ -209,14 +205,14 @@ function UsageSparkline({ items }: { items: ProfileUsage[] }) {
   return <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-44 w-full rounded-lg bg-slate-50 p-2"><path d={path} fill="none" stroke="#0f766e" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>;
 }
 
-function ResourcesPanel({ state, agents, onAgentsChange, payload, onRefresh }: { state: WorkspaceState; agents: string; onAgentsChange: (value: string) => void; payload: object; onRefresh: () => Promise<void> }) {
+function ResourcesPanel({ state, agents, onAgentsChange, onRefresh }: { state: WorkspaceState; agents: string; onAgentsChange: (value: string) => void; onRefresh: () => Promise<void> }) {
   const { t } = useI18n();
   const [mcpOpen, setMcpOpen] = useState(false);
   const [editingMcp, setEditingMcp] = useState<McpServer | null>(null);
   const [mcpForm] = Form.useForm();
 
   const saveAgents = async () => {
-    await invokeLauncher("save_agents", { ...payload, content: agents });
+    await invokeLauncher("save_agents", { content: agents });
     message.success(t("AGENTS.md 已保存"));
     await onRefresh();
   };
@@ -233,7 +229,6 @@ function ResourcesPanel({ state, agents, onAgentsChange, payload, onRefresh }: {
   const saveMcp = async () => {
     const values = await mcpForm.validateFields();
     await invokeLauncher("save_mcp_server", {
-      ...payload,
       server: {
         name: values.name,
         command: values.command,
@@ -255,7 +250,7 @@ function ResourcesPanel({ state, agents, onAgentsChange, payload, onRefresh }: {
       okButtonProps: { danger: true },
       cancelText: t("取消"),
       onOk: async () => {
-        await invokeLauncher("delete_mcp_server", { ...payload, name: server.name });
+        await invokeLauncher("delete_mcp_server", { name: server.name });
         await onRefresh();
       },
     });
@@ -268,7 +263,7 @@ function ResourcesPanel({ state, agents, onAgentsChange, payload, onRefresh }: {
       okButtonProps: { danger: true },
       cancelText: t("取消"),
       onOk: async () => {
-        await invokeLauncher("remove_skill", { ...payload, name: skill.name });
+        await invokeLauncher("remove_skill", { name: skill.name });
         message.success(t("Skill 已移入备份目录"));
         await onRefresh();
       },
@@ -296,7 +291,7 @@ function ResourcesPanel({ state, agents, onAgentsChange, payload, onRefresh }: {
                   size="small"
                   checked={server.enabled}
                   onChange={async (enabled) => {
-                    await invokeLauncher("set_mcp_enabled", { ...payload, name: server.name, enabled });
+                    await invokeLauncher("set_mcp_enabled", { name: server.name, enabled });
                     message.success(t("MCP 状态已更新，重启 Codex 后生效"));
                     await onRefresh();
                   }}
@@ -308,8 +303,8 @@ function ResourcesPanel({ state, agents, onAgentsChange, payload, onRefresh }: {
           ]}
         />
       </Card>
-      <Card title={t("Skills")} extra={<Button size="small" icon={<Plus size={14} />} onClick={async () => { const sourcePath = await window.launcherApi.selectDirectory(); if (sourcePath) { await invokeLauncher("install_skill", { ...payload, sourcePath }); message.success(t("Skill 已安装")); await onRefresh(); } }}>{t("从目录安装")}</Button>}>
-        <List dataSource={state.skills} locale={{ emptyText: t("当前环境没有 Skills") }} renderItem={(skill) => <List.Item actions={[<Switch key="enabled" aria-label={`${t("切换 Skill 状态")} ${skill.name}`} size="small" checked={skill.enabled} onChange={async (enabled) => { await invokeLauncher("set_skill_enabled", { ...payload, name: skill.name, enabled }); await onRefresh(); }} />, <Button key="remove" aria-label={`${t("移除 Skill")} ${skill.name}`} size="small" danger icon={<Trash2 size={13} />} onClick={() => confirmRemoveSkill(skill)} />]}><List.Item.Meta title={<Space>{skill.name}{!skill.hasManifest ? <Tag color="orange">{t("缺少 SKILL.md")}</Tag> : null}</Space>} description={skill.path} /></List.Item>} />
+      <Card title={t("Skills")} extra={<Button size="small" icon={<Plus size={14} />} onClick={async () => { const sourcePath = await window.launcherApi.selectDirectory(); if (sourcePath) { await invokeLauncher("install_skill", { sourcePath }); message.success(t("Skill 已安装")); await onRefresh(); } }}>{t("从目录安装")}</Button>}>
+        <List dataSource={state.skills} locale={{ emptyText: t("当前环境没有 Skills") }} renderItem={(skill) => <List.Item actions={[<Switch key="enabled" aria-label={`${t("切换 Skill 状态")} ${skill.name}`} size="small" checked={skill.enabled} onChange={async (enabled) => { await invokeLauncher("set_skill_enabled", { name: skill.name, enabled }); await onRefresh(); }} />, <Button key="remove" aria-label={`${t("移除 Skill")} ${skill.name}`} size="small" danger icon={<Trash2 size={13} />} onClick={() => confirmRemoveSkill(skill)} />]}><List.Item.Meta title={<Space>{skill.name}{!skill.hasManifest ? <Tag color="orange">{t("缺少 SKILL.md")}</Tag> : null}</Space>} description={skill.path} /></List.Item>} />
       </Card>
       <Card className="xl:col-span-2" title={<span className="flex items-center gap-2"><FileText size={16} />AGENTS.md</span>} extra={<Button type="primary" icon={<Save size={14} />} onClick={saveAgents}>{t("保存")}</Button>}>
         <TextArea className="!h-[320px] !font-mono !text-sm" value={agents} onChange={(event) => onAgentsChange(event.target.value)} />

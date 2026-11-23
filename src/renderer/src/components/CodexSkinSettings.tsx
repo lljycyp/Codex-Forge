@@ -127,7 +127,7 @@ export function CodexSkinSettings({ appState, runCommand }: CodexSkinSettingsPro
             {t("Codex 皮肤")}
           </div>
           <div className="mt-1 text-sm leading-6 text-slate-500">
-            {t("支持账号切换与多开隔离模式；切换开关时会安全重启正在运行的 Codex。")}
+            {t("切换开关时会安全重启正在运行的 Codex。")}
           </div>
         </div>
         <Switch

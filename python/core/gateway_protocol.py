@@ -4,6 +4,7 @@ import contextlib
 import json
 import mimetypes
 import secrets
+import sqlite3
 import time
 import uuid
 from collections import deque
@@ -24,7 +25,9 @@ from core.gateway_continuation import (
     replay_item,
 )
 from core.gateway_store import MAX_RESOURCE
+from core.logger import get_logger
 
+logger = get_logger(__name__)
 OWNER = web.RequestKey[dict]("gateway_owner")
 AUTH = web.RequestKey[Callable[[], dict | None]]("gateway_auth")
 LISTENING = web.RequestKey[Callable[[], bool]]("gateway_listening")
@@ -452,13 +455,21 @@ class Protocol:
                     raise ProtocolError("备用部署已移除，续写已停止", 409, "continuation_stopped")
                 payload = {**payload, "model": backup}
 
+    def _save_checkpoint(self, owner, response_id, history):
+        try:
+            self.store.put(owner, "response:" + response_id, history)
+        except (ValueError, sqlite3.Error, OSError) as exc:
+            logger.warning("续接快照写入失败 错误=%s", exc)
+            return False
+        return True
+
     async def generate(self, request, body, send, websocket=False):
         owner = request[OWNER]
         items, wire = prepare_input(self.store, owner["id"], body)
         if websocket and wire.get("generate") is False:
             # A Codex prewarm reserves no model capacity. Its response ID can seed an incremental turn.
             rid = "resp_forge_" + secrets.token_hex(16)
-            self.store.put(owner["id"], "response:" + rid, items)
+            self._save_checkpoint(owner["id"], rid, items)
             response = {"id": rid, "object": "response", "status": "completed", "output": []}
             await send({"type": "response.created", "response": {**response, "status": "in_progress"}})
             await send({"type": "response.completed", "response": response})
@@ -482,11 +493,7 @@ class Protocol:
                             resp["output"] = actual
                         replay = [replay_item(item) for item in actual]
                         if resp.get("id"):
-                            try:
-                                self.store.put(owner["id"], "response:" + resp["id"], items + replay)
-                            except ValueError:
-                                # The upstream generation already completed. A client can resume with full input.
-                                checkpoint_saved = False
+                            checkpoint_saved = self._save_checkpoint(owner["id"], resp["id"], items + replay)
                     await send(event)
                     if kind in TERMINAL:
                         status = kind if checkpoint_saved else kind + " (续接需完整历史)"
@@ -517,7 +524,10 @@ class Protocol:
                         "ms": round((time.monotonic() - started) * 1000),
                     }
                 )
-                self.store.db.execute("UPDATE owners SET calls=calls+1 WHERE id=?", (owner["id"],))
+                try:
+                    self.store.record_call(owner["id"])
+                except sqlite3.Error as exc:
+                    logger.warning("网关请求计数写入失败 错误=%s", exc)
 
     async def upstream(self, account, headers, wire, websocket):
         url = account.base + "/responses"
@@ -605,15 +615,34 @@ class Protocol:
         await ws.prepare(request)
         self.sockets[ws] = (owner, request.app)
         task = None
+        finishing = False
+
+        async def send(event):
+            nonlocal finishing
+            if event.get("type") in TERMINAL:
+                finishing = True
+            await ws.send_json(event)
 
         async def run(body):
             self.generating.add(ws)
             try:
-                await self.generate(request, body, ws.send_json, True)
+                await self.generate(request, body, send, True)
             except (ValueError, CapacityError, aiohttp.ClientError, TimeoutError, OSError) as exc:
                 if not ws.closed:
+                    if isinstance(exc, ProtocolError) and exc.code == "previous_response_not_found":
+                        await send({
+                            "type": "error",
+                            "status": exc.status,
+                            "error": {
+                                "type": "invalid_request_error",
+                                "code": exc.code,
+                                "message": str(exc),
+                                "param": "previous_response_id",
+                            },
+                        })
+                        return
                     code = exc.code if isinstance(exc, ProtocolError) else "gateway_error"
-                    await ws.send_json(
+                    await send(
                         {
                             "type": "error",
                             "code": code,
@@ -637,8 +666,14 @@ class Protocol:
                 try:
                     body = json.loads(msg.data)
                     kind = body.pop("type")
+                    if kind == "response.create" and finishing and task and not task.done():
+                        # The client can submit its next turn while the previous upstream stream is closing.
+                        await task
+                        if ws.closed or not request[AUTH]() or not self.scheduler.accepting:
+                            await ws.close(code=1008, message=b"credential or service disabled")
+                            break
                     if kind == "response.cancel":
-                        if task and not task.done():
+                        if task and not task.done() and not finishing:
                             task.cancel()
                             with contextlib.suppress(asyncio.CancelledError):
                                 await task
@@ -646,6 +681,7 @@ class Protocol:
                     elif kind != "response.create" or (task and not task.done()):
                         raise ValueError("当前连接只接受一个正在生成的 response.create")
                     else:
+                        finishing = False
                         task = asyncio.create_task(run(body))
                 except (ValueError, KeyError, AttributeError, TypeError) as exc:
                     await ws.send_json(

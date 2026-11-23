@@ -16,6 +16,8 @@ from core.auth_service import auth_kind, auth_tokens, decode_jwt_payload
 STATE_FILE = ".codex-global-state.json"
 ACCOUNT_STATE = "electron-account-renderer-state-v1"
 ATOMS = "electron-persisted-atom-state"
+OWNER_ATOMS = "electron-owner-atoms:"
+RENDERER_OWNER = "electron-renderer-content-owner"
 SECTIONS = "sidebar-custom-sections-v3"
 PROJECT_PREFIX = "codex:project:"
 THREAD_PREFIX = "codex:thread:local:"
@@ -52,6 +54,10 @@ def _identity(auth_path):
     raise ValueError("无法识别共享工作区的目标账号，请检查账号登录信息")
 
 
+def _has_owner_state(state):
+    return RENDERER_OWNER in state or any(key.startswith(OWNER_ATOMS) for key in state)
+
+
 def _records(home, state):
     bank = state.get(ACCOUNT_STATE, {})
     if (not isinstance(bank, dict) or not isinstance(bank.get("inactive", {}), dict)
@@ -60,7 +66,16 @@ def _records(home, state):
     if any(k.startswith("electron-account-renderer-state-") and k != ACCOUNT_STATE for k in state):
         raise ValueError("Codex 账号状态格式已更新，请先更新共享工作区适配")
     records = list(bank.get("inactive", {}).items())
-    if bank.get("owner") is not None or ACCOUNT_STATE not in state:
+    if _has_owner_state(state):
+        owner_atoms = {key[len(OWNER_ATOMS):]: atoms for key, atoms in state.items()
+                       if key.startswith(OWNER_ATOMS) and key != OWNER_ATOMS + "signed-out"}
+        records = [(owner, snapshot) for owner, snapshot in records if owner not in owner_atoms]
+        active_owner = state.get(RENDERER_OWNER)
+        for owner in sorted(owner_atoms, key=lambda owner: owner == active_owner):
+            records.append((owner, {"globals": state, "atoms": owner_atoms[owner]}))
+        if not owner_atoms:
+            records.append(("legacy", {"globals": state, "atoms": state.get(ATOMS, {})}))
+    elif bank.get("owner") is not None or ACCOUNT_STATE not in state:
         records.append((bank.get("owner", "legacy"), {"globals": state, "atoms": state.get(ATOMS, {})}))
     for account, snapshot in records:
         if not isinstance(snapshot, dict) or not all(isinstance(snapshot.get(k, {}), dict) for k in ("globals", "atoms")):
@@ -196,7 +211,7 @@ def _collect(store, records):
         section["itemKeys"] = [k for k in section["itemKeys"] if not k.startswith(PROJECT_PREFIX) or k[len(PROJECT_PREFIX):] in projects]
 
 
-def _project_snapshot(snapshot, workspace, account, records, home):
+def _project_snapshot(snapshot, workspace, account, records, home, *, owner_scoped=False):
     glob, atoms = snapshot.setdefault("globals", {}), snapshot.setdefault("atoms", {})
     old_projects = glob.get("local-projects", {})
     old_assignments = deepcopy(glob.get("thread-project-assignments", {}))
@@ -254,12 +269,15 @@ def _project_snapshot(snapshot, workspace, account, records, home):
     valid_sections = {s["id"] for s in sections}
     order = [k for k in workspace.get("sectionOrder", []) if not k.startswith("custom:") or k[7:] in valid_sections]
     order.extend("custom:" + s["id"] for s in sections if "custom:" + s["id"] not in order)
+    legacy_ids = [k for k in old_bucket.get("appServerLegacySectionIds", []) if k in valid_sections]
+    if owner_scoped:
+        legacy_ids = list(dict.fromkeys(legacy_ids + [s["id"] for s in sections if not s.get("hostSectionIds", {}).get("local")]))
     atoms.setdefault(SECTIONS, {})[account] = {
         **old_bucket,
         "sections": sections, "sectionOrder": order,
         "collapsedSectionIds": [k for k in workspace.get("collapsedSections", []) if k in valid_sections],
         "appServerMigratedHostIds": old_bucket.get("appServerMigratedHostIds", []) if sections == old_sections else [],
-        "appServerLegacySectionIds": [k for k in old_bucket.get("appServerLegacySectionIds", []) if k in valid_sections],
+        "appServerLegacySectionIds": legacy_ids,
     }
     atoms["flat-project-sidebar-preferences-v1"] = deepcopy(workspace.get("preferences", {}))
     atoms["unified-sidebar-project-order-v1"] = [PROJECT_PREFIX + k for k in glob["project-order"]] + [
@@ -332,11 +350,16 @@ def sync_shared_workspace(shared_path, source_homes, *, target_home=None, auth_p
         if target_home is not None and identity is not None:
             state = states[target_home]
             next_owner, account = identity
-            bank = state.setdefault(ACCOUNT_STATE, {"owner": None, "inactive": {}})
-            active = bank.get("owner") == next_owner
-            snapshot = ({"globals": state, "atoms": state.setdefault(ATOMS, {})} if active
-                        else bank.setdefault("inactive", {}).setdefault(next_owner, {"globals": {}, "atoms": {}}))
-            _project_snapshot(snapshot, store["workspace"], account, records_by_home[target_home], target_home)
+            owner_scoped = _has_owner_state(state) or (not state and any(_has_owner_state(s) for s in states.values()))
+            if owner_scoped:
+                snapshot = {"globals": state, "atoms": state.setdefault(OWNER_ATOMS + next_owner, {})}
+            else:
+                bank = state.setdefault(ACCOUNT_STATE, {"owner": None, "inactive": {}})
+                active = bank.get("owner") == next_owner
+                snapshot = ({"globals": state, "atoms": state.setdefault(ATOMS, {})} if active
+                            else bank.setdefault("inactive", {}).setdefault(next_owner, {"globals": {}, "atoms": {}}))
+            _project_snapshot(snapshot, store["workspace"], account, records_by_home[target_home], target_home,
+                              owner_scoped=owner_scoped)
             save(target_home / STATE_FILE, state)
             save(target_home / (STATE_FILE + ".bak"), state)
             key = json.dumps([str(target_home), next_owner], ensure_ascii=False)

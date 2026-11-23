@@ -8,6 +8,7 @@ import tomllib
 from collections import Counter, defaultdict, deque
 from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 
 from core.auth_service import auth_kind, extract_auth, is_newer_auth, jwt_expiration
@@ -167,13 +168,13 @@ class Scheduler:
         queue = self.waiters[owner_id]
         if not queue:
             self.order.append(owner_id)
-        entry = (ticket, owner["cap"], model)
+        entry = (ticket, authenticate, model)
         queue.append(entry)
         selected = None
         deadline = time.monotonic() + 25
         try:
             while True:
-                if not self.accepting or not authenticate():
+                if not self.accepting or not (current := authenticate()):
                     raise CapacityError("服务已关闭或凭证已失效")
                 online = [a for a in self.accounts() if self.eligible(a)]
 
@@ -188,8 +189,12 @@ class Scheduler:
                 available = [a for a in candidates if self.active[a.id] < a.cap]
 
                 def ready(oid, available_accounts=online):
-                    _, cap, requested = self.waiters[oid][0]
-                    return self.owner_active[oid] < cap and any(
+                    head, authorize, requested = self.waiters[oid][0]
+                    owner_now = current if head is ticket else authorize()
+                    if not owner_now:
+                        return False
+                    cap = owner_now["cap"]
+                    return (cap is None or self.owner_active[oid] < Decimal(cap)) and any(
                         self.active[a.id] < a.cap and supports(a, requested) for a in available_accounts
                     )
 

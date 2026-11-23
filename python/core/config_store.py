@@ -14,7 +14,6 @@ def default_config():
         "profiles": [],
         "active_profile": "",
         "share_system_config": True,
-        "launch_mode": "switch",
         "codex_skin_enabled": False,
     }
 
@@ -24,8 +23,7 @@ def normalize_config(config):
     defaults = default_config()
     for key, value in defaults.items():
         config.setdefault(key, value)
-    if config.get("launch_mode") not in ("switch", "multi"):
-        config["launch_mode"] = "switch"
+    config.pop("launch_mode", None)
     config["codex_skin_enabled"] = bool(config.get("codex_skin_enabled"))
     return config
 

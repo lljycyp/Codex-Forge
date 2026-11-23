@@ -20,6 +20,26 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def _encode_key_cap(value):
+    if value is None:
+        return 0
+    if type(value) is int:
+        value = str(value)
+    if isinstance(value, str):
+        digits = value.strip().lstrip("0")
+        if digits.isascii() and digits.isdecimal():
+            # Quote large values so SQLite's INTEGER affinity and JavaScript preserve every digit.
+            return int(digits) if len(digits) <= 15 else json.dumps(digits)
+    raise ValueError("请输入正整数或选择不限制")
+
+
+def _read_key(row):
+    key = dict(row)
+    cap = key["cap"]
+    key["cap"] = json.loads(cap) if isinstance(cap, str) else cap or None
+    return key
+
+
 class GatewayStore:
     def __init__(self, directory):
         self.directory = Path(directory)
@@ -51,9 +71,18 @@ class GatewayStore:
 
     def list_keys(self):
         return [
-            dict(row)
+            _read_key(row)
             for row in self.db.execute("SELECT id,name,enabled,cap,expires,calls FROM owners ORDER BY rowid")
         ]
+
+    def record_call(self, owner):
+        if owner == "local":
+            self.db.execute(
+                "INSERT INTO options VALUES ('localCalls', '1') "
+                "ON CONFLICT(k) DO UPDATE SET value=CAST(value AS INTEGER)+1"
+            )
+        else:
+            self.db.execute("UPDATE owners SET calls=calls+1 WHERE id=?", (owner,))
 
     def change_key(self, action, payload):
         owner = str(payload.get("id", ""))
@@ -63,9 +92,9 @@ class GatewayStore:
             key = "fg_" + secrets.token_urlsafe(32)
             if action == "create":
                 name = str(payload.get("name") or "").strip()
-                cap, days = int(payload.get("cap", 2)), int(payload.get("days", 0))
-                if not name or len(name) > 64 or not 1 <= cap <= 32 or not 0 <= days <= 3650:
-                    raise ValueError("请检查名称、并发上限（1–32）和有效天数")
+                cap, days = _encode_key_cap(payload.get("cap", 2)), int(payload.get("days", 0))
+                if not name or len(name) > 64 or not 0 <= days <= 3650:
+                    raise ValueError("请检查名称和有效天数")
                 owner = secrets.token_hex(12)
                 self.db.execute(
                     "INSERT INTO owners VALUES(?,?,?,1,?,?,0)",
@@ -76,6 +105,8 @@ class GatewayStore:
             return {"id": owner, "key": key}
         if action == "toggle":
             self.db.execute("UPDATE owners SET enabled=? WHERE id=?", (bool(payload["enabled"]), owner))
+        elif action == "set_cap":
+            self.db.execute("UPDATE owners SET cap=? WHERE id=?", (_encode_key_cap(payload["cap"]), owner))
         elif action == "revoke":
             self.db.execute("DELETE FROM owners WHERE id=?", (owner,))
             self.db.execute("DELETE FROM objects WHERE owner=?", (owner,))
@@ -88,7 +119,7 @@ class GatewayStore:
             "SELECT id,name,cap FROM owners WHERE hash=? AND enabled AND (expires=0 OR expires>?)",
             (digest(key), int(time.time())),
         ).fetchone()
-        return dict(row) if row else None
+        return _read_key(row) if row else None
 
     def policies(self):
         return {
@@ -96,23 +127,45 @@ class GatewayStore:
         }
 
     def put(self, owner, rid, data):
-        if owner != "local" and not self.db.execute("SELECT 1 FROM owners WHERE id=?", (owner,)).fetchone():
-            raise ValueError("访问 Key 已撤销")
         value = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
         if len(value) > MAX_RESOURCE:
             raise ValueError("会话或文件超出网关单项存储上限")
-        self.purge()
         blob = protect_bytes(b"Z" + zlib.compress(value, level=1))
-        used, total = self.db.execute(
-            "SELECT COALESCE(SUM(CASE WHEN owner=? THEN length(data) ELSE 0 END),0),"
-            "COALESCE(SUM(length(data)),0) FROM objects",
-            (owner,),
-        ).fetchone()
-        if used + len(blob) > OWNER_BUDGET or total + len(blob) > TOTAL_BUDGET:
-            raise ValueError("网关临时存储已满，请稍后重试")
-        self.db.execute(
-            "INSERT OR REPLACE INTO objects VALUES(?,?,?,?)", (owner, rid, blob, int(time.time()) + 86400)
-        )
+        self.db.execute("BEGIN IMMEDIATE")
+        with self.db:
+            if owner != "local" and not self.db.execute("SELECT 1 FROM owners WHERE id=?", (owner,)).fetchone():
+                raise ValueError("访问 Key 已撤销")
+            self.purge()
+            used, total = self.db.execute(
+                """
+                SELECT COALESCE(SUM(CASE WHEN owner=:owner THEN length(data) ELSE 0 END),0),
+                       COALESCE(SUM(length(data)),0)
+                FROM objects WHERE owner<>:owner OR id<>:rid
+                """,
+                {"owner": owner, "rid": rid},
+            ).fetchone()
+            bytes_needed = max(used + len(blob) - OWNER_BUDGET, total + len(blob) - TOTAL_BUDGET)
+            if bytes_needed > 0:
+                evictions = []
+                if rid.startswith("response:"):
+                    for old_id, size in self.db.execute(
+                        """
+                        SELECT id, length(data) FROM objects
+                        WHERE owner=? AND id GLOB 'response:*' AND id<>?
+                        ORDER BY expires, rowid
+                        """,
+                        (owner, rid),
+                    ):
+                        evictions.append((owner, old_id))
+                        bytes_needed -= size
+                        if bytes_needed <= 0:
+                            break
+                if bytes_needed > 0:
+                    raise ValueError("网关临时存储已满，请稍后重试")
+                self.db.executemany("DELETE FROM objects WHERE owner=? AND id=?", evictions)
+            self.db.execute(
+                "INSERT OR REPLACE INTO objects VALUES(?,?,?,?)", (owner, rid, blob, int(time.time()) + 86400)
+            )
 
     def get(self, owner, rid):
         row = self.db.execute(

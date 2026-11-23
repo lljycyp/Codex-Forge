@@ -1,5 +1,4 @@
 import json
-import difflib
 import io
 import os
 import re
@@ -28,6 +27,7 @@ from core.constants import CONFIG_DIR, DB_PATH, DEFAULT_PROFILE_ROOT
 from core.auth_service import auth_kind, auth_tokens, extract_auth, is_same_auth_account as _is_same_auth_account
 from core.logger import get_logger
 from core.oauth_service import login_with_browser
+from core.gateway_launch import BALANCED_CHATGPT_FLAG, BALANCED_FLAG
 from core.path_utils import check_directory_writable, format_health_status, is_reparse_point, normalize_path_for_match, remove_readonly_path, sanitize_profile_name
 from core.profile_service import (
     apply_profile,
@@ -39,9 +39,7 @@ from core.profile_service import (
     import_auth_json_profile,
     import_active_profile,
     ensure_profile_config_path,
-    prepare_profile_codex_home,
     get_profile_auth_path,
-    sync_codex_home_to_profile,
     sync_auth_file,
     profile_auth_lock,
 )
@@ -52,7 +50,6 @@ from core.instruction_service import (
     ensure_builtin_instruction_templates,
     list_instruction_templates as list_instruction_templates_service,
     save_instruction_template as save_instruction_template_service,
-    sync_instruction_template as sync_instruction_template_service,
 )
 from core.toml_config_service import read_toml_config as read_toml_config_service, save_toml_config as save_toml_config_service
 from core.secure_store import protect_bytes, unprotect_bytes
@@ -62,6 +59,7 @@ from core.usage_service import (
     refresh_all_profile_usage as refresh_all_profile_usage_cache,
     refresh_profile_usage as refresh_profile_usage_cache,
     remove_cached_usage,
+    reset_profile_usage as reset_profile_usage_cache,
 )
 from core.workspace_service import (
     delete_mcp_server as delete_mcp_server_service,
@@ -84,7 +82,6 @@ CODEX_CLIENT_OPERATION_COMMANDS = {
     "ensure_codex_skin_sessions",
     "launch_profile",
     "set_codex_skin_enabled",
-    "set_launch_mode",
     "stop_profile",
 }
 
@@ -131,6 +128,7 @@ def invoke(command, payload=None):
         "refresh_all_profile_usage": refresh_all_profile_usage,
         "refresh_codex_source": refresh_codex_source,
         "refresh_profile_usage": refresh_profile_usage,
+        "reset_profile_usage": reset_profile_usage,
         "read_toml_config": read_toml_config,
         "remove_skill": remove_skill,
         "repair_profile": repair_profile,
@@ -141,11 +139,8 @@ def invoke(command, payload=None):
         "save_profile_launch_settings": save_profile_launch_settings,
         "set_mcp_enabled": set_mcp_enabled,
         "set_skill_enabled": set_skill_enabled,
-        "sync_toml_keys": sync_toml_keys,
         "delete_mcp_server": delete_mcp_server,
-        "compare_toml_configs": compare_toml_configs,
         "set_share_system_config": set_share_system_config,
-        "set_launch_mode": set_launch_mode,
         "set_codex_skin_enabled": set_codex_skin_enabled,
         "get_codex_skin_sessions": get_codex_skin_sessions,
         "ensure_codex_skin_sessions": ensure_codex_skin_sessions,
@@ -182,24 +177,24 @@ def get_app_state(_payload=None):
     config = load_config()
     _normalize_profile_configs(config)
     ensure_builtin_instruction_templates()
-    for profile_name in config.get("profiles", []):
-        target = _resolve_config_target(config, {"profileName": profile_name})
-        ensure_builtin_instruction_templates(_instruction_payload(target))
     running_processes = read_running_codex_processes()
-    running_commands = _commands_from_processes(running_processes)
-    return _build_app_state(config, running_processes, running_commands)
+    return _build_app_state(config, running_processes)
 
 
 def get_runtime_status(_payload=None):
-    """只读取客户端进程状态，供界面轻量轮询。"""
+    """读取当前登录和客户端进程状态，供界面轻量轮询。"""
     config = load_config()
     running_processes = read_running_codex_processes()
     running_commands = _commands_from_processes(running_processes)
-    legacy_profile = _get_legacy_system_running_profile(config, running_processes)
+    active_profile, system_auth_mode = _get_current_login(config)
     return {
-        "runningCount": _running_count_for_mode(config, running_processes, running_commands),
+        "runningCount": len(running_processes),
+        "balancedRunning": _balanced_running(running_commands),
+        "balancedUsesSystemAuth": BALANCED_CHATGPT_FLAG in running_commands.split(),
+        "activeProfile": active_profile,
+        "systemAuthMode": system_auth_mode,
         "profiles": {
-            profile_name: _is_profile_running(config, profile_name, running_commands, legacy_profile)
+            profile_name: _is_profile_running(config, profile_name, running_commands, active_profile)
             for profile_name in config.get("profiles", [])
         },
     }
@@ -210,36 +205,37 @@ def get_shell_snapshot(_payload=None):
     config = load_config()
     _normalize_profile_configs(config)
     ensure_builtin_instruction_templates()
-    for profile_name in config.get("profiles", []):
-        target = _resolve_config_target(config, {"profileName": profile_name})
-        ensure_builtin_instruction_templates(_instruction_payload(target))
     running_processes = read_running_codex_processes()
     running_commands = _commands_from_processes(running_processes)
+    current_login = _get_current_login(config)
     return {
-        "appState": _build_app_state(config, running_processes, running_commands),
-        "profiles": _build_profile_summaries(config, running_commands, running_processes),
+        "appState": _build_app_state(config, running_processes, current_login),
+        "profiles": _build_profile_summaries(config, running_commands, current_login[0]),
     }
 
 
-def _build_app_state(config, running_processes, running_commands):
+def _build_app_state(config, running_processes, current_login=None):
     """用同一份配置和进程快照构造壳层状态。"""
     profiles = config.get("profiles", [])
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
-    running_count = _running_count_for_mode(config, running_processes, running_commands)
+    active_profile, system_auth_mode = current_login if current_login is not None else _get_current_login(config)
+    running_commands = _commands_from_processes(running_processes)
     return {
         "codexCommandAvailable": _is_codex_command_available(config, running_processes),
         "activeAuthPath": str(get_active_auth_path()),
         "activeAuthExists": get_active_auth_path().exists(),
         "activeConfigPath": str(get_active_config_path()),
         "activeConfigExists": get_active_config_path().exists(),
-        "activeProfile": config.get("active_profile", ""),
+        "activeProfile": active_profile,
+        "systemAuthMode": system_auth_mode,
         "shareSystemConfig": True,
-        "launchMode": _get_launch_mode(config),
         "codexSkinEnabled": bool(config.get("codex_skin_enabled")),
         "profileRoot": str(profile_root),
         "profileRootExists": profile_root.exists(),
         "profileCount": len(profiles),
-        "runningCount": running_count,
+        "runningCount": len(running_processes),
+        "balancedRunning": _balanced_running(running_commands),
+        "balancedUsesSystemAuth": BALANCED_CHATGPT_FLAG in running_commands.split(),
         "authCredentialStore": get_auth_credentials_store(get_active_config_path()),
     }
 
@@ -250,7 +246,7 @@ def list_profiles(_payload=None):
     _normalize_profile_configs(config)
     running_processes = read_running_codex_processes()
     running_commands = _commands_from_processes(running_processes)
-    return {"profiles": _build_profile_summaries(config, running_commands, running_processes)}
+    return {"profiles": _build_profile_summaries(config, running_commands)}
 
 
 def create_profile(payload):
@@ -353,9 +349,11 @@ def delete_profile(payload):
     profiles = config.setdefault("profiles", [])
     if name not in profiles:
         raise ValueError("账号不存在")
-    if _is_profile_running(config, name):
-        raise RuntimeError("该账号可能正在使用中，请先关闭 Codex")
     profile_dir = _get_profile_dir(config, name)
+    running_commands = read_running_codex_commands()
+    legacy_user_data = normalize_path_for_match(profile_dir / "AppData" / "Roaming" / "Codex" / "web" / "Codex")
+    if legacy_user_data in running_commands or _is_profile_running(config, name, running_commands):
+        raise RuntimeError("该账号可能正在使用中，请先关闭 Codex")
     logger.info("账号删除开始 名称=%s 目录=%s", name, profile_dir)
     if profile_dir.exists():
         shutil.rmtree(profile_dir, onerror=remove_readonly_path)
@@ -424,9 +422,6 @@ def get_profile_health(payload):
             add("config-syntax", True, "config.toml 语法正确")
         except (OSError, tomllib.TOMLDecodeError) as exc:
             add("config-syntax", False, f"config.toml 无法解析：{exc}")
-    if _get_launch_mode(config) == "multi":
-        client_available = _is_codex_command_available(config)
-        add("codex-client", client_available, "系统客户端已就绪" if client_available else "未找到系统安装的 Codex 客户端", "warning")
     usage = summary.get("usage") or {}
     add("usage", not usage.get("error"), "额度状态正常" if not usage.get("error") else str(usage.get("error")), "warning", "refresh-usage")
     return {"name": name, "healthy": all(item["ok"] for item in checks), "checks": checks}
@@ -442,9 +437,6 @@ def repair_profile(payload):
         return {"name": name, "action": action, "path": str(path)}
     if action == "refresh-usage":
         return refresh_profile_usage({"name": name})
-    if action == "prepare-runtime":
-        prepare_profile_codex_home(profile_dir)
-        return {"name": name, "action": action}
     raise ValueError("不支持的修复操作")
 
 
@@ -467,28 +459,26 @@ def save_profile_launch_settings(payload):
     }
     if any("=" in key or "\x00" in key for key in env):
         raise ValueError("环境变量名称不合法")
-    blocked = {"APPDATA", "LOCALAPPDATA", "CODEX_HOME", "CODEX_MULTI_PROFILE"}
+    blocked = {"APPDATA", "LOCALAPPDATA", "CODEX_HOME"}
     if any(key.upper() in blocked for key in env):
-        raise ValueError("隔离环境变量由 Codex Forge 管理，不能在账号启动环境中覆盖")
+        raise ValueError("账号启动环境不能覆盖系统数据目录")
     value = {"workingDir": working_dir, "args": args, "env": env}
     db.save_profile_launch_settings(name, value)
     return {"name": name, **value}
 
 
-def get_workspace(payload):
-    target = _workspace_target(payload)
-    return read_workspace(target["codex_home"])
+def get_workspace(_payload=None):
+    return read_workspace(get_active_codex_dir())
 
 
 def get_workspace_snapshot(payload):
     """一次读取环境工作台所需数据，减少打包后端的重复启动。"""
     name = _require_profile_name(payload)
-    workspace_payload = {"profileName": payload.get("profileName")} if payload.get("profileName") else {}
     readers = {
         "history": (get_usage_history, {"name": name, "days": payload.get("days", 30)}),
         "health": (get_profile_health, {"name": name}),
-        "workspace": (get_workspace, workspace_payload),
-        "sessions": (list_sessions, {**workspace_payload, "limit": payload.get("limit", 300)}),
+        "workspace": (get_workspace, {}),
+        "sessions": (list_sessions, {"limit": payload.get("limit", 300)}),
         "launchSettings": (get_profile_launch_settings, {"name": name}),
     }
     requested_sections = payload.get("sections")
@@ -520,124 +510,38 @@ def get_workspace_snapshot(payload):
 
 
 def save_agents(payload):
-    target = _workspace_target(payload)
-    return save_agents_service(target["codex_home"], payload.get("content", ""))
+    return save_agents_service(get_active_codex_dir(), payload.get("content", ""))
 
 
 def save_mcp_server(payload):
-    target = _workspace_target(payload)
-    return save_mcp_server_service(target["path"], payload.get("server") or {})
+    return save_mcp_server_service(get_active_config_path(), payload.get("server") or {})
 
 
 def delete_mcp_server(payload):
-    target = _workspace_target(payload)
-    return delete_mcp_server_service(target["path"], payload.get("name"))
+    return delete_mcp_server_service(get_active_config_path(), payload.get("name"))
 
 
 def set_mcp_enabled(payload):
-    target = _workspace_target(payload)
     enabled = payload.get("enabled")
     if not isinstance(enabled, bool):
         raise ValueError("MCP 启用状态无效")
-    return set_mcp_enabled_service(target["path"], payload.get("name"), enabled)
+    return set_mcp_enabled_service(get_active_config_path(), payload.get("name"), enabled)
 
 
 def set_skill_enabled(payload):
-    target = _workspace_target(payload)
-    return set_skill_enabled_service(target["codex_home"], payload.get("name"), bool(payload.get("enabled")))
+    return set_skill_enabled_service(get_active_codex_dir(), payload.get("name"), bool(payload.get("enabled")))
 
 
 def install_skill(payload):
-    target = _workspace_target(payload)
-    return install_skill_service(target["codex_home"], payload.get("sourcePath"))
+    return install_skill_service(get_active_codex_dir(), payload.get("sourcePath"))
 
 
 def remove_skill(payload):
-    target = _workspace_target(payload)
-    return remove_skill_service(target["codex_home"], payload.get("name"))
+    return remove_skill_service(get_active_codex_dir(), payload.get("name"))
 
 
 def list_sessions(payload):
-    target = _workspace_target(payload)
-    return {"items": list_sessions_service(target["codex_home"], payload.get("limit", 200))}
-
-
-def compare_toml_configs(payload):
-    source = _resolve_config_target(load_config(), {"profileName": payload.get("sourceProfile")})
-    target = _resolve_config_target(load_config(), {"profileName": payload.get("targetProfile")})
-    source_text = Path(source["path"]).read_text(encoding="utf-8") if Path(source["path"]).is_file() else ""
-    target_text = Path(target["path"]).read_text(encoding="utf-8") if Path(target["path"]).is_file() else ""
-    diff = "".join(
-        difflib.unified_diff(
-            source_text.splitlines(keepends=True),
-            target_text.splitlines(keepends=True),
-            fromfile=str(source["path"]),
-            tofile=str(target["path"]),
-        )
-    )
-    source_data = tomllib.loads(source_text) if source_text.strip() else {}
-    return {"sourcePath": str(source["path"]), "targetPath": str(target["path"]), "identical": source_text == target_text, "diff": diff, "sourceKeys": sorted(source_data)}
-
-
-def sync_toml_keys(payload):
-    keys = [str(value) for value in payload.get("keys", [])]
-    if not keys:
-        raise ValueError("请选择要同步的配置项")
-    config = load_config()
-    source = _resolve_config_target(config, {"profileName": payload.get("sourceProfile")})
-    target = _resolve_config_target(config, {"profileName": payload.get("targetProfile")})
-    source_text = Path(source["path"]).read_text(encoding="utf-8") if Path(source["path"]).is_file() else ""
-    target_text = Path(target["path"]).read_text(encoding="utf-8") if Path(target["path"]).is_file() else ""
-    source_data = tomllib.loads(source_text) if source_text.strip() else {}
-    missing = [key for key in keys if key not in source_data]
-    if missing:
-        raise ValueError(f"源配置中不存在：{', '.join(missing)}")
-    merged = target_text
-    additions = []
-    for key in keys:
-        merged = _remove_toml_root(merged, key)
-        block = _extract_toml_root(source_text, key)
-        if block:
-            additions.append(block.strip())
-    merged = merged.rstrip()
-    if additions:
-        merged += ("\n\n" if merged else "") + "\n\n".join(additions) + "\n"
-    result = save_toml_config_service({"path": str(target["path"]), "content": merged})
-    return {**result, "keys": keys}
-
-
-def _extract_toml_root(content, root_key):
-    output = []
-    current_root = None
-    assignment = re.compile(rf"^\s*{re.escape(root_key)}\s*=")
-    for line in content.splitlines():
-        header = re.match(r"^\s*\[+\s*([A-Za-z0-9_-]+)(?:\.|\]|\s)", line)
-        if header:
-            current_root = header.group(1)
-        if (current_root is None and assignment.match(line)) or current_root == root_key:
-            output.append(line)
-    return "\n".join(output)
-
-
-def _remove_toml_root(content, root_key):
-    output = []
-    current_root = None
-    assignment = re.compile(rf"^\s*{re.escape(root_key)}\s*=")
-    for line in content.splitlines():
-        header = re.match(r"^\s*\[+\s*([A-Za-z0-9_-]+)(?:\.|\]|\s)", line)
-        if header:
-            current_root = header.group(1)
-        if (current_root is None and assignment.match(line)) or current_root == root_key:
-            continue
-        output.append(line)
-    return "\n".join(output).strip()
-
-
-def _workspace_target(payload):
-    config = load_config()
-    if _get_launch_mode(config) == "multi":
-        return _resolve_config_target(config, {"profileName": payload.get("profileName")})
-    return {"path": get_active_config_path(), "codex_home": get_active_codex_dir()}
+    return {"items": list_sessions_service(get_active_codex_dir(), payload.get("limit", 200))}
 
 
 def _require_profile_name(payload):
@@ -761,8 +665,6 @@ def launch_profile(payload):
     config = load_config()
     if name not in config.get("profiles", []):
         raise ValueError("账号不存在")
-    if _get_launch_mode(config) == "multi":
-        return _launch_profile_multi(config, name)
 
     logger.info("账号启动开始 名称=%s 是否先关闭运行中实例=%s", name, stop_running_first)
     if _running_codex_count() > 0:
@@ -784,7 +686,7 @@ def launch_profile(payload):
     launch_result = _launch_default_codex(name, skin_port=skin_port)
     logger.info("账号启动成功 名称=%s 目录=%s", name, profile_dir)
     result = {"name": name, "activeAuthPath": str(get_active_auth_path()), "activeConfigPath": str(get_active_config_path())}
-    if launch_result.get("skinSession"):
+    if "skinSession" in launch_result:
         result["skinSession"] = launch_result["skinSession"]
     return result
 
@@ -792,71 +694,8 @@ def launch_profile(payload):
 def stop_profile(_payload):
     """关闭当前运行的 Codex 进程。"""
     config = load_config()
-    if _get_launch_mode(config) == "multi":
-        return _stop_profile_multi(config, _payload or {})
     result = _stop_running_codex_processes()
     _sync_shared_workspace(config)
-    return result
-
-
-def _launch_profile_multi(config, name, reserved_skin_ports=None):
-    """按账号隔离环境启动 Codex 桌面端。"""
-    profile_dir = _get_profile_dir(config, name)
-    running_commands = read_running_codex_commands()
-    if _is_profile_running(config, name, running_commands):
-        logger.info("多开账号已在运行 名称=%s", name)
-        return {"name": name, "alreadyRunning": True}
-
-    codex_path = _resolve_codex_app_source_path(config)
-    appdata_dir = profile_dir / "AppData" / "Roaming"
-    localappdata_dir = profile_dir / "AppData" / "Local"
-    codex_home_dir = profile_dir / "CodexHome"
-    user_data_dir = _get_user_data_dir(config, name)
-    for directory in (appdata_dir, localappdata_dir, codex_home_dir, user_data_dir):
-        directory.mkdir(parents=True, exist_ok=True)
-
-    prepare_profile_codex_home(profile_dir)
-    _sync_shared_workspace(config, codex_home_dir, codex_home_dir / "auth.json")
-    env = os.environ.copy()
-    env["APPDATA"] = str(appdata_dir)
-    env["LOCALAPPDATA"] = str(localappdata_dir)
-    env["CODEX_HOME"] = str(codex_home_dir)
-    env["CODEX_MULTI_PROFILE"] = name
-    env["CODEX_ELECTRON_USER_DATA_PATH"] = str(appdata_dir / "Codex")
-    launch_settings = db.load_profile_launch_settings(name)
-    managed_env = {"APPDATA", "LOCALAPPDATA", "CODEX_HOME", "CODEX_MULTI_PROFILE", "CODEX_ELECTRON_USER_DATA_PATH"}
-    env.update(
-        {
-            str(key): str(value)
-            for key, value in dict(launch_settings.get("env") or {}).items()
-            if str(key).upper() not in managed_env
-        }
-    )
-    extra_args = [str(value) for value in launch_settings.get("args", [])]
-    skin_port = None
-    if config.get("codex_skin_enabled"):
-        skin_port = _allocate_codex_skin_port(reserved_skin_ports)
-        extra_args = _append_codex_skin_args(extra_args, skin_port)
-    working_dir = str(launch_settings.get("workingDir") or codex_path.parent)
-
-    logger.info("多开账号启动开始 名称=%s 程序=%s CODEX_HOME=%s", name, codex_path, codex_home_dir)
-    process = subprocess.Popen(
-        [str(resolve_codex_execution_path(codex_path)), f"--user-data-dir={user_data_dir}", *extra_args],
-        cwd=working_dir,
-        env=env,
-        close_fds=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
-    config["active_profile"] = name
-    save_config(config)
-    logger.info("多开账号启动成功 名称=%s 目录=%s", name, profile_dir)
-    result = {
-        "name": name,
-        "activeAuthPath": str(codex_home_dir / "auth.json"),
-        "activeConfigPath": str(codex_home_dir / "config.toml"),
-    }
-    if skin_port is not None:
-        result["skinSession"] = {"profileName": name, "port": skin_port, "processId": process.pid}
     return result
 
 
@@ -872,12 +711,9 @@ def _append_codex_skin_args(extra_args, port):
     ]
 
 
-def _allocate_codex_skin_port(reserved_ports=None):
+def _allocate_codex_skin_port():
     """从 Forge 专用范围选择当前可用的回环端口。"""
-    reserved_ports = reserved_ports or set()
     for port in range(CODEX_SKIN_PORT_START, CODEX_SKIN_PORT_START + CODEX_SKIN_PORT_COUNT):
-        if port in reserved_ports:
-            continue
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             try:
                 listener.bind(("127.0.0.1", port))
@@ -893,13 +729,11 @@ def get_codex_skin_sessions(_payload=None):
     if not config.get("codex_skin_enabled"):
         return {"skinSessions": []}
     shared_root = _get_shared_app_root(config).resolve()
-    source_path = _resolve_configured_codex_app_path(str(config.get("codex_path") or ""))
-    source_path = source_path.resolve() if source_path else None
-    launch_mode = _get_launch_mode(config)
+    source_path = _resolve_configured_codex_app_path(str(config.get("codex_path") or "")) or find_windowsapps_codex_path()
+    source_path = Path(source_path).resolve() if source_path else None
     sessions = []
     for process in read_running_codex_processes():
         command_line = str(process.get("command_line") or "")
-        normalized_command = normalize_path_for_match(command_line)
         port_match = re.search(r"(?:^|\s)--remote-debugging-port(?:=|\s+)(\d+)(?:\s|$)", command_line, re.IGNORECASE)
         if not port_match or "--remote-debugging-address=127.0.0.1" not in command_line.lower():
             continue
@@ -913,24 +747,7 @@ def get_codex_skin_sessions(_payload=None):
         except (OSError, ValueError):
             continue
         profile_name = str(config.get("active_profile") or SYSTEM_PROFILE_NAME)
-        if launch_mode == "multi":
-            profile_name = next(
-                (
-                    name
-                    for name in config.get("profiles", [])
-                    if any(target in normalized_command for target in _get_profile_running_match_targets(config, name))
-                ),
-                "",
-            )
-            if not profile_name:
-                continue
-        sessions.append(
-            {
-                "profileName": profile_name,
-                "port": port,
-                "processId": int(process.get("pid") or 0),
-            }
-        )
+        sessions.append({"profileName": profile_name, "port": port, "processId": int(process.get("pid") or 0)})
     return {"skinSessions": sessions}
 
 
@@ -942,54 +759,16 @@ def ensure_codex_skin_sessions(_payload=None):
     config = load_config()
     if not config.get("codex_skin_enabled"):
         return {"skinSessions": []}
-    launch_mode = _get_launch_mode(config)
-    if launch_mode == "multi":
-        running_profiles = _running_multi_profile_names(config)
-        if not running_profiles:
-            return {"skinSessions": []}
-        sessions = []
-        reserved_ports = set()
-        for profile_name in running_profiles:
-            _stop_profile_multi(config, {"name": profile_name})
-            session = _launch_profile_multi(config, profile_name, reserved_ports).get("skinSession")
-            if session:
-                sessions.append(session)
-                reserved_ports.add(session["port"])
-        return {"skinSessions": sessions}
     if _running_codex_count() == 0:
         return {"skinSessions": []}
+    if _balanced_running(read_running_codex_commands()):
+        return recovered
     active_profile = str(config.get("active_profile") or "")
     _sync_active_auth_to_profile(config, active_profile)
     _stop_running_codex_processes()
     launch_result = _launch_default_codex(active_profile, skin_port=_allocate_codex_skin_port())
     session = launch_result.get("skinSession")
     return {"skinSessions": [session] if session else []}
-
-
-def _stop_profile_multi(config, payload):
-    """关闭指定账号对应的 Codex 进程。"""
-    name = payload.get("name", "")
-    if not name:
-        stopped = 0
-        for profile_name in _running_multi_profile_names(config):
-            stopped += _stop_profile_multi(config, {"name": profile_name}).get("stopped", 0)
-        return {"stopped": stopped}
-    if name not in config.get("profiles", []):
-        raise ValueError("账号不存在")
-    match_targets = _get_profile_running_match_targets(config, name)
-    matched_processes = [
-        process
-        for process in read_running_codex_processes()
-        if any(target in normalize_path_for_match(process["command_line"]) for target in match_targets)
-    ]
-    if _get_legacy_system_running_profile(config) == name:
-        matched_processes.extend(_get_unisolated_codex_processes(config))
-    logger.info("多开账号关闭开始 名称=%s 匹配进程=%s", name, len(matched_processes))
-    stopped = _stop_client_processes(matched_processes)
-    sync_codex_home_to_profile(_get_profile_dir(config, name))
-    _sync_shared_workspace(config)
-    logger.info("多开账号关闭成功 名称=%s 已关闭=%s", name, stopped)
-    return {"name": name, "stopped": stopped}
 
 
 def _stop_running_codex_processes():
@@ -1036,108 +815,32 @@ def refresh_codex_source(_payload=None):
     }
 
 
-def read_toml_config(payload=None):
-    """按当前启动模式读取系统或账号级 config.toml。"""
-    config = load_config()
-    target = _resolve_config_target(config, payload or {})
-    return read_toml_config_service({"path": str(target["path"])})
+def read_toml_config(_payload=None):
+    return read_toml_config_service({"path": str(get_active_config_path())})
 
 
 def save_toml_config(payload):
-    """按当前启动模式保存系统、单账号或全部账号 config.toml。"""
-    config = load_config()
-    payload = payload or {}
-    if _get_launch_mode(config) == "multi" and payload.get("scope") == "all":
-        profile_names = config.get("profiles", [])
-        if not profile_names:
-            raise ValueError("暂无账号可同步")
-        result = None
-        for profile_name in profile_names:
-            target = _resolve_config_target(config, {"profileName": profile_name})
-            result = save_toml_config_service({"path": str(target["path"]), "content": payload.get("content", "")})
-        return {**(result or {}), "syncedCount": len(profile_names)}
-    target = _resolve_config_target(config, payload)
-    return save_toml_config_service({"path": str(target["path"]), "content": payload.get("content", "")})
+    return save_toml_config_service({"path": str(get_active_config_path()), "content": payload.get("content", "")})
 
 
-def list_instruction_templates(payload=None):
-    """按当前启动模式读取模板启用状态。"""
-    config = load_config()
-    target = _resolve_config_target(config, payload or {})
-    return list_instruction_templates_service(_instruction_payload(target))
+def list_instruction_templates(_payload=None):
+    return list_instruction_templates_service()
 
 
 def save_instruction_template(payload):
-    """按当前启动模式保存模板；multi 下保存到账号目录。"""
-    config = load_config()
-    payload = payload or {}
-    target = _resolve_config_target(config, payload)
-    return save_instruction_template_service({**payload, **_instruction_payload(target)})
+    return save_instruction_template_service({key: payload.get(key) for key in ("id", "title", "filename", "content")})
 
 
 def delete_instruction_template(payload):
-    """按当前启动模式删除模板；multi 下删除账号目录内模板。"""
-    config = load_config()
-    payload = payload or {}
-    target = _resolve_config_target(config, payload)
-    return delete_instruction_template_service({**payload, **_instruction_payload(target)})
+    return delete_instruction_template_service({"id": payload.get("id")})
 
 
 def enable_instruction_template(payload):
-    """按当前启动模式启用模板；scope=all/profile 只同步模板文件。"""
-    config = load_config()
-    payload = payload or {}
-    if _get_launch_mode(config) == "multi" and payload.get("scope") == "profile":
-        target_profile_name = str(payload.get("targetProfileName") or "").strip()
-        if target_profile_name not in config.get("profiles", []):
-            raise ValueError("请选择有效目标账号")
-        source_target = _resolve_config_target(config, payload)
-        target = _resolve_config_target(config, {"profileName": target_profile_name})
-        sync_payload = {
-            "id": payload.get("id"),
-            "targetTemplateDir": str(target["template_dir"]),
-        }
-        if source_target.get("template_dir"):
-            sync_payload["templateDir"] = str(source_target["template_dir"])
-        return sync_instruction_template_service(sync_payload)
-    if _get_launch_mode(config) == "multi" and payload.get("scope") == "all":
-        profile_names = config.get("profiles", [])
-        if not profile_names:
-            raise ValueError("暂无账号可同步")
-        result = None
-        source_target = _resolve_config_target(config, payload)
-        for profile_name in profile_names:
-            target = _resolve_config_target(config, {"profileName": profile_name})
-            sync_payload = {
-                "id": payload.get("id"),
-                "targetTemplateDir": str(target["template_dir"]),
-            }
-            if source_target.get("template_dir"):
-                sync_payload["templateDir"] = str(source_target["template_dir"])
-            result = sync_instruction_template_service(sync_payload)
-        return {**(result or {}), "syncedCount": len(profile_names)}
-    target = _resolve_config_target(config, payload)
-    return enable_instruction_template_service({
-        "id": payload.get("id"),
-        **_instruction_payload(target),
-    })
+    return enable_instruction_template_service({"id": payload.get("id")})
 
 
-def disable_instruction_template(payload=None):
-    """按当前启动模式禁用模板。"""
-    config = load_config()
-    payload = payload or {}
-    if _get_launch_mode(config) == "multi" and payload.get("scope") == "all":
-        profile_names = config.get("profiles", [])
-        if not profile_names:
-            raise ValueError("暂无账号可同步")
-        result = None
-        for profile_name in profile_names:
-            target = _resolve_config_target(config, {"profileName": profile_name})
-            result = disable_instruction_template_service(_instruction_payload(target))
-        return {**(result or {}), "syncedCount": len(profile_names)}
-    target = _resolve_config_target(config, payload)
-    return disable_instruction_template_service(_instruction_payload(target))
+def disable_instruction_template(_payload=None):
+    return disable_instruction_template_service()
 
 
 def refresh_profile_usage(payload):
@@ -1146,35 +849,41 @@ def refresh_profile_usage(payload):
     config = load_config()
     if name not in config.get("profiles", []):
         raise ValueError("账号不存在")
-    use_codex_home = _get_launch_mode(config) == "multi"
-    if not use_codex_home:
-        _sync_active_auth_to_profile(config, name)
-    usage = refresh_profile_usage_cache(
-        name,
-        _get_profile_dir(config, name),
-        share_system_config=not use_codex_home,
-        use_codex_home_auth=use_codex_home,
-    )
+    _sync_active_auth_to_profile(config, name)
+    usage = refresh_profile_usage_cache(name, _get_profile_dir(config, name))
     return {"name": name, "usage": usage}
+
+
+def reset_profile_usage(payload):
+    """仅对确认时选中的账号和重置卡执行操作。"""
+    name = _require_profile_name(payload)
+    profile = db.get_profile(name)
+    if not profile or profile["id"] != payload.get("profileId"):
+        return {"outcome": "accountChanged"}
+    scope = payload.get("scope")
+    attempt_id = payload.get("attemptId")
+    credit_id = payload.get("creditId")
+    if not isinstance(scope, str) or not scope.strip() or not isinstance(attempt_id, str) or not attempt_id.strip():
+        raise ValueError("额度重置请求无效")
+    if credit_id is not None and (not isinstance(credit_id, str) or not credit_id.strip()):
+        raise ValueError("重置卡无效")
+    config = load_config()
+    _sync_active_auth_to_profile(config, name)
+    return reset_profile_usage_cache(
+        name, _get_profile_dir(config, name), scope, credit_id, attempt_id,
+        retry=payload.get("retry") is True,
+    )
 
 
 def refresh_all_profile_usage(_payload=None):
     """刷新全部账号的额度快照。"""
     config = load_config()
-    use_codex_home = _get_launch_mode(config) == "multi"
-    if not use_codex_home:
-        _sync_active_auth_to_profile(config, config.get("active_profile", ""))
+    _sync_active_auth_to_profile(config, config.get("active_profile", ""))
     profile_dirs = {
         profile_name: str(_get_profile_dir(config, profile_name))
         for profile_name in config.get("profiles", [])
     }
-    return {
-        "profiles": refresh_all_profile_usage_cache(
-            profile_dirs,
-            share_system_config=not use_codex_home,
-            use_codex_home_auth=use_codex_home,
-        )
-    }
+    return {"profiles": refresh_all_profile_usage_cache(profile_dirs)}
 
 
 def set_share_system_config(payload):
@@ -1185,22 +894,6 @@ def set_share_system_config(payload):
     return {"shareSystemConfig": True}
 
 
-def set_launch_mode(payload):
-    """保存 Codex 启动模式。"""
-    mode = str(payload.get("mode") or "").strip()
-    if mode not in ("switch", "multi"):
-        raise ValueError("启动模式无效")
-    config = load_config()
-    if mode == "switch" and _running_multi_profile_names(config):
-        raise RuntimeError("请先关闭所有多开隔离模式下运行的 Codex，再切回账号切换模式")
-    if mode == "multi" and _get_launch_mode(config) == "switch":
-        _sync_active_auth_to_profile(config, config.get("active_profile", ""))
-    config["launch_mode"] = mode
-    save_config(config)
-    logger.info("启动模式已切换 模式=%s", mode)
-    return {"launchMode": mode}
-
-
 def set_codex_skin_enabled(payload):
     """保存 Codex 皮肤开关，并安全重启当前运行实例以切换 CDP 状态。"""
     config = load_config()
@@ -1208,25 +901,20 @@ def set_codex_skin_enabled(payload):
     if not isinstance(enabled, bool):
         raise ValueError("Codex 皮肤开关无效")
     previous_enabled = bool(config.get("codex_skin_enabled"))
-    launch_mode = _get_launch_mode(config)
-    running_profiles = _running_multi_profile_names(config) if launch_mode == "multi" else []
-    switch_running = launch_mode == "switch" and _running_codex_count() > 0
+    switch_running = _running_codex_count() > 0
     active_profile = config.get("active_profile", "")
     if enabled == previous_enabled:
         return {"codexSkinEnabled": enabled, "skinSessions": []}
+    if switch_running and _balanced_running(read_running_codex_commands()):
+        config["codex_skin_enabled"] = enabled
+        save_config(config)
+        return {**get_codex_skin_sessions(), "codexSkinEnabled": enabled}
     if switch_running:
         _sync_active_auth_to_profile(config, active_profile)
         _stop_running_codex_processes()
     config["codex_skin_enabled"] = enabled
     save_config(config)
     skin_sessions = []
-    reserved_skin_ports = set()
-    for profile_name in running_profiles:
-        _stop_profile_multi(config, {"name": profile_name})
-        session = _launch_profile_multi(config, profile_name, reserved_skin_ports).get("skinSession")
-        if session:
-            skin_sessions.append(session)
-            reserved_skin_ports.add(session["port"])
     if switch_running:
         skin_port = _allocate_codex_skin_port() if enabled else None
         launch_result = _launch_default_codex(active_profile, skin_port=skin_port)
@@ -1327,9 +1015,10 @@ def get_diagnostics(_payload=None):
         else set()
     )
     running_commands = read_running_codex_commands()
+    active_profile, _ = _get_current_login(config, {record["display_name"]: record for record in profile_records})
     profile_items = []
     for profile_name in profiles:
-        summary = _build_profile_summary(config, profile_name, running_commands)
+        summary = _build_profile_summary(config, profile_name, running_commands, active_profile=active_profile)
         disk_usage_bytes = _get_directory_size(_get_profile_dir(config, profile_name))
         health = {
             "running": summary["running"],
@@ -1361,7 +1050,7 @@ def get_diagnostics(_payload=None):
             "activeConfigExists": get_active_config_path().exists(),
             "codexCommandAvailable": _is_codex_command_available(),
             "runningCodexCount": _running_codex_count(),
-            "activeProfile": config.get("active_profile", ""),
+            "activeProfile": active_profile,
             "shareSystemConfig": True,
             "profileCount": len(profiles),
             "missingProfileDirs": sorted(expected_dirs - actual_dirs),
@@ -1443,10 +1132,15 @@ def _commands_from_processes(processes):
     return normalize_path_for_match("\n".join(process["command_line"] for process in processes))
 
 
-def _build_profile_summaries(config, running_commands, running_processes):
+def _balanced_running(running_commands):
+    return BALANCED_FLAG in running_commands.split()
+
+
+def _build_profile_summaries(config, running_commands, active_profile=None):
     profile_records = {record["display_name"]: record for record in db.list_profile_records()}
     usage_cache = db.load_usage_cache()
-    legacy_profile = _get_legacy_system_running_profile(config, running_processes)
+    if active_profile is None:
+        active_profile, _ = _get_current_login(config, profile_records)
     return [
         _build_profile_summary(
             config,
@@ -1454,7 +1148,7 @@ def _build_profile_summaries(config, running_commands, running_processes):
             running_commands,
             profile_record=profile_records.get(profile_name),
             usage_cache=usage_cache,
-            legacy_profile=legacy_profile,
+            active_profile=active_profile,
         )
         for profile_name in config.get("profiles", [])
     ]
@@ -1466,7 +1160,7 @@ def _build_profile_summary(
     running_commands,
     profile_record=None,
     usage_cache=None,
-    legacy_profile=None,
+    active_profile=None,
 ):
     """构造账号列表项。"""
     if profile_record is None:
@@ -1476,8 +1170,9 @@ def _build_profile_summary(
     status = get_profile_status(
         profile_dir,
     )
-    active_profile = config.get("active_profile", "")
-    running = _is_profile_running(config, profile_name, running_commands, legacy_profile)
+    if active_profile is None:
+        active_profile, _ = _get_current_login(config)
+    running = _is_profile_running(config, profile_name, running_commands, active_profile)
     return {
         "id": profile_record["id"] if profile_record else "",
         "name": profile_name,
@@ -1490,8 +1185,6 @@ def _build_profile_summary(
         "authExists": status["authExists"],
         "configPath": status["configPath"],
         "configExists": status["configExists"],
-        "codexHome": str(profile_dir / "CodexHome"),
-        "codexHomeExists": (profile_dir / "CodexHome").exists(),
         "errors": status["errors"],
         "warnings": status["warnings"],
         "usage": usage,
@@ -1508,13 +1201,13 @@ def _get_profile_dir(config, profile_name):
 
 
 def _get_shared_app_root(config):
-    """返回所有多开账号共用的客户端存储目录。"""
+    """返回客户端操作锁与旧版客户端副本所在目录。"""
     profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
     return profile_root / ".shared"
 
 
 def _sync_shared_workspace(config, target_home=None, auth_path=None):
-    """全部账号使用同一共享数据源；运行中的其他实例只读取已落盘快照。"""
+    """汇总系统和旧账号目录中的工作区布局，供切换账号时使用。"""
     homes = [get_active_codex_dir()]
     homes.extend(_get_profile_dir(config, name) / "CodexHome" for name in config.get("profiles", []))
     result = sync_shared_workspace(
@@ -1525,38 +1218,9 @@ def _sync_shared_workspace(config, target_home=None, auth_path=None):
 
 
 def _normalize_profile_configs(config):
-    """开发期直接收敛账号配置：删除外层 config.toml，只保留 CodexHome/config.toml。"""
+    """补齐供账号备份和网关使用的配置文件。"""
     for profile_name in config.get("profiles", []):
         ensure_profile_config_path(_get_profile_dir(config, profile_name))
-
-
-def _resolve_config_target(config, payload):
-    """switch 使用系统配置；multi 使用指定账号 CodexHome 配置。"""
-    if _get_launch_mode(config) != "multi":
-        return {"path": get_active_config_path(), "codex_home": get_active_codex_dir(), "template_dir": None, "profileName": ""}
-
-    profile_name = str(payload.get("profileName") or config.get("active_profile") or "").strip()
-    if profile_name == SYSTEM_PROFILE_NAME:
-        return {"path": get_active_config_path(), "codex_home": get_active_codex_dir(), "template_dir": None, "profileName": SYSTEM_PROFILE_NAME}
-    if not profile_name and config.get("profiles"):
-        profile_name = config["profiles"][0]
-    if profile_name not in config.get("profiles", []):
-        raise ValueError("请选择有效账号")
-    profile_dir = _get_profile_dir(config, profile_name)
-    config_path = ensure_profile_config_path(profile_dir)
-    return {
-        "path": config_path,
-        "codex_home": profile_dir / "CodexHome",
-        "template_dir": profile_dir / "instruction_templates",
-        "profileName": profile_name,
-    }
-
-
-def _instruction_payload(target):
-    payload = {"codexHome": str(target["codex_home"]), "configPath": str(target["path"])}
-    if target.get("template_dir"):
-        payload["templateDir"] = str(target["template_dir"])
-    return payload
 
 
 def _remove_path_if_inside_profile_root(config, path):
@@ -1582,104 +1246,50 @@ def _validate_profile_name(config, profile_name, exclude_name=None):
     return profile_name
 
 
-def _get_launch_mode(config):
-    """读取启动模式，异常值回退到稳定的账号切换模式。"""
-    return "multi" if config.get("launch_mode") == "multi" else "switch"
-
-
-def _is_profile_running(config, profile_name, running_commands=None, legacy_profile=None):
+def _is_profile_running(config, profile_name, running_commands=None, active_profile=None):
     """判断指定账号是否为当前正在运行的账号。"""
-    if _get_launch_mode(config) == "multi":
-        running_commands = running_commands if running_commands is not None else read_running_codex_commands()
-        if any(target in running_commands for target in _get_profile_running_match_targets(config, profile_name)):
-            return True
-        if legacy_profile is None:
-            legacy_profile = _get_legacy_system_running_profile(config)
-        return legacy_profile == profile_name
     if running_commands is None:
         running_commands = read_running_codex_commands()
-    return profile_name == config.get("active_profile", "") and bool(running_commands)
+    if not any(not _balanced_running(line) for line in running_commands.splitlines() if line):
+        return False
+    if active_profile is None:
+        active_profile, _ = _get_current_login(config)
+    return profile_name == active_profile
 
 
-def _running_count_for_mode(config, running_processes=None, running_commands=None):
-    """按当前启动模式统计运行账号数。"""
-    running_processes = running_processes if running_processes is not None else read_running_codex_processes()
-    if _get_launch_mode(config) != "multi":
-        return 1 if running_processes else 0
-    running_commands = running_commands if running_commands is not None else _commands_from_processes(running_processes)
-    legacy_profile = _get_legacy_system_running_profile(config, running_processes)
-    return sum(
-        1
-        for profile_name in config.get("profiles", [])
-        if _is_profile_running(config, profile_name, running_commands, legacy_profile)
-    )
-
-
-def _running_multi_profile_names(config):
-    """列出当前仍在多开隔离环境中运行的账号。"""
-    running_commands = read_running_codex_commands()
-    running_profiles = [
-        profile_name
-        for profile_name in config.get("profiles", [])
-        if any(target in running_commands for target in _get_profile_running_match_targets(config, profile_name))
-    ]
-    legacy_profile = _get_legacy_system_running_profile(config)
-    if legacy_profile and legacy_profile not in running_profiles:
-        running_profiles.append(legacy_profile)
-    return running_profiles
-
-
-def _get_unisolated_codex_processes(config, running_processes=None):
-    """返回不属于任何账号隔离目录的系统客户端主进程。"""
-    profile_targets = [
-        target
-        for profile_name in config.get("profiles", [])
-        for target in _get_profile_running_match_targets(config, profile_name)
-    ]
-    return [
-        process
-        for process in (running_processes if running_processes is not None else read_running_codex_processes())
-        if not any(target in normalize_path_for_match(process["command_line"]) for target in profile_targets)
-    ]
-
-
-def _get_legacy_system_running_profile(config, running_processes=None):
-    """识别从账号切换模式直接带入多开模式的系统客户端。"""
-    if _get_launch_mode(config) != "multi" or not _get_unisolated_codex_processes(config, running_processes):
-        return ""
-    active_auth_path = get_active_auth_path()
-    if not active_auth_path.exists():
-        return ""
+def _read_system_auth():
     try:
-        active_auth = json.loads(active_auth_path.read_text(encoding="utf-8"))
-    except Exception:
+        return json.loads(get_active_auth_path().read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+
+
+def _get_current_login(config, profile_records=None):
+    selected = config.get("active_profile") or ""
+    active_auth = _read_system_auth()
+    return _match_saved_profile(config, active_auth, selected, profile_records), auth_kind(active_auth)
+
+
+def _match_saved_profile(config, active_auth, preferred="", profile_records=None):
+    if not auth_kind(active_auth) or not config.get("profiles"):
         return ""
+    if profile_records is None:
+        profile_records = {record["display_name"]: record for record in db.list_profile_records()}
+    profile_root = Path(config.get("profile_root") or DEFAULT_PROFILE_ROOT)
     matching_profiles = []
     for profile_name in config.get("profiles", []):
-        profile_auth_path = get_profile_auth_path(_get_profile_dir(config, profile_name))
-        if not profile_auth_path.exists():
+        record = profile_records.get(profile_name)
+        if not record:
             continue
         try:
-            profile_auth = json.loads(profile_auth_path.read_text(encoding="utf-8"))
-            if _is_same_auth_account(active_auth, profile_auth):
-                matching_profiles.append(profile_name)
-        except Exception:
+            profile_auth = json.loads(get_profile_auth_path(profile_root / record["dir_name"]).read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
             continue
+        if _is_same_auth_account(active_auth, profile_auth):
+            if profile_name == preferred:
+                return profile_name
+            matching_profiles.append(profile_name)
     return matching_profiles[0] if len(matching_profiles) == 1 else ""
-
-
-def _get_user_data_dir(config, profile_name):
-    """计算 Codex 网页容器的独立用户数据目录。"""
-    return _get_profile_dir(config, profile_name) / "AppData" / "Roaming" / "Codex" / "web" / "Codex"
-
-
-def _get_profile_running_match_targets(config, profile_name):
-    """构造用于识别账号运行进程的命令行路径特征。"""
-    profile_dir = _get_profile_dir(config, profile_name)
-    return [
-        normalize_path_for_match(profile_dir),
-        normalize_path_for_match(_get_user_data_dir(config, profile_name)),
-    ]
 
 
 def _running_codex_count():
@@ -1747,7 +1357,7 @@ def _resolve_codex_app_source_path(config):
         save_config(config)
         return Path(detected_path)
 
-    raise FileNotFoundError("多开隔离模式需要可识别的 Codex 桌面客户端，请先刷新来源或安装客户端")
+    raise FileNotFoundError("此启动方式需要可识别的 Codex 桌面客户端，请先刷新来源或安装客户端")
 
 
 def _prefer_latest_installed_store_path(configured_app_path):
@@ -1853,6 +1463,10 @@ $matches | Where-Object { $_ -match $pattern } | Sort-Object @{Expression = { $_
 def _launch_default_codex(profile_name="", skin_port=None):
     """启动默认安装的 Codex 桌面端。"""
     config = load_config()
+    launch_settings = db.load_profile_launch_settings(profile_name) if profile_name else {}
+    extra_args = [str(value) for value in launch_settings.get("args", [])]
+    env = os.environ.copy()
+    env.update({str(key): str(value) for key, value in dict(launch_settings.get("env") or {}).items()})
     if skin_port is not None:
         codex_path = Path(_resolve_codex_app_source_path(config))
         launch_spec = {
@@ -1863,13 +1477,11 @@ def _launch_default_codex(profile_name="", skin_port=None):
         }
     else:
         launch_spec = _resolve_codex_launch_spec(config)
-    launch_settings = db.load_profile_launch_settings(profile_name) if profile_name else {}
-    extra_args = [str(value) for value in launch_settings.get("args", [])] if launch_spec["kind"] == "app" else []
+    if launch_spec["kind"] != "app":
+        extra_args = []
     if skin_port is not None:
         extra_args = _append_codex_skin_args(extra_args, skin_port)
     command = [*launch_spec["command"], *extra_args]
-    env = os.environ.copy()
-    env.update({str(key): str(value) for key, value in dict(launch_settings.get("env") or {}).items()})
     working_dir = str(launch_settings.get("workingDir") or launch_spec.get("cwd") or "") or None
     logger.info("Codex 启动开始 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
     try:
@@ -1881,16 +1493,12 @@ def _launch_default_codex(profile_name="", skin_port=None):
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         logger.info("Codex 启动成功 类型=%s 显示=%s", launch_spec["kind"], launch_spec["display"])
+        result: dict[str, object] = {"processId": process.pid}
         if skin_port is not None:
-            return {
-                "processId": process.pid,
-                "skinSession": {
-                    "profileName": profile_name or SYSTEM_PROFILE_NAME,
-                    "port": skin_port,
-                    "processId": process.pid,
-                },
+            result["skinSession"] = {
+                "profileName": profile_name or SYSTEM_PROFILE_NAME, "port": skin_port, "processId": process.pid,
             }
-        return {"processId": process.pid}
+        return result
     except FileNotFoundError as exc:
         logger.exception("Codex 启动失败 显示=%s 错误=%s", launch_spec["display"], exc)
         raise FileNotFoundError("未找到 Codex 桌面客户端，请在设置中重新识别或确认已安装") from exc

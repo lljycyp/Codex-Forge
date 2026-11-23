@@ -27,8 +27,15 @@ CLIENT_INFO = {
 }
 
 
-def read_account_and_rate_limits(profile_dir, auth_path, config_path):
-    """通过官方 App Server 读取账号状态和 Codex 额度。"""
+class AppServerRequestError(RuntimeError):
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+@contextmanager
+def profile_account_app_server(profile_dir, auth_path, config_path):
+    """用指定账号的独立环境连接 App Server，并同步续期的认证。"""
     auth_path = Path(auth_path)
     with profile_auth_lock(profile_dir):
         with temporary_app_server_home(auth_path, config_path) as codex_home:
@@ -44,10 +51,15 @@ def read_account_and_rate_limits(profile_dir, auth_path, config_path):
                         raise ValueError("API Key 账号不提供 Codex 套餐额度")
                     if account.get("type") != "chatgpt":
                         raise ValueError("当前认证方式不支持读取 Codex 套餐额度")
-                    rate_limits = client.request("account/rateLimits/read")
+                    yield client, account
             finally:
                 _sync_temporary_auth(codex_home / "auth.json", auth_path)
-    return account, rate_limits
+
+
+def read_account_and_rate_limits(profile_dir, auth_path, config_path):
+    """通过官方 App Server 读取账号状态和 Codex 额度。"""
+    with profile_account_app_server(profile_dir, auth_path, config_path) as (client, account):
+        return account, client.request("account/rateLimits/read")
 
 
 def login_with_chatgpt_browser():
@@ -174,20 +186,22 @@ def _sync_temporary_auth(source_path, target_path):
 class AppServerClient:
     """Codex App Server 的最小 JSONL 客户端。"""
 
-    def __init__(self, codex_home, executable):
+    def __init__(self, codex_home, executable, *, env=None, config_args=()):
         self.codex_home = Path(codex_home)
         self.executable = Path(executable)
+        self.env = env
+        self.config_args = config_args
         self.process = None
         self.messages = queue.Queue()
         self.stderr_lines = deque(maxlen=20)
         self.next_id = 1
 
     def __enter__(self):
-        env = os.environ.copy()
+        env = dict(os.environ if self.env is None else self.env)
         env["CODEX_HOME"] = str(self.codex_home)
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self.process = subprocess.Popen(
-            [str(self.executable), "app-server", "--listen", "stdio://"],
+            [str(self.executable), "app-server", "--listen", "stdio://", *self.config_args],
             cwd=str(self.executable.parent),
             env=env,
             stdin=subprocess.PIPE,
@@ -253,9 +267,11 @@ class AppServerClient:
         response = self._wait_for(lambda item: item.get("id") == request_id, timeout)
         if response.get("error"):
             error = response["error"]
+            code = None
             if isinstance(error, dict):
+                code = error.get("code")
                 error = error.get("message") or json.dumps(error, ensure_ascii=False)
-            raise RuntimeError(str(error))
+            raise AppServerRequestError(str(error), code)
         result = response.get("result")
         return result if isinstance(result, dict) else {}
 

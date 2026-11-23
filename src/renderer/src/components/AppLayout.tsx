@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Layout } from "antd";
 import { Copy, Minus, Square, X } from "lucide-react";
 import { useI18n } from "../i18n";
-import type { AppState, ViewKey } from "../types";
+import type { ViewKey } from "../types";
 import codexForgeLogo from "../assets/codex-forge-logo.png";
 
 const { Sider } = Layout;
@@ -21,7 +21,6 @@ type MenuItem = {
 
 type AppLayoutProps = {
   activeView: ViewKey;
-  launchMode: AppState["launchMode"];
   menuItems: MenuItem[];
   taskText: string;
   children: ReactNode;
@@ -30,7 +29,6 @@ type AppLayoutProps = {
 
 export function AppLayout({
   activeView,
-  launchMode,
   menuItems,
   taskText,
   children,
@@ -62,8 +60,6 @@ export function AppLayout({
                 Codex Forge
               </span>
               <div className="flex items-center gap-2 text-[11px] font-medium text-white/80">
-                <span>{t("多开")}</span>
-                <span className="h-[3px] w-[3px] rounded-full bg-white/40" />
                 <span>{t("切换")}</span>
                 <span className="h-[3px] w-[3px] rounded-full bg-white/40" />
                 <span>{t("指令")}</span>
@@ -111,7 +107,6 @@ export function AppLayout({
               />
             ))}
           </nav>
-          <LaunchModeCard launchMode={launchMode} />
         </Sider>
         <Layout className="relative mb-3.5 mr-3.5 h-[calc(100%-14px)] min-w-0 overflow-hidden rounded-panel bg-shell-surface shadow-panel">
           {children}
@@ -120,20 +115,6 @@ export function AppLayout({
     </Layout>
   );
 }
-function LaunchModeCard({ launchMode }: { launchMode: AppState["launchMode"] }) {
-  const { t } = useI18n();
-  const isMulti = launchMode === "multi";
-
-  return (
-    <div className="rounded-[9px] bg-black/10 px-3 py-2.5">
-      <div className="text-[11px] font-medium text-white/60">{t("当前模式")}</div>
-      <div className="mt-0.5 truncate text-[13px] font-semibold text-white/90">
-        {isMulti ? t("多开隔离模式") : t("账号切换模式")}
-      </div>
-    </div>
-  );
-}
-
 function NavButton({
   item,
   active,

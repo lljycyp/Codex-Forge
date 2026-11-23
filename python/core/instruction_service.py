@@ -137,24 +137,6 @@ def delete_instruction_template(payload):
     return list_instruction_templates({**payload, "configPath": str(config_path)})
 
 
-def sync_instruction_template(payload):
-    """把一个模板复制到另一个模板目录，不启用它。"""
-    payload = payload or {}
-    source_dir = _template_dir(payload)
-    target_dir = Path(payload.get("targetTemplateDir") or "")
-    if not target_dir:
-        raise ValueError("目标模板目录不能为空")
-    template = _find_template(str(payload.get("id") or "").strip(), source_dir)
-    source = _template_path(template["filename"], source_dir)
-    if not source.exists():
-        raise FileNotFoundError("模板文件不存在")
-    _write_text_atomic(_template_path(template["filename"], target_dir), source.read_text(encoding="utf-8"))
-    templates = [item for item in _load_index(target_dir) if item["id"] != template["id"]]
-    templates.append(template)
-    _save_index(templates, target_dir)
-    return {"id": template["id"], "filename": template["filename"]}
-
-
 def enable_instruction_template(payload):
     """启用指定模板，写入当前 Codex 目录并更新 config.toml。"""
     payload = payload or {}

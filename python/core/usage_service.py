@@ -1,17 +1,22 @@
 import contextlib
+import hashlib
 import json
 import os
 import time
 from pathlib import Path
 
 from core import db
-from core.app_server_service import read_account_and_rate_limits
+from core.app_server_service import AppServerRequestError, profile_account_app_server, read_account_and_rate_limits
 from core.auth_service import extract_auth
 from core.constants import DB_PATH
+from core.logger import get_logger
 from core.profile_service import (
     get_active_config_path, get_profile_auth_path, profile_auth_lock,
-    sync_auth_file, sync_codex_home_to_profile,
+    sync_codex_home_to_profile,
 )
+
+
+logger = get_logger(__name__)
 
 
 def load_usage_cache():
@@ -30,19 +35,81 @@ def get_cached_profile_usage(profile_name):
     return usage if isinstance(usage, dict) else None
 
 
-def refresh_profile_usage(profile_name, profile_dir, share_system_config=False, use_codex_home_auth=False):
+def refresh_profile_usage(profile_name, profile_dir):
     """刷新单个账号额度并写入缓存。"""
     started_at = time.time()
-    usage = _build_profile_usage(
-        profile_dir,
-        share_system_config=share_system_config,
-        use_codex_home_auth=use_codex_home_auth,
-    )
+    usage = _build_profile_usage(profile_dir)
     cache = _merge_usage_results({profile_name: usage}, started_at)
     return cache.get(profile_name, usage)
 
 
-def refresh_all_profile_usage(profile_dirs, share_system_config=False, use_codex_home_auth=False):
+def reset_profile_usage(profile_name, profile_dir, scope, credit_id, attempt_id, retry) -> dict:
+    """使用指定重置权益，再读取官方额度以更新缓存。"""
+    attempt_ref = hashlib.sha256(attempt_id.encode("utf-8")).hexdigest()[:12]
+    with profile_auth_lock(profile_dir):
+        started_at = time.time()
+        auth_path = _resolve_usage_auth_path(profile_dir)
+        if _reset_account_scope(auth_path) != scope:
+            logger.info("额度重置已拦截 操作=%s 结果=accountChanged", attempt_ref)
+            return {"outcome": "accountChanged"}
+        config_path = get_active_config_path()
+        outcome = "unavailable"
+        submitted = False
+        try:
+            with profile_account_app_server(profile_dir, auth_path, config_path) as (client, account):
+                if credit_id is None and not retry:
+                    current = _map_app_server_usage(account, client.request("account/rateLimits/read"), scope)
+                    if current["resetCredits"] is None:
+                        outcome = "unsupported"
+                    elif current["resetCredits"] <= 0:
+                        outcome = "noCredit"
+                    elif current["resetCreditItems"]:
+                        outcome = "chooseCredit"
+                if outcome == "unavailable":
+                    params = {"idempotencyKey": attempt_id}
+                    if credit_id is not None:
+                        params["creditId"] = credit_id
+                    submitted = True
+                    try:
+                        result = client.request("account/rateLimitResetCredit/consume", params)
+                    except AppServerRequestError as exc:
+                        if exc.code != -32601:
+                            raise
+                        outcome = "unsupported"
+                    else:
+                        status = result.get("outcome")
+                        if status not in ("reset", "alreadyRedeemed", "nothingToReset", "noCredit"):
+                            raise RuntimeError("未能确认额度重置结果，请重试同一次操作")
+                        outcome = status
+                    logger.info("额度重置兑换结果 操作=%s 结果=%s", attempt_ref, outcome)
+                    current = _map_app_server_usage(account, client.request("account/rateLimits/read"), scope)
+                    logger.info(
+                        "重置后额度读取成功 操作=%s 可用次数=%s 卡片明细数=%s",
+                        attempt_ref, current["resetCredits"], len(current["resetCreditItems"]),
+                    )
+                else:
+                    logger.info("额度重置已拦截 操作=%s 结果=%s", attempt_ref, outcome)
+        except Exception as exc:
+            if outcome == "unavailable":
+                logger.warning(
+                    "额度重置未确认 操作=%s 已提交=%s 错误类型=%s",
+                    attempt_ref, submitted, type(exc).__name__,
+                )
+                if submitted or retry:
+                    raise
+                current = _usage_error(_normalize_usage_error(str(exc)))
+            else:
+                logger.warning("重置后额度更新失败 操作=%s 错误类型=%s", attempt_ref, type(exc).__name__)
+                current = _usage_error("暂时无法读取最新额度，请重新查询额度")
+        try:
+            usage = _merge_usage_results({profile_name: current}, started_at)[profile_name]
+        except Exception as exc:
+            logger.warning("重置后额度缓存写入失败 操作=%s 错误类型=%s", attempt_ref, type(exc).__name__)
+            usage = current
+        return {"outcome": outcome, "usage": usage}
+
+
+def refresh_all_profile_usage(profile_dirs):
     """串行刷新全部账号额度，避免同时启动多个 App Server。"""
     started_at = time.time()
     if not profile_dirs:
@@ -53,11 +120,7 @@ def refresh_all_profile_usage(profile_dirs, share_system_config=False, use_codex
     results = {}
     for profile_name, profile_dir in profile_dirs.items():
         try:
-            results[profile_name] = _build_profile_usage(
-                Path(profile_dir),
-                share_system_config=share_system_config,
-                use_codex_home_auth=use_codex_home_auth,
-            )
+            results[profile_name] = _build_profile_usage(Path(profile_dir))
         except Exception as exc:
             results[profile_name] = _usage_error(f"额度读取失败：{exc}")
 
@@ -99,17 +162,18 @@ def remove_cached_usage(profile_name):
         save_usage_cache(cache)
 
 
-def _build_profile_usage(profile_dir, share_system_config=False, use_codex_home_auth=False):
+def _build_profile_usage(profile_dir):
     """通过官方 App Server 读取账号和 Codex 额度。"""
     profile_dir = Path(profile_dir)
     with profile_auth_lock(profile_dir):
-        auth_path = _resolve_usage_auth_path(profile_dir, use_codex_home_auth)
+        auth_path = _resolve_usage_auth_path(profile_dir)
         if not auth_path.exists():
             return _usage_error("未找到登录信息，请先保存当前账号资料")
-        config_path = _resolve_usage_config_path(profile_dir, share_system_config, use_codex_home_auth)
+        config_path = get_active_config_path()
         try:
             account, rate_limits = read_account_and_rate_limits(profile_dir, auth_path, config_path)
-            return _map_app_server_usage(account, rate_limits)
+            scope = _reset_account_scope(auth_path) if rate_limits.get("rateLimitResetCredits") else None
+            return _map_app_server_usage(account, rate_limits, scope)
         except Exception as exc:
             plan_type = None
             try:
@@ -118,27 +182,16 @@ def _build_profile_usage(profile_dir, share_system_config=False, use_codex_home_
                 pass
             message = _normalize_usage_error(str(exc))
             return _usage_error(message, None if "API Key" in message else plan_type)
-        finally:
-            if use_codex_home_auth:
-                sync_auth_file(auth_path, profile_dir / "CodexHome" / "auth.json")
 
 
-def _resolve_usage_auth_path(profile_dir, use_codex_home_auth=False):
-    """合并运行实例真正续期的凭证后，始终读取账号主认证。"""
+def _resolve_usage_auth_path(profile_dir):
+    """合并旧账号目录里更新过的凭证后，读取账号主认证。"""
     profile_dir = Path(profile_dir)
     sync_codex_home_to_profile(profile_dir)
     return get_profile_auth_path(profile_dir)
 
 
-def _resolve_usage_config_path(profile_dir, share_system_config=False, use_codex_home_auth=False):
-    """switch 使用系统配置，multi 使用账号 CodexHome 配置。"""
-    profile_dir = Path(profile_dir)
-    if use_codex_home_auth:
-        return profile_dir / "CodexHome" / "config.toml"
-    return get_active_config_path()
-
-
-def _map_app_server_usage(account, payload):
+def _map_app_server_usage(account, payload, reset_account_scope=None):
     """把 account/rateLimits/read 转换成前端稳定结构。"""
     rate_limits = payload.get("rateLimits") if isinstance(payload, dict) else None
     rate_limits = rate_limits if isinstance(rate_limits, dict) else {}
@@ -150,13 +203,28 @@ def _map_app_server_usage(account, payload):
     ]
     reset_credits = payload.get("rateLimitResetCredits") or {}
     reset_credit_items = reset_credits.get("credits") or []
+    available_items = [
+        item for item in reset_credit_items
+        if isinstance(item, dict) and item.get("status") == "available"
+    ]
+    cards = [
+        {"id": item["id"], "expiresAt": _optional_int(item.get("expiresAt"))}
+        for item in available_items
+        if isinstance(item.get("id"), str) and item["id"].strip()
+    ]
+    cards.sort(key=lambda card: card["expiresAt"] if card["expiresAt"] is not None else float("inf"))
     credits = rate_limits.get("credits") or {}
     return {
         "fetchedAt": time.time(),
         "planType": _clean_string(rate_limits.get("planType") or account.get("planType")),
         "oneWeek": _to_usage_window(_find_window(windows, 7 * 24 * 60 * 60)),
         "resetCredits": _optional_int(reset_credits.get("availableCount")),
-        "resetCreditExpiresAt": _available_credit_expiries(reset_credit_items),
+        "resetCreditExpiresAt": sorted(
+            expires_at for item in available_items if (expires_at := _optional_int(item.get("expiresAt"))) is not None
+        ),
+        "resetCreditItems": cards,
+        "resetAccountScope": reset_account_scope,
+        "workspaceName": _clean_string(account.get("workspaceName")),
         "hasCredits": bool(credits.get("hasCredits")),
         "creditsUnlimited": bool(credits.get("unlimited")),
         "spendControlReached": bool(rate_limits.get("rateLimitReachedType")),
@@ -212,15 +280,17 @@ def _optional_int(value):
     return int(value) if isinstance(value, (int, float)) else None
 
 
-def _available_credit_expiries(credits):
-    expires_at_values = []
-    for credit in credits:
-        if not isinstance(credit, dict) or credit.get("status") != "available":
-            continue
-        value = credit.get("expiresAt")
-        if isinstance(value, (int, float)):
-            expires_at_values.append(int(value))
-    return sorted(expires_at_values)
+def _reset_account_scope(auth_path):
+    """绑定到登录用户和工作区，认证续期时保持稳定。"""
+    try:
+        auth = extract_auth(json.loads(auth_path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+    user_id = auth["claims"].get("sub") or auth["email"]
+    if not user_id:
+        return None
+    identity = json.dumps([auth["accountId"], user_id]).encode("utf-8")
+    return hashlib.sha256(identity).hexdigest()
 
 
 def _normalize_usage_error(message):

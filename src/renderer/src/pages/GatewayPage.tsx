@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, message } from "antd";
-import { Copy, KeyRound, Network, Plus } from "lucide-react";
+import { Alert, Button, Checkbox, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, message } from "antd";
+import { Copy, Download, KeyRound, Network, Plus } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
 
-type AccessKey = { id: string; name: string; cap: number; enabled: number; expires: number; calls: number; active: number; waiting: number };
+type AccessKey = { id: string; name: string; cap: number | string | null; enabled: number | boolean; expires: number; calls: number; active: number; waiting: number };
 type Account = { id: string; name: string; cap: number; enabled: boolean; active: number; reason: string };
 type Log = { id: string; at: number; owner: string; account: string; model: string; protocol: string; result: string; ms: number };
 type Status = {
@@ -22,9 +22,10 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
   const [busy, setBusy] = useState(false);
   const [address, setAddress] = useState("");
   const [port, setPort] = useState<number>();
-  const [creating, setCreating] = useState(false);
+  const [keyEditor, setKeyEditor] = useState<"create" | AccessKey>();
   const [name, setName] = useState("");
-  const [cap, setCap] = useState(2);
+  const [cap, setCap] = useState("2");
+  const [unlimited, setUnlimited] = useState(false);
   const [days, setDays] = useState(0);
   const [freshKey, setFreshKey] = useState("");
   const updating = useRef(false);
@@ -57,8 +58,13 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
     epoch.current++;
     setBusy(true);
     try {
-      const res = await invokeLauncher<{ key?: string }>("gateway_" + command, payload);
-      if (res.key) { setCreating(false); setName(""); setFreshKey(res.key); }
+      const res = await invokeLauncher<{ key?: string; saved?: boolean }>("gateway_" + command, payload);
+      if (res.key) { setKeyEditor(undefined); setName(""); setFreshKey(res.key); }
+      if (command === "key" && payload.action === "set_cap") {
+        setKeyEditor(undefined);
+        message.success(t("已保存"));
+      }
+      if (command === "export_client_bundle" && res.saved) message.success(t("已导出 Codex 接入包"));
       await refresh();
     } catch (err) {
       message.error(err instanceof Error ? err.message : String(err));
@@ -72,6 +78,24 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
     try { await navigator.clipboard.writeText(text); message.success(t("已复制")); }
     catch { message.error(t("复制失败，请手动复制")); }
   }
+  function openKeyEditor(key: "create" | AccessKey) {
+    setKeyEditor(key);
+    setCap(key === "create" || key.cap === null ? "2" : String(key.cap));
+    setUnlimited(key !== "create" && key.cap === null);
+  }
+
+  const creating = keyEditor === "create";
+  const capValid = unlimited || /^0*[1-9][0-9]*$/.test(cap.trim());
+  function saveKey() {
+    if (!keyEditor || !capValid) return;
+    const limit = unlimited ? null : cap.trim();
+    if (keyEditor === "create") {
+      if (name.trim()) void change("key", { action: "create", name, cap: limit, days });
+    } else {
+      void change("key", { action: "set_cap", id: keyEditor.id, cap: limit });
+    }
+  }
+
   const showName = (value: string) => privacy ? "••••" : value;
   const selectedAddress = address || status?.address || status?.addresses[0] || "";
   const selectedPort = port ?? status?.port ?? 19381;
@@ -110,26 +134,32 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
       {status?.shared ? <div className="grid gap-2 text-sm">
         <Input readOnly aria-label="LAN Base URL" value={status.lanBase} addonBefore="Base URL" />
         <Space wrap>
+          <Button type="primary" icon={<Download size={14} />} disabled={busy}
+            onClick={() => void change("export_client_bundle", {})}>{t("导出 Codex 接入包")}</Button>
           <Button icon={<Copy size={14} />} onClick={() => void copy(snippet)}>{t("复制客户端配置")}</Button>
-          <Button disabled={busy} onClick={() => void change("export_ca", {})}>{t("导出信任证书")}</Button>
         </Space>
-        <span className="text-slate-600">{t("将配置合并到对方的 config.toml。在启动该客户端的环境中，FORGE_GATEWAY_KEY 填个人 Key，CODEX_CA_CERTIFICATE 填导出的 PEM 文件绝对路径。")}</span>
+        <span className="text-slate-600">{t("在对方的 Windows 电脑解压接入包，关闭 Codex 后运行 Apply-Forge-Gateway.cmd，再打开原版 Codex 填写个人 Key。")}</span>
+        <span className="text-slate-500">{t("手动接入时，将配置片段合并到 config.toml，设置 FORGE_GATEWAY_KEY，并将 CODEX_CA_CERTIFICATE 指向从接入包解压出的 forge-gateway-ca.pem（绝对路径）。")}</span>
       </div> : null}
     </section>
     <section className={panel}>
       <div className="flex items-center justify-between">
         <h2 className={heading}><KeyRound size={16} className="mr-2 inline" />{t("访问 Key")}</h2>
-        <Button type="primary" icon={<Plus size={15} />} disabled={busy || !status} onClick={() => setCreating(true)}>{t("创建 Key")}</Button>
+        <Button type="primary" icon={<Plus size={15} />} disabled={busy || !status} onClick={() => openKeyEditor("create")}>{t("创建 Key")}</Button>
       </div>
       <Table<AccessKey> size="small" rowKey="id" pagination={false} scroll={{ x: 600 }} dataSource={status?.keys || []}
         columns={[
-          { title: t("名称"), dataIndex: "name", render: (v: string) => showName(v) },
-          { title: t("并发"), render: (_, row) => row.active + " / " + row.cap }, { title: t("排队"), dataIndex: "waiting" },
+          { title: t("名称"), dataIndex: "name", render: (v: string, row) => row.id === "local" ? t("本机") : showName(v) },
+          { title: t("并发"), render: (_, row) => {
+            const value = `${row.active} / ${row.cap ?? t("不限制")}`;
+            return <span className="block max-w-40 truncate" title={value}>{value}</span>;
+          } }, { title: t("排队"), dataIndex: "waiting" },
           { title: t("请求数"), dataIndex: "calls" },
           { title: t("有效期"), dataIndex: "expires", render: n => n ? new Date(n*1000).toLocaleDateString() : t("长期") },
-          { title: t("启用"), render: (_, row) => <Switch size="small" aria-label={t("启用")} checked={!!row.enabled} disabled={busy}
+          { title: t("启用"), render: (_, row) => <Switch size="small" aria-label={t("启用")} checked={!!row.enabled} disabled={busy || row.id === "local"}
             onChange={enabled => void change("key", { action:"toggle", id:row.id, enabled })} /> },
-          { title: t("操作"), render: (_, row) => <Space>
+          { title: t("操作"), render: (_, row) => row.id === "local" ? t("本机专用") : <Space>
+            <Button type="link" size="small" disabled={busy} onClick={() => openKeyEditor(row)}>{t("编辑")}</Button>
             <Popconfirm title={t("轮换后原 Key 将失效")} onConfirm={() => change("key", { action:"rotate", id:row.id })}>
               <Button type="link" size="small" disabled={busy}>{t("轮换")}</Button></Popconfirm>
             <Popconfirm title={t("撤销此 Key 并清除其临时文件和续接状态？")} onConfirm={() => change("key", { action:"revoke", id:row.id })}>
@@ -161,17 +191,26 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
           {title:t("耗时"),dataIndex:"ms",render:n => (n/1000).toFixed(1)+" s"},
         ]} />
     </section>
-    <Modal title={t("创建 Key")} open={creating} confirmLoading={busy} okButtonProps={{ disabled:!name.trim() }}
-      onCancel={() => setCreating(false)} onOk={() => void change("key",{action:"create",name,cap,days})}>
+    <Modal title={t(creating ? "创建 Key" : "编辑并发上限")} open={!!keyEditor} confirmLoading={busy}
+      okText={t("保存")} cancelText={t("取消")} okButtonProps={{ disabled: !capValid || (creating && !name.trim()) }}
+      onCancel={() => { if (!busy) setKeyEditor(undefined); }} onOk={saveKey}>
       <div className="grid gap-3">
-        <label>{t("使用者名称")}<Input autoFocus maxLength={64} value={name} onChange={e => setName(e.target.value)} /></label>
+        {creating && <label>{t("使用者名称")}<Input autoFocus maxLength={64} disabled={busy} value={name} onChange={e => setName(e.target.value)} /></label>}
         <Space wrap>
-          <label>{t("并发上限")} <InputNumber min={1} max={32} value={cap} onChange={v => setCap(v ?? 2)} /></label>
-          <label>{t("有效天数（0 为长期）")} <InputNumber min={0} max={3650} value={days} onChange={v => setDays(v ?? 0)} /></label>
+          <label>{t("并发上限")} <Input inputMode="numeric" value={unlimited ? "" : cap} disabled={busy || unlimited}
+            className="w-40" status={capValid ? undefined : "error"} aria-invalid={!capValid}
+            aria-describedby={capValid ? undefined : "gateway-key-cap-error"} onChange={e => setCap(e.target.value)} /></label>
+          <Checkbox disabled={busy} checked={unlimited} onChange={e => setUnlimited(e.target.checked)}>{t("不限制")}</Checkbox>
         </Space>
+        {!capValid && <span id="gateway-key-cap-error" className="text-sm text-red-600">{t("请输入正整数或选择不限制")}</span>}
+        {creating && <label>{t("有效天数（0 为长期）")} <InputNumber min={0} max={3650} disabled={busy} value={days} onChange={v => setDays(v ?? 0)} /></label>}
       </div>
     </Modal>
-    <Modal title={t("保存个人 Key")} open={!!freshKey} footer={<Button onClick={() => setFreshKey("")}>{t("关闭")}</Button>}
+    <Modal title={t("保存个人 Key")} open={!!freshKey} footer={<Space>
+      {status?.shared ? <Button icon={<Download size={14} />} disabled={busy}
+        onClick={() => void change("export_client_bundle", {})}>{t("导出 Codex 接入包")}</Button> : null}
+      <Button onClick={() => setFreshKey("")}>{t("关闭")}</Button>
+    </Space>}
       onCancel={() => setFreshKey("")}>
       <p>{t("完整 Key 仅在此显示一次。")}</p>
       <Input readOnly aria-label="Gateway Key" value={freshKey} addonAfter={<Button size="small" type="text"

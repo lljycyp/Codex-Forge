@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Form, Input, InputNumber, message, Modal, Radio, Space, Switch } from "antd";
+import { Button, Form, Input, InputNumber, message, Modal, Radio, Space, Switch } from "antd";
 import { Bell, ClipboardCopy, EyeOff, FolderOpen, Github, HardDrive, Info, Power, RefreshCw } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
@@ -38,7 +38,6 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
   const [appVersion, setAppVersion] = useState("");
   const [autoStartLoading, setAutoStartLoading] = useState(false);
   const [checkUpdateLoading, setCheckUpdateLoading] = useState(false);
-  const [launchModeLoading, setLaunchModeLoading] = useState(false);
   const [codexSourceLoading, setCodexSourceLoading] = useState(false);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [quotaAlertsEnabled, setQuotaAlertsEnabled] = useState(() => localStorage.getItem("quotaAlertsEnabled") !== "false");
@@ -140,39 +139,6 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
     });
   };
 
-  const saveLaunchMode = async (mode: "switch" | "multi") => {
-    if (mode === appState.launchMode) {
-      return;
-    }
-    setLaunchModeLoading(true);
-    try {
-      await runCommand(
-        "set_launch_mode",
-        { mode },
-        mode === "multi" ? t("已切换到多开隔离模式") : t("已切换到账号切换模式"),
-        { blocking: false },
-      );
-    } finally {
-      setLaunchModeLoading(false);
-    }
-  };
-
-  const changeLaunchMode = (mode: "switch" | "multi") => {
-    if (mode === "multi") {
-      Modal.confirm({
-        title: t("切换到多开隔离模式"),
-        content: appState.runningCount > 0
-          ? (language === "en-US" ? "Codex is running. Close it first if possible. Isolated multi-instance mode launches the registered Codex client directly, then keeps each account's configuration and runtime data separate." : "检测到 Codex 正在运行。建议先关闭当前 Codex；多开隔离模式会直接启动系统已注册的 Codex 客户端，并分别隔离每个账号的配置和运行数据。")
-          : (language === "en-US" ? "Isolated multi-instance mode launches the registered Codex client directly, then keeps each account's configuration and runtime data separate." : "多开隔离模式会直接启动系统已注册的 Codex 客户端，并分别隔离每个账号的配置和运行数据。"),
-        okText: t("切换"),
-        cancelText: t("取消"),
-        onOk: () => saveLaunchMode(mode),
-      });
-      return;
-    }
-    void saveLaunchMode(mode);
-  };
-
   const refreshCodexSource = async () => {
     setCodexSourceLoading(true);
     try {
@@ -268,29 +234,6 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
         </div>
 
         <div className="rounded-xl border border-[#e4ebf3] bg-slate-50/50 p-6">
-          <div className="mb-6 border-b border-slate-200 pb-5">
-            <div className="mb-3 font-semibold text-slate-700">{t("启动模式")}</div>
-            <Radio.Group
-              value={appState.launchMode}
-              disabled={launchModeLoading}
-              onChange={(event) => changeLaunchMode(event.target.value)}
-            >
-              <Radio.Button value="switch">{t("账号切换模式")}</Radio.Button>
-              <Radio.Button value="multi">{t("多开隔离模式")}</Radio.Button>
-            </Radio.Group>
-            <div className="mt-3 text-sm leading-6 text-slate-500">
-              {t("账号切换模式共用系统 .codex；多开隔离模式为每个账号使用独立环境，可同时运行多个 Codex 客户端。")}
-            </div>
-            {appState.launchMode === "multi" ? (
-              <Alert
-                className="mt-3"
-                type="warning"
-                showIcon
-                message={t("多开账号直接使用系统客户端")}
-                description={t("每个账号直接启动系统已注册的 Codex 客户端，并使用独立配置和运行数据。运行中的多开实例需要先关闭，才能切回账号切换模式。")}
-              />
-            ) : null}
-          </div>
           <div className="mb-5 flex items-center justify-between gap-6 border-b border-slate-200 pb-5">
             <div className="min-w-0">
               <div className="font-semibold text-slate-700">{t("Codex 客户端来源")}</div>

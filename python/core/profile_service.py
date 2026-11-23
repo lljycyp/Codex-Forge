@@ -7,7 +7,6 @@ import tomllib
 import uuid
 from pathlib import Path
 
-from core.constants import DEFAULT_CODEX_ENV_PATH
 from core.auth_service import is_newer_auth
 from core.file_lock import _exclusive_file_lock
 
@@ -81,40 +80,8 @@ def write_profile_auth_json(auth_path, auth_json):
     temp_path.replace(auth_path)
 
 
-def ensure_profile_env_file(codex_home_dir):
-    """确保账号 CodexHome 里有默认 .env；已有账号专属配置时不覆盖。"""
-    target_env_path = Path(codex_home_dir) / ".env"
-    if target_env_path.exists() or not DEFAULT_CODEX_ENV_PATH.exists():
-        return
-    target_env_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(DEFAULT_CODEX_ENV_PATH, target_env_path)
-
-
-def prepare_profile_codex_home(profile_dir, share_system_config=False):
-    """把账号资料同步到多开模式使用的 CodexHome。"""
-    profile_dir = Path(profile_dir)
-    with profile_auth_lock(profile_dir):
-        _prepare_profile_codex_home(profile_dir)
-
-
-def _prepare_profile_codex_home(profile_dir):
-    source_auth_path = get_profile_auth_path(profile_dir)
-    if not source_auth_path.exists():
-        raise FileNotFoundError("账号认证文件不存在，无法启动")
-
-    codex_home_dir = profile_dir / "CodexHome"
-    codex_home_dir.mkdir(parents=True, exist_ok=True)
-    runtime_auth_path = codex_home_dir / "auth.json"
-    sync_codex_home_to_profile(profile_dir)
-    config_path = ensure_profile_config_path(profile_dir)
-    sanitize_profile_config_file(config_path)
-    require_file_auth_store(config_path)
-    ensure_profile_env_file(codex_home_dir)
-    write_profile_auth_json(runtime_auth_path, json.loads(source_auth_path.read_text(encoding="utf-8")))
-
-
 def sync_codex_home_to_profile(profile_dir, share_system_config=False):
-    """多开实例关闭后，把 CodexHome 中刷新过的认证回写到账号根目录。"""
+    """从旧版独立运行目录合并同一账号更新过的认证。"""
     profile_dir = Path(profile_dir)
     with profile_auth_lock(profile_dir):
         return sync_auth_file(profile_dir / "CodexHome" / "auth.json", get_profile_auth_path(profile_dir))
@@ -136,15 +103,6 @@ def ensure_profile_config_path(profile_dir):
     else:
         config_path.write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
     return config_path
-
-
-def sanitize_profile_config_file(config_path):
-    """移除不能跨 Codex 实例复制的动态配置。"""
-    config_path = Path(config_path)
-    current = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    sanitized = sanitize_profile_config_text(current)
-    if sanitized != current:
-        config_path.write_text(sanitized, encoding="utf-8")
 
 
 def sanitize_profile_config_text(text):
@@ -247,7 +205,7 @@ def get_profile_status(profile_dir, share_system_config=False):
     if not auth_path.exists():
         errors.append("账号认证文件不存在")
     if not config_path.exists():
-        warnings.append("多开配置文件不存在，启动多开时会自动创建")
+        warnings.append("账号配置文件不存在")
     return {
         "authPath": str(auth_path),
         "authExists": auth_path.exists(),
@@ -264,6 +222,6 @@ def get_profile_auth_path(profile_dir):
 
 
 def resolve_profile_config_path(profile_dir):
-    """返回 multi 模式唯一账号级配置文件。"""
+    """返回账号级配置文件，供备份与网关使用。"""
     profile_dir = Path(profile_dir)
     return profile_dir / "CodexHome" / "config.toml"

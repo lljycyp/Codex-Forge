@@ -1,14 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, type OpenDialogOptions } from "electron";
 import { invokeBackend } from "./python/launcherBackend";
-import { gatewayCertificate, gatewayCommand } from "./gateway";
-import { copyFile } from "node:fs/promises";
+import { gatewayCommand } from "./gateway";
+import { join } from "node:path";
 import {
   applyCodexSkinTheme,
   hasCodexSkinSessions,
   pauseCodexSkinSessions,
   startCodexSkinSession,
   stopAllCodexSkinSessions,
-  stopCodexSkinSession,
 } from "./codexSkin";
 import {
   deleteCodexSkinTheme,
@@ -61,11 +60,15 @@ async function applySelectedCodexSkinTheme(): Promise<void> {
 export function registerIpcHandlers(): void {
   ipcMain.handle("launcher:invoke", async (_event, command: string, payload: unknown) => {
     if (command === "serve_gateway") return { ok: false, data: {}, error: "未知命令" };
-    if (command === "gateway_export_ca") {
-      const choice = await dialog.showSaveDialog({ defaultPath: "forge-gateway-ca.pem",
-        filters: [{ name: "Forge Gateway CA", extensions: ["pem"] }] });
-      if (!choice.canceled && choice.filePath) await copyFile(gatewayCertificate, choice.filePath);
-      return { ok: true, data: { saved: !choice.canceled }, error: "" };
+    if (command === "gateway_export_client_bundle") {
+      const choice = await dialog.showSaveDialog({ defaultPath: "Forge-Codex-LAN.zip",
+        filters: [{ name: "Forge Codex LAN", extensions: ["zip"] }] });
+      if (choice.canceled || !choice.filePath) return { ok: true, data: { saved: false }, error: "" };
+      const resources = app.isPackaged ? process.resourcesPath : join(__dirname, "../../resources");
+      return gatewayCommand("export_client_bundle", {
+        destination: choice.filePath,
+        script: join(resources, "forge-lan-config.ps1"),
+      });
     }
     const result = command.startsWith("gateway_")
       ? await gatewayCommand(command.slice(8), payload)
@@ -78,22 +81,11 @@ export function registerIpcHandlers(): void {
     if (command === "launch_profile" || command === "gateway_launch") {
       const launch = result.data.skinSession as SkinLaunch | undefined;
       if (launch) await startSkinLaunches([launch]);
-    } else if (command === "stop_profile") {
-      const profileName = typeof payload === "object" && payload !== null
-        ? String((payload as { name?: unknown }).name || "")
-        : "";
-      if (profileName) {
-        await stopCodexSkinSession(profileName);
-      } else {
-        await stopAllCodexSkinSessions();
-      }
-    } else if (command === "set_codex_skin_enabled" && result.data.codexSkinEnabled === false) {
+    } else if (command === "stop_profile" || (command === "set_codex_skin_enabled" && result.data.codexSkinEnabled === false)) {
       await stopAllCodexSkinSessions();
     } else if (command === "set_codex_skin_enabled") {
       const launches = Array.isArray(result.data.skinSessions) ? result.data.skinSessions : [];
       await startSkinLaunches(launches as SkinLaunch[]);
-    } else if (command === "set_launch_mode" && result.data.launchMode === "switch") {
-      await stopAllCodexSkinSessions();
     }
     return result;
   });

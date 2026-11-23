@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bridge import commands
-from bridge.commands import _extract_toml_root, _remove_toml_root
 from core import db
 from core.secure_store import protect_bytes, unprotect_bytes
 from core.workspace_service import (
@@ -37,7 +36,7 @@ class WorkspaceFeatureTests(unittest.TestCase):
 
         read_processes.assert_called_once_with()
         self.assertIs(build_state.call_args.args[1], processes)
-        self.assertIs(build_profiles.call_args.args[2], processes)
+        self.assertEqual(build_profiles.call_args.args[1], "codex.exe --test")
         self.assertEqual({"appState": {"runningCount": 1}, "profiles": []}, result)
 
     def test_workspace_snapshot_groups_existing_reads(self):
@@ -53,7 +52,7 @@ class WorkspaceFeatureTests(unittest.TestCase):
 
         self.assertEqual("home", result["workspace"]["codexHome"])
         get_history.assert_called_once_with({"name": "work", "days": 7})
-        list_session_items.assert_called_once_with({"profileName": "work", "limit": 20})
+        list_session_items.assert_called_once_with({"limit": 20})
 
     def test_workspace_snapshot_reads_only_requested_sections(self):
         with (
@@ -69,7 +68,7 @@ class WorkspaceFeatureTests(unittest.TestCase):
             )
 
         self.assertEqual({"workspace": {"codexHome": "home"}}, result)
-        get_workspace.assert_called_once_with({"profileName": "work"})
+        get_workspace.assert_called_once_with({})
         get_history.assert_not_called()
         get_health.assert_not_called()
         list_session_items.assert_not_called()
@@ -85,10 +84,9 @@ class WorkspaceFeatureTests(unittest.TestCase):
             ]) as list_records,
             patch.object(db, "load_usage_cache", return_value=usage_cache) as load_usage,
             patch.object(db, "get_profile") as get_profile,
-            patch.object(commands, "_get_legacy_system_running_profile", return_value=""),
             patch.object(commands, "_build_profile_summary", side_effect=[{"name": "work"}, {"name": "personal"}]) as build_summary,
         ):
-            result = commands._build_profile_summaries(config, "", [])
+            result = commands._build_profile_summaries(config, "")
 
         list_records.assert_called_once_with()
         load_usage.assert_called_once_with()
@@ -174,13 +172,6 @@ class WorkspaceFeatureTests(unittest.TestCase):
             self.assertEqual("thread-1", result[0]["id"])
             self.assertEqual("Fix startup bug", result[0]["title"])
             self.assertEqual(before, session.read_bytes())
-
-    def test_toml_root_selection(self):
-        content = 'model = "a"\napproval = "ask"\n\n[mcp_servers.demo]\ncommand = "npx"\n\n[features]\napps = true\n'
-        self.assertIn('model = "a"', _extract_toml_root(content, "model"))
-        self.assertIn("[mcp_servers.demo]", _extract_toml_root(content, "mcp_servers"))
-        self.assertNotIn("mcp_servers.demo", _remove_toml_root(content, "mcp_servers"))
-        self.assertIn("[features]", _remove_toml_root(content, "mcp_servers"))
 
     @unittest.skipUnless(os.name == "nt", "DPAPI is Windows-only")
     def test_dpapi_round_trip(self):
