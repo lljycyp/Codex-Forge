@@ -4,15 +4,23 @@ import { Copy, Download, KeyRound, Network, Plus } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
 
-type AccessKey = { id: string; name: string; cap: number | string | null; enabled: number | boolean; expires: number; calls: number; active: number; waiting: number };
+type AccessKey = {
+  id: string; name: string; cap: number | string | null; enabled: number | boolean; expires: number;
+  calls: number; active: number; waiting: number; websocketConnections?: number;
+};
 type Account = { id: string; name: string; cap: number; enabled: boolean; active: number; reason: string };
 type Log = { id: string; at: number; owner: string; account: string; model: string; protocol: string; result: string; ms: number };
+type WebSocketRejection = {
+  at: number; ownerId: string; ownerName: string; keyConnections: number; totalConnections: number;
+  keyLimitReached: boolean; totalLimitReached: boolean;
+};
 type Status = {
   enabled: boolean; shared: boolean; base: string; lanBase: string; port: number; address: string;
   addresses: string[]; ca: string; keys: AccessKey[]; accounts: Account[]; records: Log[];
   waiting: number; active: number; error: string;
+  websocket?: { connections: number; limit: number; perKeyLimit: number; lastRejection: WebSocketRejection | null };
 };
-const panel = "grid gap-4 rounded-panel border border-shell-line bg-white p-5";
+const panel = "grid grid-cols-1 gap-4 rounded-panel border border-shell-line bg-white p-5";
 const heading = "m-0 text-base font-bold text-slate-900";
 
 export function GatewayPage({ privacy }: { privacy: boolean }) {
@@ -97,6 +105,12 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
   }
 
   const showName = (value: string) => privacy ? "••••" : value;
+  const websocket = status?.websocket;
+  const rejection = websocket?.lastRejection;
+  const rejectionReason = rejection ? [
+    rejection.keyLimitReached && t("该 Key 连接已满"),
+    rejection.totalLimitReached && t("网关总连接已满"),
+  ].filter(Boolean).join(" · ") : "";
   const selectedAddress = address || status?.address || status?.addresses[0] || "";
   const selectedPort = port ?? status?.port ?? 19381;
   const snippet = [
@@ -104,7 +118,7 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
     `base_url = "${status?.lanBase || ""}"`, 'wire_api = "responses"', 'env_key = "FORGE_GATEWAY_KEY"',
     "supports_websockets = true", "request_max_retries = 0", "stream_max_retries = 0",
   ].join("\n");
-  return <div className="mx-auto grid w-full max-w-[1320px] gap-4">
+  return <div className="mx-auto grid w-full max-w-[1320px] grid-cols-1 gap-4">
     {error ? <Alert showIcon type="error" message={error} /> : null}
     <section className={panel}>
       <div className="flex items-center justify-between gap-3">
@@ -115,9 +129,20 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
       <div className="flex flex-wrap items-center gap-4 text-sm text-slate-600">
         <Tag color={status?.enabled ? "green" : "default"}>{t(status?.enabled ? "运行中" : "已停止")}</Tag>
         <span>{t("本机地址")} <code>{status?.base || "—"}</code></span>
+        <span title={t("占用包含正在握手的连接")}>
+          {t("WebSocket 总连接")} <strong>{websocket ? `${websocket.connections} / ${websocket.limit}` : "—"}</strong>
+        </span>
         <span>{t("正在处理")} <strong>{status?.active ?? 0}</strong></span>
         <span>{t("排队")} <strong>{status?.waiting ?? 0}</strong></span>
       </div>
+      {websocket && rejection ? <Alert showIcon type="warning"
+        message={`${t("最近一次 WebSocket 握手 429")} · ${rejectionReason}`}
+        description={<div className="flex flex-wrap gap-x-4 gap-y-1">
+          <span>{new Date(rejection.at * 1000).toLocaleString()}</span>
+          <span>{t("来源")} {rejection.ownerId === "local" ? t("本机") : showName(rejection.ownerName)}</span>
+          <span>{t("WebSocket 连接")} {rejection.keyConnections} / {websocket.perKeyLimit}</span>
+          <span>{t("WebSocket 总连接")} {rejection.totalConnections} / {websocket.limit}</span>
+        </div>} /> : null}
     </section>
     <section className={panel}>
       <div className="flex items-center justify-between gap-3">
@@ -147,10 +172,15 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
         <h2 className={heading}><KeyRound size={16} className="mr-2 inline" />{t("访问 Key")}</h2>
         <Button type="primary" icon={<Plus size={15} />} disabled={busy || !status} onClick={() => openKeyEditor("create")}>{t("创建 Key")}</Button>
       </div>
-      <Table<AccessKey> size="small" rowKey="id" pagination={false} scroll={{ x: 600 }} dataSource={status?.keys || []}
+      <Table<AccessKey> size="small" rowKey="id" pagination={false} scroll={{ x: 740 }} dataSource={status?.keys || []}
         columns={[
           { title: t("名称"), dataIndex: "name", render: (v: string, row) => row.id === "local" ? t("本机") : showName(v) },
-          { title: t("并发"), render: (_, row) => {
+          { title: t("WebSocket 连接"), render: (_, row) => (
+            <span className="whitespace-nowrap" title={t("占用包含正在握手的连接")}>
+              {websocket && row.websocketConnections !== undefined ? `${row.websocketConnections} / ${websocket.perKeyLimit}` : "—"}
+            </span>
+          ) },
+          { title: t("生成并发"), render: (_, row) => {
             const value = `${row.active} / ${row.cap ?? t("不限制")}`;
             return <span className="block max-w-40 truncate" title={value}>{value}</span>;
           } }, { title: t("排队"), dataIndex: "waiting" },
@@ -191,13 +221,13 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
           {title:t("耗时"),dataIndex:"ms",render:n => (n/1000).toFixed(1)+" s"},
         ]} />
     </section>
-    <Modal title={t(creating ? "创建 Key" : "编辑并发上限")} open={!!keyEditor} confirmLoading={busy}
+    <Modal title={t(creating ? "创建 Key" : "编辑生成并发上限")} open={!!keyEditor} confirmLoading={busy}
       okText={t("保存")} cancelText={t("取消")} okButtonProps={{ disabled: !capValid || (creating && !name.trim()) }}
       onCancel={() => { if (!busy) setKeyEditor(undefined); }} onOk={saveKey}>
       <div className="grid gap-3">
         {creating && <label>{t("使用者名称")}<Input autoFocus maxLength={64} disabled={busy} value={name} onChange={e => setName(e.target.value)} /></label>}
         <Space wrap>
-          <label>{t("并发上限")} <Input inputMode="numeric" value={unlimited ? "" : cap} disabled={busy || unlimited}
+          <label>{t("生成并发上限")} <Input inputMode="numeric" value={unlimited ? "" : cap} disabled={busy || unlimited}
             className="w-40" status={capValid ? undefined : "error"} aria-invalid={!capValid}
             aria-describedby={capValid ? undefined : "gateway-key-cap-error"} onChange={e => setCap(e.target.value)} /></label>
           <Checkbox disabled={busy} checked={unlimited} onChange={e => setUnlimited(e.target.checked)}>{t("不限制")}</Checkbox>

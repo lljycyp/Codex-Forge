@@ -7,7 +7,7 @@ import secrets
 import sqlite3
 import time
 import uuid
-from collections import deque
+from collections import Counter, deque
 from collections.abc import AsyncGenerator, Callable
 from pathlib import PurePath
 
@@ -32,6 +32,8 @@ OWNER = web.RequestKey[dict]("gateway_owner")
 AUTH = web.RequestKey[Callable[[], dict | None]]("gateway_auth")
 LISTENING = web.RequestKey[Callable[[], bool]]("gateway_listening")
 MAX_BODY = 16 * 1024 * 1024
+MAX_WS_CONNECTIONS = 64
+MAX_WS_CONNECTIONS_PER_KEY = 12
 TERMINAL = {"response.completed", "response.failed", "response.incomplete", "response.cancelled", "error"}
 
 
@@ -148,9 +150,16 @@ class Protocol:
         self.identify, self.local = identify, local
         self.records = deque(maxlen=100)
         self.sockets = {}
+        self.pending_handshakes = {}
+        self.last_ws_rejection = None
         self.generating = set()
         self.uploads = 0
         self.quota_waiting = {}
+
+    def websocket_counts(self):
+        counts = Counter(self.pending_handshakes.values())
+        counts.update(owner for owner, _ in self.sockets.values())
+        return counts
 
     def app(self, local, accepting):
         @web.middleware
@@ -608,12 +617,42 @@ class Protocol:
         return web.json_response(result)
 
     async def websocket(self, request):
-        owner = request[OWNER]["id"]
-        if len(self.sockets) >= 64 or sum(1 for key, _ in self.sockets.values() if key == owner) >= 12:
+        owner = request[OWNER]
+        owner_id = owner["id"]
+        counts = self.websocket_counts()
+        total_count = counts.total()
+        key_count = counts[owner_id]
+        total_limit_reached = total_count >= MAX_WS_CONNECTIONS
+        key_limit_reached = key_count >= MAX_WS_CONNECTIONS_PER_KEY
+        if total_limit_reached or key_limit_reached:
+            self.last_ws_rejection = {
+                "at": int(time.time()),
+                "ownerId": owner_id,
+                "ownerName": owner["name"],
+                "keyConnections": key_count,
+                "totalConnections": total_count,
+                "keyLimitReached": key_limit_reached,
+                "totalLimitReached": total_limit_reached,
+            }
+            logger.warning(
+                "WebSocket 握手拒绝 HTTP 429 key_id=%s key_connections=%d/%d "
+                "total_connections=%d/%d key_limit_reached=%s total_limit_reached=%s",
+                owner_id,
+                key_count,
+                MAX_WS_CONNECTIONS_PER_KEY,
+                total_count,
+                MAX_WS_CONNECTIONS,
+                key_limit_reached,
+                total_limit_reached,
+            )
             raise CapacityError("WebSocket 连接已满")
         ws = web.WebSocketResponse(max_msg_size=MAX_BODY, heartbeat=35)
-        await ws.prepare(request)
-        self.sockets[ws] = (owner, request.app)
+        self.pending_handshakes[ws] = owner_id
+        try:
+            await ws.prepare(request)
+        finally:
+            self.pending_handshakes.pop(ws)
+        self.sockets[ws] = (owner_id, request.app)
         task = None
         finishing = False
 
@@ -657,6 +696,9 @@ class Protocol:
                     await ws.close(code=1001, message=b"service or credential disabled")
 
         try:
+            if not request[LISTENING]():
+                await ws.close(code=1001, message=b"listener stopped")
+                return ws
             async for msg in ws:
                 if not request[AUTH]() or not self.scheduler.accepting:
                     await ws.close(code=1008, message=b"credential or service disabled")

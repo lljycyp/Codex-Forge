@@ -15,11 +15,11 @@ import aiohttp
 from aiohttp import web
 from core.auth_service import auth_tokens, jwt_expiration
 
+from core import gateway_protocol
 from core.constants import CONFIG_DIR
 from core.gateway_accounts import Scheduler, read_accounts
 from core.gateway_client_bundle import export_client_bundle
 from core.gateway_launch import prepare_launch
-from core.gateway_protocol import Protocol
 from core.gateway_store import GatewayStore, digest
 from core.gateway_tls import server_tls
 from core.profile_service import get_active_auth_path
@@ -50,7 +50,7 @@ class Gateway:
             trust_env=True,
             cookie_jar=aiohttp.DummyCookieJar(),
         )
-        self.proto = Protocol(store, self.scheduler, self.client, store.identify, self.identify_local)
+        self.proto = gateway_protocol.Protocol(store, self.scheduler, self.client, store.identify, self.identify_local)
         self.listeners = {}
         self.drain = set()
         self.error = ""
@@ -159,6 +159,7 @@ class Gateway:
 
     def status(self):
         active = self.scheduler.active
+        websocket_counts = self.proto.websocket_counts()
         keys = self.store.list_keys()
         if self.local_key_hash:
             keys.insert(0, {**LOCAL_OWNER, "enabled": True, "expires": 0, "calls": self.store.option("localCalls", 0)})
@@ -171,9 +172,16 @@ class Gateway:
             "lanBase": f"https://{self.address}:{self.lan_port}/v1" if self.address else "",
             "ca": str(self.store.directory / "forge-gateway-ca.pem"),
             "addresses": addresses(),
+            "websocket": {
+                "connections": websocket_counts.total(),
+                "limit": gateway_protocol.MAX_WS_CONNECTIONS,
+                "perKeyLimit": gateway_protocol.MAX_WS_CONNECTIONS_PER_KEY,
+                "lastRejection": self.proto.last_ws_rejection,
+            },
             "keys": [
                 {
                     **k,
+                    "websocketConnections": websocket_counts[k["id"]],
                     "active": self.scheduler.owner_active[k["id"]],
                     "waiting": len(self.scheduler.waiters.get(k["id"], ())),
                 }
