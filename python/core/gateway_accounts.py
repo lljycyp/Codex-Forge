@@ -360,7 +360,7 @@ class Scheduler:
             self.changed.set()
 
     @asynccontextmanager
-    async def reserve(self, owner, authenticate, model=None):
+    async def reserve(self, owner, authenticate, model=None, *, preferred=None):
         ticket = object()
         owner_id = owner["id"]
         if self.waiting >= 64 or len(self.waiters.get(owner_id, ())) >= 12:
@@ -405,7 +405,10 @@ class Scheduler:
 
                 next_owner = next((oid for oid in self.order if ready(oid)), None)
                 if available and next_owner == owner_id and queue[0][0] is ticket:
-                    selected = min(available, key=lambda a: (self.active[a.id] / a.cap, self.last[a.id]))
+                    preference = preferred() if preferred is not None else None
+                    selected = min(available, key=lambda a: (
+                        (a.id, a.quota_key) != preference, self.active[a.id] / a.cap, self.last[a.id],
+                    ))
                     queue.popleft()
                     self.order.remove(owner_id)
                     if queue:

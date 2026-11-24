@@ -104,6 +104,8 @@ If a ChatGPT response hits a recoverable quota limit mid-generation and can be s
 
 Forge reuses the upstream WebSocket for follow-up requests on the same client connection when the account and model match. This reduces repeat handshakes and can improve prompt cache hits. **Recent requests** shows input, cached input, and output tokens, plus the number of continuation attempts.
 
+For the same caller, conversation, and model, Forge prefers the account that last completed a response, including after the client reconnects. If that account is at capacity, lacks quota, or does not support the model, Forge uses its regular scheduling rules to select another available account. Forge rebuilds these preferences after the gateway restarts.
+
 To connect another Windows PC, enable **LAN sharing**, create a personal key, and select **Export Codex setup bundle**. Give the recipient the ZIP and the personal key separately. On the other PC, extract the ZIP, quit Codex, and run `Apply-Forge-Gateway.cmd`. Reopen Codex and sign in with the personal API key. Each LAN key can have a concurrency limit or use **Unlimited**. You can edit that setting after creating the key.
 
 <p align="center">

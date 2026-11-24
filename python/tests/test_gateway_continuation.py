@@ -174,6 +174,62 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.send_turn(first, input="three"))["type"], "response.completed")
             self.assertEqual(len(self.upstream_sockets), 2)
 
+    async def test_session_prefers_last_success_after_reconnect(self):
+        self.script = [message_events(str(i), ["ok"]) for i in range(3)]
+        headers = {"thread-id": "same-thread"}
+        async with self.client.ws_connect(self.url, headers=headers) as ws:
+            first = await self.send_turn(ws, model="m", input="one")
+            second = await self.send_turn(ws, model="m", input="two", previous_response_id=first["response"]["id"])
+        async with self.client.ws_connect(self.url, headers=headers) as ws:
+            third = await self.send_turn(ws, model="m", input="three", previous_response_id=second["response"]["id"])
+        self.assertEqual(third["type"], "response.completed")
+        self.assertEqual([auth for auth, _, _ in self.calls], ["A", "A", "A"])
+        self.assertEqual([len(wire["input"]) for _, wire, _ in self.calls], [1, 3, 5])
+        self.assertEqual(len(self.upstream_sockets), 2)
+
+    async def test_session_falls_back_when_preferred_account_is_full_and_remembers_success(self):
+        self.script = [message_events(str(i), ["ok"]) for i in range(3)]
+        holder = {"id": "holder", "cap": 1}
+        async with self.client.ws_connect(self.url, headers={"session_id": "session"}) as ws:
+            first = await self.send_turn(ws, model="m", input="one")
+            account = self.accounts[0]
+            async with self.gateway.scheduler.reserve(
+                holder, lambda: holder, preferred=lambda: (account.id, account.quota_key),
+            ) as occupied:
+                self.assertEqual(occupied.id, "A")
+                second = await self.send_turn(ws, model="m", input="two", previous_response_id=first["response"]["id"])
+            third = await self.send_turn(ws, model="m", input="three", previous_response_id=second["response"]["id"])
+        self.assertEqual(third["type"], "response.completed")
+        self.assertEqual([auth for auth, _, _ in self.calls], ["A", "B", "B"])
+
+    async def test_failed_fallback_keeps_last_successful_account(self):
+        self.script = [
+            message_events("first", ["ok"]),
+            [{"type": "error", "error": {"code": "server_error"}}],
+            message_events("last", ["ok"]),
+        ]
+        async with self.client.ws_connect(self.url, headers={"thread_id": "thread"}) as ws:
+            self.assertEqual((await self.send_turn(ws, model="m", input="one"))["type"], "response.completed")
+            self.accounts[0].five_hour_remaining = 1
+            self.assertEqual((await self.send_turn(ws, model="m", input="two"))["type"], "error")
+            self.accounts[0].five_hour_remaining = 10
+            self.assertEqual((await self.send_turn(ws, model="m", input="three"))["type"], "response.completed")
+        self.assertEqual([auth for auth, _, _ in self.calls], ["A", "B", "A"])
+
+    async def test_session_preference_is_scoped_to_owner_thread_and_model(self):
+        self.script = [message_events(str(i), ["ok"]) for i in range(4)]
+        other = self.store.change_key("create", {"name": "other", "cap": 1})
+        for headers, model in (
+            ({"thread_id": "thread"}, "m"),
+            ({"thread_id": "thread", "Authorization": "Bearer " + other["key"]}, "m"),
+            ({"thread_id": "other-thread"}, "m"),
+            ({"thread_id": "thread"}, "other-model"),
+        ):
+            async with self.client.ws_connect(self.url, headers=headers) as ws:
+                self.assertEqual((await self.send_turn(ws, model=model, input="go"))["type"], "response.completed")
+        self.assertEqual([auth for auth, _, _ in self.calls], ["A", "B", "A", "B"])
+        self.assertEqual(len(self.gateway.proto.session_accounts), 4)
+
     async def test_websocket_reconnects_after_idle_upstream_disconnect(self):
         self.accounts[1].enabled = False
         self.script = [message_events("first", ["ok"]), message_events("second", ["ok"])]

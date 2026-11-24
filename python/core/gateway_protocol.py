@@ -7,7 +7,7 @@ import secrets
 import sqlite3
 import time
 import uuid
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 from collections.abc import AsyncGenerator, Callable
 from pathlib import PurePath
 
@@ -34,6 +34,7 @@ LISTENING = web.RequestKey[Callable[[], bool]]("gateway_listening")
 MAX_BODY = 16 * 1024 * 1024
 MAX_WS_CONNECTIONS = 64
 MAX_WS_CONNECTIONS_PER_KEY = 12
+MAX_SESSION_ACCOUNTS = 4096
 TERMINAL = {"response.completed", "response.failed", "response.incomplete", "response.cancelled", "error"}
 
 
@@ -190,6 +191,7 @@ class Protocol:
         self.store, self.scheduler, self.client = store, scheduler, client
         self.identify, self.local = identify, local
         self.records = deque(maxlen=100)
+        self.session_accounts: OrderedDict[tuple[str, str, str | None], tuple[str, str]] = OrderedDict()
         self.sockets = {}
         self.pending_handshakes = {}
         self.last_ws_rejection = None
@@ -544,7 +546,14 @@ class Protocol:
             await send({"type": "response.created", "response": {**response, "status": "in_progress"}})
             await send({"type": "response.completed", "response": response})
             return
-        async with self.scheduler.reserve(owner, request[AUTH], wire.get("model")) as account:
+        model = wire.get("model")
+        thread = (
+            request.headers.get("thread-id") or request.headers.get("thread_id")
+            or request.headers.get("session-id") or request.headers.get("session_id")
+        )
+        session = (owner["id"], thread, model) if thread else None
+        preferred = (lambda: self.session_accounts.get(session)) if session is not None else None
+        async with self.scheduler.reserve(owner, request[AUTH], model, preferred=preferred) as account:
             started = time.monotonic()
             status = "interrupted"
             checkpoint_saved = True
@@ -559,6 +568,11 @@ class Protocol:
                         outputs[event.get("output_index", len(outputs))] = event["item"]
                     if kind == "response.completed":
                         resp = event["response"]
+                        if session is not None:
+                            self.session_accounts[session] = (account.id, account.quota_key)
+                            self.session_accounts.move_to_end(session)
+                            if len(self.session_accounts) > MAX_SESSION_ACCOUNTS:
+                                self.session_accounts.popitem(last=False)
                         actual = resp.get("output") or [v for _, v in sorted(outputs.items())]
                         if actual and not resp.get("output"):
                             resp["output"] = actual
