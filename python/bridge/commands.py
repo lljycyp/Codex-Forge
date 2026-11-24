@@ -869,10 +869,13 @@ def reset_profile_usage(payload):
         raise ValueError("重置卡无效")
     config = load_config()
     _sync_active_auth_to_profile(config, name)
-    return reset_profile_usage_cache(
+    result = reset_profile_usage_cache(
         name, _get_profile_dir(config, name), scope, credit_id, attempt_id,
         retry=payload.get("retry") is True,
     )
+    if restored_at := result.pop("quotaRestoredAt", None):
+        result["gatewayQuotaReset"] = {"profileId": profile["id"], "scope": scope, "restoredAt": restored_at}
+    return result
 
 
 def refresh_all_profile_usage(_payload=None):

@@ -192,7 +192,7 @@ class Gateway:
                     "active": active[a.id],
                     "reason": (a.reason if a.token_expired else "")
                     or ("等待额度恢复后续写" if a.id in self.proto.quota_waiting.values() else "") or a.reason
-                    or ("冷却中" if self.scheduler.cooldown.get(a.id, 0) > time.monotonic() else ""),
+                    or ("冷却中" if self.scheduler.cooldown_until(a) > time.monotonic() else ""),
                 }
                 for a in self.accounts()
             ],
@@ -201,6 +201,10 @@ class Gateway:
     async def command(self, cmd, p) -> dict[str, object]:
         if cmd == "status":
             return self.status()
+        if cmd == "quota_reset":
+            self.refreshed = -100.0
+            self.scheduler.quota_restored(p["profileId"], p["scope"], p["restoredAt"])
+            return {}
         if cmd == "service":
             if p["enabled"]:
                 await self.start()
