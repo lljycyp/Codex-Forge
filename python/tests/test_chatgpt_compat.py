@@ -412,7 +412,7 @@ class ChatGptCompatibilityTest(unittest.TestCase):
             {"type": "chatgpt", "planType": "team"},
             {
                 "rateLimits": {
-                    "primary": {"windowDurationMins": 300, "usedPercent": 25},
+                    "primary": {"windowDurationMins": 300, "usedPercent": 25, "resetsAt": 3000},
                     "secondary": {"windowDurationMins": 10080, "usedPercent": 8},
                     "credits": {"hasCredits": True, "unlimited": False},
                     "rateLimitReachedType": "primary",
@@ -433,6 +433,8 @@ class ChatGptCompatibilityTest(unittest.TestCase):
         self.assertFalse(usage["creditsUnlimited"])
         self.assertTrue(usage["spendControlReached"])
         self.assertEqual(usage["planType"], "team")
+        self.assertEqual(usage["fiveHours"]["remainingPercent"], 75)
+        self.assertEqual(usage["fiveHours"]["resetAt"], 3000)
         self.assertEqual(usage["oneWeek"]["remainingPercent"], 92)
 
     def test_weekly_usage_is_mapped_without_legacy_window(self):
@@ -446,6 +448,7 @@ class ChatGptCompatibilityTest(unittest.TestCase):
         )
 
         self.assertEqual(usage["oneWeek"]["remainingPercent"], 98)
+        self.assertIsNone(usage["fiveHours"])
 
     def test_app_server_network_error_keeps_plan_but_reports_failure(self):
         current = {

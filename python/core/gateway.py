@@ -21,7 +21,7 @@ from core.gateway_accounts import Scheduler, read_accounts, refresh_weekly_quota
 from core.gateway_client_bundle import export_client_bundle
 from core.gateway_launch import prepare_launch
 from core.gateway_store import GatewayStore, digest
-from core.gateway_tls import server_tls
+from core.gateway_tls import ensure_public_ca, server_tls
 from core.logger import get_logger
 from core.profile_service import get_active_auth_path
 
@@ -103,7 +103,7 @@ class Gateway:
         try:
             await asyncio.to_thread(refresh_weekly_quota, account)
         except Exception as exc:
-            logger.warning("账号周额度复查失败 错误类型=%s", type(exc).__name__)
+            logger.warning("账号额度复查失败 错误类型=%s", type(exc).__name__)
         finally:
             self.refreshed = -100.0
             self.scheduler.changed.set()
@@ -225,6 +225,11 @@ class Gateway:
             ],
         }
 
+    def local_launch_config(self):
+        if not any(self.scheduler.eligible(a) for a in self.accounts()):
+            raise ValueError("没有可用账号，请前往「负载均衡」检查并启用参与调度的账号")
+        return f"https://127.0.0.1:{self.port}/v1", ensure_public_ca(self.store)
+
     async def command(self, cmd, p) -> dict[str, object]:
         if cmd == "status":
             return self.status()
@@ -270,15 +275,14 @@ class Gateway:
             )
             self.refreshed = -100
             self.scheduler.changed.set()
-        elif cmd == "launch":
-            if not any(self.scheduler.eligible(a) for a in self.accounts()):
-                raise ValueError("没有可用账号，请前往「负载均衡」检查并启用参与调度的账号")
+        elif cmd in ("prepare_launch", "launch"):
+            base, ca = self.local_launch_config()
             key = self.local_key()
             self.local_key_hash = digest(key)
             plan = await asyncio.to_thread(
                 prepare_launch,
-                f"https://127.0.0.1:{self.port}/v1",
-                self.store.directory / "forge-gateway-ca.pem",
+                base,
+                ca,
                 key,
             )
             was_running = True in self.listeners
@@ -287,7 +291,9 @@ class Gateway:
             try:
                 self.store.set_option("localChatgpt", plan.native_auth)
                 self.local_chatgpt = plan.native_auth
-                return await asyncio.to_thread(plan.start)
+                if cmd == "launch":
+                    return await asyncio.to_thread(plan.start)
+                return {"base": base, "ca": str(ca)}
             except Exception:
                 self.local_chatgpt = previous_login
                 self.store.set_option("localChatgpt", previous_login)

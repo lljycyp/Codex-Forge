@@ -9,7 +9,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from zipfile import ZipFile
 
 from aiohttp import ClientSession, TCPConnector, web
@@ -203,6 +203,46 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["continuations"], 0)
         for field in ("inputTokens", "cachedTokens", "outputTokens"):
             self.assertNotIn(field, row)
+
+    async def test_switch_configures_live_gateway_before_desktop_launch(self):
+        await self.gateway.unlisten(True)
+        ca = self.store.directory / "forge-gateway-ca.pem"
+        ca.unlink()
+        with patch("core.gateway.prepare_launch") as prepare:
+            prepare.return_value.native_auth = False
+            config = await self.gateway.command("prepare_launch", {})
+            prepare.return_value.start.assert_not_called()
+        key = self.gateway.local_key()
+        self.assertEqual(config, {"base": "https://127.0.0.1:0/v1", "ca": str(ca)})
+        prepare.assert_called_once_with(config["base"], ca, key)
+        self.assertTrue(ca.is_file())
+        _, runner = self.gateway.listeners[True]
+        url = f"https://127.0.0.1:{runner.addresses[0][1]}/v1/responses"
+        async with self.client.post(url, headers={"Authorization": "Bearer " + key}, json={"input": "hello"}) as r:
+            self.assertEqual(r.status, 200)
+            await r.read()
+
+        self.gateway.port = 19385
+        with (
+            patch("core.gateway.prepare_launch") as prepare,
+            patch.object(self.gateway, "start", new_callable=AsyncMock),
+        ):
+            prepare.return_value.native_auth = False
+            await self.gateway.command("launch", {})
+            prepare.return_value.start.assert_called_once()
+        self.assertEqual(prepare.call_args.args[:2], ("https://127.0.0.1:19385/v1", ca))
+
+    async def test_switch_reports_listener_failure_without_opening_desktop(self):
+        await self.gateway.unlisten(True)
+        with (
+            patch("core.gateway.prepare_launch") as prepare,
+            patch.object(self.gateway, "start", side_effect=OSError("port already in use")),
+            self.assertRaisesRegex(OSError, "port already in use"),
+        ):
+            await self.gateway.command("prepare_launch", {})
+        self.assertNotIn(True, self.gateway.listeners)
+        self.assertFalse(self.gateway.local_chatgpt)
+        prepare.return_value.start.assert_not_called()
 
     async def test_balanced_key_routes_locally_and_survives_gateway_restart(self):
         with patch("core.gateway.prepare_launch") as prepare:
@@ -705,12 +745,12 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
                             await asyncio.sleep(0.01)
                     publish_reading(3)
                     self.gateway.refreshed = -100.0
-                    self.assertEqual(self.gateway.status()["accounts"][0]["reason"], "周额度保护中，限单并发")
+                    self.assertEqual(self.gateway.status()["accounts"][0]["reason"], "额度保护中，限单并发")
                     self.release.set()
                     self.assertEqual((await asyncio.wait_for(first, 3))[0], 200)
                     await asyncio.wait_for(checked.wait(), 3)
                     self.assertEqual(len(self.seen), 1)
-                    self.assertEqual(self.gateway.status()["accounts"][0]["reason"], "等待复查周额度")
+                    self.assertEqual(self.gateway.status()["accounts"][0]["reason"], "等待复查额度")
                 finally:
                     self.release.set()
                     allow_check.set()
@@ -772,6 +812,45 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.post({"input": "confirmed"}, 1))[0], 200)
         self.assertEqual(self.seen[-1][0], "Bearer upstream-A")
         self.assertEqual(self.store.option("weeklyRecheckAfter"), {})
+
+    async def test_five_hour_quota_rechecks_near_limit_and_pauses_at_one_percent(self):
+        account, other = self.accounts
+        account.cap = 4
+        account.weekly_remaining = 80
+        account.five_hour_remaining = 2
+        account.weekly_checked_at = account.five_hour_checked_at = time.time()
+        self.assertEqual(self.gateway.status()["accounts"][0]["reason"], "5 小时额度保护中，限单并发")
+
+        def publish_reading(remaining):
+            account.five_hour_remaining = remaining
+            account.weekly_checked_at = account.five_hour_checked_at = time.time()
+
+        loop = asyncio.get_running_loop()
+
+        def refresh_quota(_account):
+            loop.call_soon_threadsafe(publish_reading, 1)
+
+        with patch("core.gateway.refresh_weekly_quota", side_effect=refresh_quota) as refresh:
+            first = asyncio.create_task(self.post({"model": "hold", "input": "first"}))
+            try:
+                await asyncio.wait_for(self.started.wait(), 3)
+                self.assertEqual((await self.post({"input": "second"}, 1))[0], 200)
+                self.assertEqual([bearer for bearer, _ in self.seen], ["Bearer upstream-A", "Bearer upstream-B"])
+                other.enabled = False
+            finally:
+                self.release.set()
+            self.assertEqual((await asyncio.wait_for(first, 3))[0], 200)
+            async with asyncio.timeout(3):
+                while self.gateway.status()["accounts"][0]["reason"] != "5 小时额度剩余 ≤ 1%，已暂停派发":
+                    await asyncio.sleep(0.01)
+            status, body = await self.post({"input": "blocked"})
+            self.assertEqual((status, body["error"]["message"]), (429, "5 小时额度不足，等待账号额度恢复"))
+            self.assertEqual(len(self.seen), 2)
+            refresh.assert_called_once_with(account)
+
+        publish_reading(100)
+        self.gateway.refreshed = -100.0
+        self.assertEqual((await self.post({"input": "after reset"}))[0], 200)
 
     async def test_key_cap_changes_apply_to_queued_turns_on_an_existing_socket(self):
         async def wait_for_queue():

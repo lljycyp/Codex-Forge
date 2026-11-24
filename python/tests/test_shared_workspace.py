@@ -307,12 +307,13 @@ class SharedWorkspaceTest(unittest.TestCase):
         self.assertEqual(projected["project-order"], ["q", "p"])
         self.assertEqual(projected[ATOMS]["unified-sidebar-pinned-order-v1"], ["codex:project:q"])
 
-    def test_switch_prepares_shared_workspace_before_changing_auth(self):
+    def test_switch_restores_settings_and_prepares_workspace_before_changing_auth(self):
         events = []
         config = {"profiles": ["b"], "launch_mode": "switch"}
         with (
             patch.object(commands, "load_config", return_value=config),
             patch.object(commands, "_running_codex_count", return_value=0),
+            patch.object(commands, "restore_lan_client", side_effect=lambda: events.append("restore")),
             patch.object(commands, "_get_profile_dir", return_value=self.root / "b"),
             patch.object(commands, "_sync_shared_workspace", side_effect=lambda *a: events.append("share")),
             patch.object(commands, "apply_profile", side_effect=lambda *a, **k: events.append("auth")),
@@ -320,7 +321,7 @@ class SharedWorkspaceTest(unittest.TestCase):
             patch.object(commands, "_launch_default_codex", side_effect=lambda *a, **k: events.append("launch") or {}),
         ):
             commands.launch_profile({"name": "b"})
-        self.assertEqual(events, ["share", "auth", "launch"])
+        self.assertEqual(events, ["restore", "share", "auth", "launch"])
 
     def test_failed_share_does_not_switch_auth_or_launch(self):
         with (

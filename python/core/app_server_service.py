@@ -13,6 +13,7 @@ from pathlib import Path
 
 from core.codex_source import find_latest_portable_app_dir
 from core.file_lock import _exclusive_file_lock
+from core.gateway_client_config import account_client_env
 from core.path_utils import remove_readonly_path
 from core.profile_service import profile_auth_lock, sanitize_profile_config_text, sync_auth_file
 
@@ -197,7 +198,7 @@ class AppServerClient:
         self.next_id = 1
 
     def __enter__(self):
-        env = dict(os.environ if self.env is None else self.env)
+        env = account_client_env(os.environ) if self.env is None else dict(self.env)
         env["CODEX_HOME"] = str(self.codex_home)
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self.process = subprocess.Popen(

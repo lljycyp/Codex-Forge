@@ -1,7 +1,8 @@
-param([switch]$Restore)
+﻿param([switch]$Restore)
 
 $ErrorActionPreference = 'Stop'
 $utf8 = [Text.UTF8Encoding]::new($false)
+if ($Restore) { [Console]::OutputEncoding = $utf8 }
 $caVariable = 'CODEX_CA_CERTIFICATE'
 $userScope = [EnvironmentVariableTarget]::User
 $codexHome = [Environment]::GetEnvironmentVariable('CODEX_HOME', $userScope)
@@ -105,10 +106,10 @@ try {
         }
         if ($currentUrl -cne $state.previousUrl) { Set-GatewayAddress $state.previousUrl $userLayer }
         [Environment]::SetEnvironmentVariable($caVariable, $state.previousCa, $userScope)
-        Remove-Item -LiteralPath $statePath
         if ($state.previousCa -ine $installedCa -and (Test-Path -LiteralPath $installedCa)) {
             Remove-Item -LiteralPath $installedCa
         }
+        Remove-Item -LiteralPath $statePath
         Write-Host '已恢复 Codex 原有网关设置。可以照常打开 Codex 登录。'
         exit 0
     }

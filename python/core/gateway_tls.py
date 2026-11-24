@@ -50,13 +50,24 @@ def _make_authority():
     return json.dumps([_pem(key).decode(), cert.public_bytes(serialization.Encoding.PEM).decode()]).encode()
 
 
-def server_tls(store, address):
+def _authority(store):
     key_pem, ca_pem = json.loads(store.secret("tls-authority", _make_authority))
+    public = store.directory / "forge-gateway-ca.pem"
+    if not public.is_file() or public.read_bytes() != ca_pem.encode():
+        public.write_bytes(ca_pem.encode())
+    return key_pem, ca_pem
+
+
+def ensure_public_ca(store):
+    _authority(store)
+    return store.directory / "forge-gateway-ca.pem"
+
+
+def server_tls(store, address):
+    key_pem, ca_pem = _authority(store)
     ca_key = serialization.load_pem_private_key(key_pem.encode(), password=None)
     assert isinstance(ca_key, ec.EllipticCurvePrivateKey)
     ca = x509.load_pem_x509_certificate(ca_pem.encode())
-    public = store.directory / "forge-gateway-ca.pem"
-    public.write_bytes(ca_pem.encode())
     leaf_key = ec.generate_private_key(ec.SECP256R1())
     leaf = (
         _certificate(_name("Codex Forge"), ca.subject, leaf_key, 180)

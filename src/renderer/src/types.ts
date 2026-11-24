@@ -81,6 +81,7 @@ export type ResetCredit = {
 export type ProfileUsage = {
   fetchedAt: number;
   planType: string | null;
+  fiveHours?: ProfileUsageWindow | null;
   oneWeek: ProfileUsageWindow | null;
   resetCredits?: number | null;
   resetCreditExpiresAt?: number[];

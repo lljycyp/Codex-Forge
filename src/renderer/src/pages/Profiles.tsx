@@ -487,6 +487,7 @@ export function Profiles({ profiles, runningCount, systemAuthMode, privacyMode, 
                     </div>
                     <div className="grid min-w-0 gap-2">
                       {profile.usage?.oneWeek ? <UsageMeter label={t("一周")} language={language} window={profile.usage.oneWeek} /> : null}
+                      {profile.usage?.fiveHours ? <UsageMeter label={t("5 小时")} language={language} window={profile.usage.fiveHours} /> : null}
                       <ResetCreditSummary usage={profile.usage} language={language} compact />
                     </div>
                     <Button
@@ -875,6 +876,7 @@ function ProfileInspector({
                 ) : null}
                 <div className="grid gap-3">
                   {profile.usage?.oneWeek ? <UsageMeter label={t("一周额度")} language={language} window={profile.usage.oneWeek} /> : null}
+                  {profile.usage?.fiveHours ? <UsageMeter label={t("5 小时额度")} language={language} window={profile.usage.fiveHours} /> : null}
                   <ResetCreditSummary
                     usage={profile.usage}
                     language={language}
@@ -1047,6 +1049,7 @@ function ProfileDetailPanel({
                     ) : null}
                     <div className="grid gap-3">
                       {detail.usage?.oneWeek ? <DetailUsageCard title={t("一周额度")} language={language} window={detail.usage.oneWeek} /> : null}
+                      {detail.usage?.fiveHours ? <DetailUsageCard title={t("5 小时额度")} language={language} window={detail.usage.fiveHours} /> : null}
                     </div>
                     <InfoGrid
                       rows={[

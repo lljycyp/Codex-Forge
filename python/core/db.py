@@ -201,6 +201,16 @@ def save_usage_cache(cache, *, expected_profile=None):
                           THEN json_type(payload_json, '$.oneWeek.remainingPercent') END IN ('integer', 'real')
                     ORDER BY fetched_at DESC, id DESC LIMIT 1
                 )
+                UNION
+                SELECT h.id FROM profiles p JOIN profile_usage_history h ON h.id = (
+                    SELECT id FROM profile_usage_history
+                    WHERE profile_id = p.id
+                      AND CASE WHEN json_valid(payload_json) THEN
+                          json_type(payload_json, '$.fiveHours') = 'null'
+                          OR json_type(payload_json, '$.fiveHours.remainingPercent') IN ('integer', 'real')
+                      END
+                    ORDER BY fetched_at DESC, id DESC LIMIT 1
+                )
             )
             """,
             (time.time() - 30 * 24 * 60 * 60,),

@@ -42,18 +42,39 @@ class Account:
     profile_dir: Path | None = None
     weekly_remaining: float | None = None
     weekly_checked_at: float = 0
+    five_hour_remaining: float | None = None
+    five_hour_checked_at: float = 0
 
     @property
     def quota_key(self) -> str:
         return self.identity or self.id
 
+    def low_quota_window(self, threshold: float) -> str:
+        if self.weekly_remaining is not None and self.weekly_remaining <= threshold:
+            return "周额度"
+        if self.five_hour_remaining is not None and self.five_hour_remaining <= threshold:
+            return "5 小时额度"
+        return ""
+
+    @property
+    def quota_limited(self) -> bool:
+        return bool(self.low_quota_window(SERIAL_WEEKLY_AT))
+
     @property
     def weekly_paused(self) -> bool:
-        return self.weekly_remaining is not None and self.weekly_remaining <= PAUSE_WEEKLY_AT
+        return bool(self.low_quota_window(PAUSE_WEEKLY_AT))
 
     @property
     def weekly_limited(self) -> bool:
-        return self.weekly_remaining is not None and self.weekly_remaining <= SERIAL_WEEKLY_AT
+        return self.quota_limited
+
+    @property
+    def quota_checked_at(self) -> float:
+        if self.weekly_remaining is None:
+            return self.five_hour_checked_at
+        if self.five_hour_remaining is None:
+            return self.weekly_checked_at
+        return min(self.weekly_checked_at, self.five_hour_checked_at)
 
 
 AZURE_V1 = re.compile(r"https://[a-zA-Z0-9-]+\.(?:openai\.azure\.com|services\.ai\.azure\.com)/openai/v1/?")
@@ -96,17 +117,25 @@ def _chatgpt_identity(values):
     return hashlib.sha256(json.dumps((values["accountId"], user)).encode()).hexdigest()
 
 
-def _weekly_reading(usage):
-    if not isinstance(usage, dict) or usage.get("error"):
+def _quota_reading(usage, field):
+    if not isinstance(usage, dict) or usage.get("error") or field not in usage:
         return None
-    window = usage.get("oneWeek")
-    remaining = window.get("remainingPercent") if isinstance(window, dict) else None
-    if not isinstance(remaining, (int, float)) or isinstance(remaining, bool) or not 0 <= remaining <= 100:
+    window = usage[field]
+    remaining = None
+    if isinstance(window, dict):
+        remaining = window.get("remainingPercent")
+        if not isinstance(remaining, (int, float)) or isinstance(remaining, bool) or not 0 <= remaining <= 100:
+            return None
+    elif field != "fiveHours" or window is not None:
         return None
     checked_at = usage.get("queryStartedAt", usage.get("fetchedAt"))
     if not isinstance(checked_at, (int, float)) or not 0 < checked_at < float("inf"):
         checked_at = 0
     return checked_at, remaining
+
+
+def _weekly_reading(usage):
+    return _quota_reading(usage, "oneWeek")
 
 
 def refresh_weekly_quota(account):
@@ -132,14 +161,20 @@ def read_accounts(policies):
                 (SELECT h.payload_json FROM profile_usage_history h WHERE h.profile_id=p.id
                     AND CASE WHEN json_valid(h.payload_json)
                         THEN json_type(h.payload_json, '$.oneWeek.remainingPercent') END IN ('integer', 'real')
+                    ORDER BY h.fetched_at DESC, h.id DESC LIMIT 1),
+                (SELECT h.payload_json FROM profile_usage_history h WHERE h.profile_id=p.id
+                    AND CASE WHEN json_valid(h.payload_json) THEN
+                        json_type(h.payload_json, '$.fiveHours') = 'null'
+                        OR json_type(h.payload_json, '$.fiveHours.remainingPercent') IN ('integer', 'real')
+                    END
                     ORDER BY h.fetched_at DESC, h.id DESC LIMIT 1)
             FROM profiles p LEFT JOIN profile_usage u ON u.profile_id=p.id ORDER BY p.sort_order,p.display_name
             """
         ).fetchall()
     active = _auth(get_active_auth_path())
     accounts, identities = [], set()
-    weekly = {}
-    for pid, name, directory, usage, last_weekly_usage in rows:
+    readings = {}
+    for pid, name, directory, usage, last_weekly_usage, last_five_hour_usage in rows:
         enabled, cap = policies.get(pid, (True, 2))
         account = Account(pid, name, cap, enabled)
         accounts.append(account)
@@ -163,18 +198,27 @@ def read_accounts(policies):
                 account.identity = _chatgpt_identity(values)
                 account.profile_dir = folder
                 cached = json.loads(usage or "{}")
-                window = cached.get("oneWeek") or {}
-                reading = _weekly_reading(cached) or _weekly_reading(json.loads(last_weekly_usage or "{}"))
-                if reading:
+                for field, fallback in (("oneWeek", last_weekly_usage), ("fiveHours", last_five_hour_usage)):
+                    reading = _quota_reading(cached, field) or _quota_reading(json.loads(fallback or "{}"), field)
+                    if reading is None:
+                        continue
                     checked_at, remaining = reading
-                    previous_time, previous_remaining = weekly.get(account.identity, (-1, 0))
-                    if checked_at > previous_time or (checked_at == previous_time and remaining < previous_remaining):
-                        weekly[account.identity] = reading
+                    key = (account.identity, field)
+                    previous_time, previous_remaining = readings.get(key, (-1, None))
+                    if checked_at > previous_time or (
+                        checked_at == previous_time and remaining is not None
+                        and (previous_remaining is None or remaining < previous_remaining)
+                    ):
+                        readings[key] = reading
                 if (jwt_expiration(token) or 0) <= time.time() + 10:
                     account.token_expired = True
                     raise ValueError("令牌已过期，请在账号管理刷新额度或重新授权")
                 account.headers["ChatGPT-Account-Id"] = values["accountId"]
-                reset = (window.get("resetAt") or 0) if window.get("remainingPercent") == 0 else 0
+                windows = (cached.get("oneWeek") or {}, cached.get("fiveHours") or {})
+                reset = max(
+                    (window.get("resetAt") or 0 for window in windows if window.get("remainingPercent") == 0),
+                    default=0,
+                )
                 if cached.get("spendControlReached"):
                     reset = max(reset, (cached.get("fetchedAt") or 0) + 300)
                 if reset > time.time():
@@ -188,8 +232,8 @@ def read_accounts(policies):
         except (ValueError, OSError, KeyError, TypeError, AttributeError) as exc:
             account.reason = str(exc)
     for account in accounts:
-        if account.identity in weekly:
-            account.weekly_checked_at, account.weekly_remaining = weekly[account.identity]
+        account.weekly_checked_at, account.weekly_remaining = readings.get((account.identity, "oneWeek"), (0, None))
+        account.five_hour_checked_at, account.five_hour_remaining = readings.get((account.identity, "fiveHours"), (0, None))
     return accounts
 
 
@@ -224,7 +268,7 @@ class Scheduler:
 
     def eligible(self, account):
         return (
-            account.enabled and not account.reason and not account.weekly_paused
+            account.enabled and not account.reason and not account.low_quota_window(PAUSE_WEEKLY_AT)
             and self.cooldown_until(account) <= time.monotonic()
         )
 
@@ -255,7 +299,7 @@ class Scheduler:
         self.changed.set()
         if identity in self.weekly_recheck_after:
             restored = any(
-                (account.id, account.identity) == key and (account.weekly_remaining or 0) > SERIAL_WEEKLY_AT
+                (account.id, account.identity) == key and account.quota_checked_at > 0 and not account.quota_limited
                 for account in self.accounts()
             )
             if restored and identity in self.weekly_recheck_after:
@@ -267,10 +311,10 @@ class Scheduler:
         for account in accounts:
             key = account.quota_key
             since = self.weekly_recheck_after.get(key, 0)
-            if account.weekly_limited and self.identity_active[key] and since is not None:
+            if account.quota_limited and self.identity_active[key] and since is not None:
                 self.weekly_recheck_after[key] = None
                 changed = True
-            elif since and account.weekly_checked_at > since:
+            elif since and account.quota_checked_at > since:
                 del self.weekly_recheck_after[key]
                 changed = True
         if changed:
@@ -280,22 +324,25 @@ class Scheduler:
         try:
             self.store.set_option("weeklyRecheckAfter", self.weekly_recheck_after)
         except sqlite3.Error as exc:
-            logger.warning("周额度复查状态保存失败 错误类型=%s", type(exc).__name__)
+            logger.warning("额度复查状态保存失败 错误类型=%s", type(exc).__name__)
 
     def weekly_reason(self, account):
-        if account.enabled:
-            if account.weekly_paused:
-                return "周额度剩余 ≤ 1%，已暂停派发"
-            if self.weekly_recheck_after.get(account.quota_key) is not None:
-                return "等待复查周额度"
-            if account.weekly_limited or account.quota_key in self.weekly_recheck_after:
-                return "周额度保护中，限单并发"
+        if not account.enabled:
+            return ""
+        if window := account.low_quota_window(PAUSE_WEEKLY_AT):
+            return f"{window}剩余 ≤ 1%，已暂停派发"
+        if self.weekly_recheck_after.get(account.quota_key) is not None:
+            return "等待复查额度"
+        if window := account.low_quota_window(SERIAL_WEEKLY_AT):
+            return f"{window}保护中，限单并发"
+        if account.quota_key in self.weekly_recheck_after:
+            return "额度保护中，限单并发"
         return ""
 
     def _has_capacity(self, account):
         if account.quota_key in self.weekly_recheck_after:
             return False
-        if account.weekly_limited:
+        if account.quota_limited:
             return self.identity_active[account.quota_key] == 0
         return self.active[account.id] < account.cap
 
@@ -339,8 +386,10 @@ class Scheduler:
 
                 candidates = [a for a in online if supports(a, model)]
                 if not candidates:
-                    if any(a.enabled and a.weekly_paused and supports(a, model) for a in accounts):
-                        raise CapacityError("周额度不足，等待账号额度恢复")
+                    for account in accounts:
+                        if account.enabled and supports(account, model):
+                            if window := account.low_quota_window(PAUSE_WEEKLY_AT):
+                                raise CapacityError(f"{window}不足，等待账号额度恢复")
                     raise CapacityError("没有符合条件的可用账号")
                 available = [a for a in candidates if self._has_capacity(a)]
 
@@ -367,7 +416,7 @@ class Scheduler:
                     self.identity_active[selected.quota_key] += 1
                     self.owner_active[owner_id] += 1
                     self.last[selected.id] = time.monotonic_ns()
-                    if selected.weekly_limited:
+                    if selected.quota_limited:
                         self.weekly_recheck_after[selected.quota_key] = None
                         self._save_weekly_checks()
                     self.changed.set()

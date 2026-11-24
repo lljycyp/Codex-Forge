@@ -16,7 +16,7 @@ from bridge.commands import reset_profile_usage as reset_profile_usage_command
 from core import db
 from core.app_server_service import read_account_and_rate_limits
 from core.auth_service import is_newer_auth, is_same_auth_account, parse_last_refresh
-from core.gateway_accounts import read_accounts, refresh_weekly_quota
+from core.gateway_accounts import PAUSE_WEEKLY_AT, read_accounts, refresh_weekly_quota
 from core.profile_service import (
     apply_profile, profile_auth_lock,
     sync_codex_home_to_profile, write_profile_auth_json,
@@ -237,7 +237,7 @@ class AuthSyncTest(unittest.TestCase):
         self.assertTrue(result["error"])
         self.assertIsNone(result["oneWeek"])
 
-    def test_weekly_quota_survives_a_failed_refresh_and_applies_to_duplicate_accounts(self):
+    def test_quota_survives_a_failed_refresh_and_applies_to_duplicate_accounts(self):
         database = self.root / "forge.db"
         older = time.time() - 32 * 86400
         with (
@@ -252,16 +252,24 @@ class AuthSyncTest(unittest.TestCase):
                 write_profile_auth_json(self.root / profile["dir_name"] / "auth.json", credential)
             cache = {
                 "first": {"fetchedAt": older, "oneWeek": {"remainingPercent": 3}},
-                "duplicate": {"fetchedAt": older + 1, "oneWeek": {"remainingPercent": 0, "resetAt": older + 86400}},
-                "api": {"fetchedAt": time.time(), "oneWeek": {"remainingPercent": 0}},
+                "duplicate": {
+                    "fetchedAt": older + 1,
+                    "oneWeek": {"remainingPercent": 0, "resetAt": older + 86400},
+                    "fiveHours": {"remainingPercent": 1},
+                },
+                "api": {"fetchedAt": time.time(), "oneWeek": {"remainingPercent": 0}, "fiveHours": {"remainingPercent": 0}},
             }
+            db.save_usage_cache(cache)
+            cache["duplicate"] = {"fetchedAt": older + 2, "fiveHours": {"remainingPercent": 0.5}}
             db.save_usage_cache(cache)
             cache["duplicate"] = {"fetchedAt": time.time(), "oneWeek": None, "error": "offline"}
             db.save_usage_cache(cache)
             first, duplicate, api = read_accounts({})
-            self.assertTrue(first.weekly_paused)
-            self.assertTrue(duplicate.weekly_paused)
+            self.assertTrue(first.low_quota_window(PAUSE_WEEKLY_AT))
+            self.assertTrue(duplicate.low_quota_window(PAUSE_WEEKLY_AT))
             self.assertIsNone(api.weekly_remaining)
+            self.assertEqual((first.five_hour_remaining, duplicate.five_hour_remaining), (0.5, 0.5))
+            self.assertIsNone(api.five_hour_remaining)
 
             with patch(
                 "core.usage_service.read_account_and_rate_limits",
@@ -277,8 +285,9 @@ class AuthSyncTest(unittest.TestCase):
             current = db.load_usage_cache()["first"]
             first, duplicate, _ = read_accounts({})
             self.assertEqual((first.weekly_remaining, duplicate.weekly_remaining), (2, 2))
-            self.assertFalse(first.weekly_paused)
-            self.assertTrue(first.weekly_limited)
+            self.assertEqual((first.five_hour_remaining, duplicate.five_hour_remaining), (None, None))
+            self.assertFalse(first.low_quota_window(PAUSE_WEEKLY_AT))
+            self.assertTrue(first.quota_limited)
             self.assertEqual(first.weekly_checked_at, current["queryStartedAt"])
             self.assertLessEqual(current["queryStartedAt"], current["fetchedAt"])
 

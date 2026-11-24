@@ -1,4 +1,4 @@
-import { Button, Segmented, Tooltip, message } from "antd";
+import { Button, Modal, Segmented, Tooltip, message } from "antd";
 import { useState } from "react";
 import { invokeLauncher } from "../api/launcher";
 import type { ReactNode } from "react";
@@ -8,6 +8,7 @@ import {
   ChevronRight,
   FileText,
   FolderOpen,
+  LoaderCircle,
   Play,
   Settings,
   ShieldAlert,
@@ -36,6 +37,7 @@ export function HomePage({ appState, profiles, onOpenView, onLaunchProfile }: Ho
   const { t } = useI18n();
   const [balanced, setBalanced] = useState(() => localStorage.getItem("forge.home.routing") === "balanced");
   const [launching, setLaunching] = useState(false);
+  const [pendingMode, setPendingMode] = useState<"balanced" | "account" | null>(null);
   const currentProfile =
     profiles.find((profile) => profile.name === appState.activeProfile)
     ?? profiles.find((profile) => profile.active)
@@ -64,6 +66,25 @@ export function HomePage({ appState, profiles, onOpenView, onLaunchProfile }: Ho
   const primaryText = hasRunningInstance
     ? t(appState.balancedRunning ? "查看负载均衡" : "查看运行实例")
     : t(balanced ? "使用负载均衡启动" : currentProfile ? "启动 Codex" : "选择账号");
+
+  const switchMode = async (nextMode: "balanced" | "account") => {
+    const nextBalanced = nextMode === "balanced";
+    if (pendingMode || launching || nextBalanced === balanced) return;
+    if (hasRunningInstance) {
+      message.warning(t("请退出当前 Codex，再切换启动模式"));
+      return;
+    }
+    setPendingMode(nextMode);
+    try {
+      await invokeLauncher(nextBalanced ? "gateway_prepare_launch" : "prepare_account_mode");
+      localStorage.setItem("forge.home.routing", nextMode);
+      setBalanced(nextBalanced);
+    } catch (error) {
+      message.error(t(error instanceof Error ? error.message : "操作失败"));
+    } finally {
+      setPendingMode(null);
+    }
+  };
 
   const handlePrimaryAction = async () => {
     if (hasRunningInstance) {
@@ -111,25 +132,43 @@ export function HomePage({ appState, profiles, onOpenView, onLaunchProfile }: Ho
           </div>
 
           <div className="flex items-center gap-2 max-[960px]:col-span-2 max-[960px]:ml-[88px] max-[720px]:ml-0 max-[720px]:w-full max-[720px]:flex-col">
-            <Segmented aria-label={t("请求分配")} value={balanced ? "balanced" : "account"} disabled={launching}
+            <Segmented<"balanced" | "account">
+              aria-label={t("请求分配")} value={balanced ? "balanced" : "account"} disabled={launching || pendingMode !== null}
               options={[{ label: t("指定账号"), value: "account" }, { label: t("负载均衡"), value: "balanced" }]}
-              onChange={(value) => { localStorage.setItem("forge.home.routing", String(value)); setBalanced(value === "balanced"); }} />
+              onChange={(value) => void switchMode(value)} />
             <Button
               className="!h-10 !min-w-[144px] !rounded-[8px] !font-bold max-[720px]:!w-full"
               type="primary"
               icon={hasRunningInstance ? <UsersRound size={15} /> : <Play size={15} />}
               loading={launching}
-              disabled={!hasRunningInstance && (balanced ? !appState.codexCommandAvailable : !environmentReady)}
+              disabled={pendingMode !== null || (!hasRunningInstance && (balanced ? !appState.codexCommandAvailable : !environmentReady))}
               onClick={handlePrimaryAction}
             >
               {primaryText}
             </Button>
-            <Button className="!h-10 !rounded-[8px] !font-semibold max-[720px]:!w-full" icon={<UsersRound size={15} />} onClick={() => onOpenView("profiles")}>
+            <Button className="!h-10 !rounded-[8px] !font-semibold max-[720px]:!w-full" icon={<UsersRound size={15} />} disabled={pendingMode !== null} onClick={() => onOpenView("profiles")}>
               {t("切换账号")}
             </Button>
           </div>
         </div>
       </section>
+      <Modal
+        open={pendingMode !== null}
+        centered
+        width={320}
+        footer={null}
+        closable={false}
+        maskClosable={false}
+        keyboard={false}
+        title={
+          <div role="status" className="flex flex-col items-center gap-3 py-2 text-center">
+            <span className="grid h-12 w-12 place-items-center rounded-full bg-brand-50 text-brand-700">
+              <LoaderCircle size={24} className="motion-safe:animate-spin" aria-hidden />
+            </span>
+            {pendingMode && t(pendingMode === "balanced" ? "正在配置本机网关…" : "正在复原账号设置…")}
+          </div>
+        }
+      />
 
       <section className={`${panelClass} grid grid-cols-3 divide-x divide-slate-100 px-2 py-3 max-[720px]:grid-cols-1 max-[720px]:divide-x-0 max-[720px]:divide-y`} aria-label={t("当前状态")}>
         <StatusMetric label={t("已保存账号")} value={profiles.length || appState.profileCount} tone="green" />

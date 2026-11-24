@@ -27,6 +27,7 @@ from core.constants import CONFIG_DIR, DB_PATH, DEFAULT_PROFILE_ROOT
 from core.auth_service import auth_kind, auth_tokens, extract_auth, is_same_auth_account as _is_same_auth_account
 from core.logger import get_logger
 from core.oauth_service import login_with_browser
+from core.gateway_client_config import account_client_env, restore_lan_client
 from core.gateway_launch import BALANCED_CHATGPT_FLAG, BALANCED_FLAG
 from core.path_utils import check_directory_writable, format_health_status, is_reparse_point, normalize_path_for_match, remove_readonly_path, sanitize_profile_name
 from core.profile_service import (
@@ -81,6 +82,7 @@ CODEX_SKIN_PORT_COUNT = 100
 CODEX_CLIENT_OPERATION_COMMANDS = {
     "ensure_codex_skin_sessions",
     "launch_profile",
+    "prepare_account_mode",
     "set_codex_skin_enabled",
     "stop_profile",
 }
@@ -124,6 +126,7 @@ def invoke(command, payload=None):
         "enable_instruction_template": enable_instruction_template,
         "disable_instruction_template": disable_instruction_template,
         "launch_profile": launch_profile,
+        "prepare_account_mode": prepare_account_mode,
         "list_profiles": list_profiles,
         "refresh_all_profile_usage": refresh_all_profile_usage,
         "refresh_codex_source": refresh_codex_source,
@@ -658,6 +661,12 @@ def import_profile_backup(payload):
     return _build_profile_summary(config, name, read_running_codex_commands())
 
 
+def prepare_account_mode(_payload=None):
+    if _running_codex_count():
+        raise RuntimeError("请退出当前 Codex，再切换启动模式")
+    restore_lan_client()
+
+
 def launch_profile(payload):
     """切换到指定账号资料，并启动默认安装的 Codex。"""
     name = payload.get("name", "")
@@ -674,6 +683,7 @@ def launch_profile(payload):
         if _running_codex_count() > 0:
             raise RuntimeError("Codex 尚未完全退出，暂不能加载共享工作区，请稍后重试")
 
+    restore_lan_client()
     profile_dir = _get_profile_dir(config, name)
     _sync_shared_workspace(config, get_active_codex_dir(), get_profile_auth_path(profile_dir))
     apply_profile(
@@ -1491,7 +1501,7 @@ def _launch_default_codex(profile_name="", skin_port=None):
         process = subprocess.Popen(
             command,
             cwd=working_dir,
-            env=env,
+            env=account_client_env(env),
             close_fds=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )

@@ -233,6 +233,7 @@ def _map_app_server_usage(account, payload, reset_account_scope=None):
     return {
         "fetchedAt": time.time(),
         "planType": _clean_string(rate_limits.get("planType") or account.get("planType")),
+        "fiveHours": _to_usage_window(_find_window(windows, 5 * 60 * 60)),
         "oneWeek": _to_usage_window(_find_window(windows, 7 * 24 * 60 * 60)),
         "resetCredits": _optional_int(reset_credits.get("availableCount")),
         "resetCreditExpiresAt": sorted(
@@ -281,6 +282,7 @@ def _usage_error(message, plan_type=None):
     return {
         "fetchedAt": time.time(),
         "planType": plan_type,
+        "fiveHours": None,
         "oneWeek": None,
         "resetCredits": None,
         "resetCreditExpiresAt": [],

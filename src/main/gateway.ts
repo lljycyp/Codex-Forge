@@ -5,7 +5,7 @@ import { spawnGateway } from "./python/launcherBackend";
 
 type Reply = { ok: boolean; data: Record<string, unknown>; error: string };
 const failure = (error: string): Reply => ({ ok: false, data: {}, error });
-const commands = new Set(["status", "service", "launch", "share", "key", "policy", "export_client_bundle"]);
+const commands = new Set(["status", "service", "prepare_launch", "launch", "share", "key", "policy", "export_client_bundle"]);
 const pending = new Map<number, (reply: Reply) => void>();
 const root = join(process.env.LOCALAPPDATA ?? "", "CodexForge", "gateway");
 let child: ReturnType<typeof spawnGateway> | undefined;
