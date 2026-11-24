@@ -9,7 +9,10 @@ type AccessKey = {
   calls: number; active: number; waiting: number; websocketConnections?: number;
 };
 type Account = { id: string; name: string; cap: number; enabled: boolean; active: number; reason: string };
-type Log = { id: string; at: number; owner: string; account: string; model: string; protocol: string; result: string; ms: number };
+type Log = {
+  id: string; at: number; owner: string; account: string; model: string; protocol: string; result: string; ms: number;
+  inputTokens?: number; cachedTokens?: number; outputTokens?: number; continuations?: number;
+};
 type WebSocketRejection = {
   at: number; ownerId: string; ownerName: string; keyConnections: number; totalConnections: number;
   keyLimitReached: boolean; totalLimitReached: boolean;
@@ -25,6 +28,7 @@ const heading = "m-0 text-base font-bold text-slate-900";
 
 export function GatewayPage({ privacy }: { privacy: boolean }) {
   const { t } = useI18n();
+  const formatCount = (n?: number) => n == null ? t("未知") : n.toLocaleString();
   const [status, setStatus] = useState<Status>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -212,12 +216,16 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
     </section>
     <section className={panel}>
       <h2 className={heading}>{t("最近请求")}</h2>
-      <Table<Log> rowKey="id" size="small" pagination={{pageSize:8,hideOnSinglePage:true}} scroll={{ x: 590 }} dataSource={status?.records || []}
+      <Table<Log> rowKey="id" size="small" pagination={{pageSize:8,hideOnSinglePage:true}} scroll={{ x: 940 }} dataSource={status?.records || []}
         columns={[
           {title:t("时间"),dataIndex:"at",render:n => new Date(n*1000).toLocaleTimeString()},
           {title:t("来源"),dataIndex:"owner",render:(v:string) => showName(v)},
           {title:t("账号"),dataIndex:"account",render:(v:string) => showName(v)}, {title:t("模型"),dataIndex:"model"},
           {title:t("协议"),dataIndex:"protocol"}, {title:t("结果"),dataIndex:"result"},
+          {title:t("输入 Token"),dataIndex:"inputTokens",align:"right",render:formatCount},
+          {title:t("缓存命中 Token"),dataIndex:"cachedTokens",align:"right",render:formatCount},
+          {title:t("输出 Token"),dataIndex:"outputTokens",align:"right",render:formatCount},
+          {title:t("续写次数"),dataIndex:"continuations",align:"right",render:formatCount},
           {title:t("耗时"),dataIndex:"ms",render:n => (n/1000).toFixed(1)+" s"},
         ]} />
     </section>

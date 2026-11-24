@@ -77,6 +77,8 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.temp.cleanup)
         self.calls = []
         self.script = []
+        self.upstream_sockets = []
+        self.disconnect_after_reply = False
 
         def next_reply(request, payload):
             self.calls.append((request.headers["Authorization"], payload, time.monotonic()))
@@ -95,9 +97,14 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
         async def ws(request):
             socket = web.WebSocketResponse()
             await socket.prepare(request)
-            for event in next_reply(request, await socket.receive_json()):
-                await socket.send_json(event)
-            await socket.close()
+            self.upstream_sockets.append(socket)
+            async for msg in socket:
+                for event in next_reply(request, json.loads(msg.data)):
+                    await socket.send_json(event)
+                if self.disconnect_after_reply:
+                    self.disconnect_after_reply = False
+                    await socket.close()
+                    break
             return socket
 
         app = web.Application()
@@ -137,6 +144,86 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
             async with self.client.post(self.url, json={**body, "stream": True}) as response:
                 return [event async for event in sse_events(response)]
 
+    async def send_turn(self, ws, **body):
+        await ws.send_json({"type": "response.create", **body})
+        async with asyncio.timeout(4):
+            while True:
+                event = await ws.receive_json()
+                if event["type"] in ("response.completed", "error"):
+                    return event
+
+    async def test_websocket_reuses_upstream_and_sends_full_history(self):
+        self.accounts[1].enabled = False
+        self.script = [message_events(str(i), ["ok"]) for i in range(4)]
+        async with self.client.ws_connect(self.url) as ws:
+            body = {"model": "m"}
+            for i in range(4):
+                event = await self.send_turn(ws, input=str(i), **body)
+                self.assertEqual(event["type"], "response.completed")
+                body["previous_response_id"] = event["response"]["id"]
+            self.assertEqual(len(self.upstream_sockets), 1)
+            self.assertEqual([len(wire["input"]) for _, wire, _ in self.calls], [1, 3, 5, 7])
+            self.assertTrue(all("previous_response_id" not in wire for _, wire, _ in self.calls))
+
+    async def test_websocket_keeps_upstream_connections_separate_between_clients(self):
+        self.accounts[1].enabled = False
+        self.script = [message_events(str(i), ["ok"]) for i in range(3)]
+        async with self.client.ws_connect(self.url) as first, self.client.ws_connect(self.url) as second:
+            self.assertEqual((await self.send_turn(first, input="one"))["type"], "response.completed")
+            self.assertEqual((await self.send_turn(second, input="two"))["type"], "response.completed")
+            self.assertEqual((await self.send_turn(first, input="three"))["type"], "response.completed")
+            self.assertEqual(len(self.upstream_sockets), 2)
+
+    async def test_websocket_reconnects_after_idle_upstream_disconnect(self):
+        self.accounts[1].enabled = False
+        self.script = [message_events("first", ["ok"]), message_events("second", ["ok"])]
+        async with self.client.ws_connect(self.url) as ws:
+            first = await self.send_turn(ws, input="first")
+            async with asyncio.timeout(3):
+                await self.upstream_sockets[0].close()
+            second = await self.send_turn(ws, input="second", previous_response_id=first["response"]["id"])
+            self.assertEqual(second["type"], "response.completed")
+            self.assertEqual(len(self.upstream_sockets), 2)
+            self.assertEqual([len(wire["input"]) for _, wire, _ in self.calls], [1, 3])
+
+    async def test_websocket_does_not_replay_after_disconnect_during_generation(self):
+        self.accounts[1].enabled = False
+        self.disconnect_after_reply = True
+        self.script = [message_events("interrupted", ["partial"])[:4], message_events("next", ["ok"])]
+        async with self.client.ws_connect(self.url) as ws:
+            error = await self.send_turn(ws, input="first")
+            self.assertEqual(error["type"], "error")
+            self.assertEqual(len(self.calls), 1)
+            self.assertEqual((await self.send_turn(ws, input="next"))["type"], "response.completed")
+            self.assertEqual(len(self.upstream_sockets), 2)
+
+    async def test_websocket_cancel_discards_active_upstream(self):
+        self.accounts[1].enabled = False
+        self.script = [message_events("interrupted", ["partial"])[:4], message_events("next", ["ok"])]
+        async with self.client.ws_connect(self.url) as ws:
+            await ws.send_json({"type": "response.create", "input": "first"})
+            async with asyncio.timeout(4):
+                while (await ws.receive_json())["type"] != "response.output_text.delta":
+                    pass
+                await ws.send_json({"type": "response.cancel"})
+                self.assertEqual((await ws.receive_json())["type"], "response.cancelled")
+            self.assertTrue(self.upstream_sockets[0].closed)
+            self.assertEqual(len(self.calls), 1)
+            self.assertEqual((await self.send_turn(ws, input="next"))["type"], "response.completed")
+            self.assertEqual(len(self.upstream_sockets), 2)
+
+    async def test_websocket_reconnects_on_account_or_model_change(self):
+        self.script = [message_events(str(i), ["ok"]) for i in range(3)]
+        async with self.client.ws_connect(self.url) as ws:
+            first = await self.send_turn(ws, input="first", model="m")
+            second = await self.send_turn(ws, input="second", model="m", previous_response_id=first["response"]["id"])
+            self.accounts[0].enabled = False
+            third = await self.send_turn(ws, input="third", model="other", previous_response_id=second["response"]["id"])
+            self.assertEqual(third["type"], "response.completed")
+            self.assertEqual([auth for auth, _, _ in self.calls], ["A", "B", "B"])
+            self.assertEqual([len(wire["input"]) for _, wire, _ in self.calls], [1, 3, 5])
+            self.assertEqual(len(self.upstream_sockets), 3)
+
     async def verify_join(self, websocket):
         prefix = "窗边的灯光是蓝色"
         self.script = [
@@ -148,6 +235,12 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
             ),
             message_events("second", ["灯光", "是蓝色", "的。"], reasoning=True, snapshot_only=not websocket),
         ]
+        self.script[0][-1]["response"]["usage"] = {
+            "input_tokens": 30, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": 5,
+        }
+        self.script[1][-1]["response"]["usage"] = {
+            "input_tokens": 40, "input_tokens_details": {"cached_tokens": 20}, "output_tokens": 4,
+        }
         self.store.put(
             self.key["id"], "response:previous", [{"role": "assistant", "content": "saved history"}]
         )
@@ -156,6 +249,8 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
         )
         expected = prefix + "的。"
         self.assertEqual([a for a, _, _ in self.calls], ["A", "A"])
+        if websocket:
+            self.assertEqual(len(self.upstream_sockets), 2)
         self.assertGreaterEqual(self.calls[1][2] - self.calls[0][2], 0.99)
         resume = self.calls[1][1]["input"]
         self.assertEqual([i.get("content") for i in resume[:2]], ["saved history", "original question"])
@@ -177,6 +272,11 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(cached), 4)
         self.assertEqual(cached[-1]["content"][0]["text"], expected)
         self.assertFalse(self.gateway.proto.quota_waiting)
+        row = self.gateway.status()["records"][0]
+        self.assertEqual(
+            (row["inputTokens"], row["cachedTokens"], row["outputTokens"], row["continuations"]),
+            (70, 20, 9, 1),
+        )
 
     async def test_native_websocket_keeps_response_and_message_identity(self):
         await self.verify_join(True)

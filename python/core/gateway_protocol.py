@@ -37,6 +37,47 @@ MAX_WS_CONNECTIONS_PER_KEY = 12
 TERMINAL = {"response.completed", "response.failed", "response.incomplete", "response.cancelled", "error"}
 
 
+class UpstreamSocket:
+    """One upstream connection owned by a downstream WebSocket."""
+
+    def __init__(self):
+        self.socket = None
+        self.target = None
+        self.idle: asyncio.Task | None = None
+
+    async def _stop_idle(self):
+        if self.idle is not None:
+            task, self.idle = self.idle, None
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def reuse(self, target):
+        idle_ended = self.idle is not None and self.idle.done()
+        await self._stop_idle()
+        if self.socket is not None and not idle_ended and not self.socket.closed and self.target == target:
+            return self.socket
+        await self.close()
+        return None
+
+    async def close(self):
+        await self._stop_idle()
+        socket, self.socket = self.socket, None
+        self.target = None
+        if socket is not None:
+            await socket.close()
+
+    def watch_idle(self, socket):
+        async def drain():
+            # Let aiohttp process control frames and notice peer closure between turns.
+            async for _ in socket:
+                pass
+
+        self.idle = asyncio.create_task(drain())
+
+
+UPSTREAM_SOCKET = web.RequestKey("gateway_upstream_socket", UpstreamSocket)
+
+
 def error_body(message, code):
     return {"error": {"message": str(message), "type": "gateway_error", "code": code}}
 
@@ -340,7 +381,7 @@ class Protocol:
                     raise ProtocolError("上游未返回压缩结果", 502)
                 return web.json_response(value)
 
-    async def answer_events(self, account, request, wire, websocket) -> AsyncGenerator[dict, None]:
+    async def answer_events(self, account, request, wire, websocket, metrics) -> AsyncGenerator[dict, None]:
         state = AnswerStream(wire)
         payload = wire
         original_identity = (account.id, account.identity, account.base, account.deployment)
@@ -353,10 +394,24 @@ class Protocol:
             failure = {}
             started_at = time.monotonic()
             try:
-                stream = self.upstream(account, self.headers(account, request), payload, websocket, started_at)
+                stream = self.upstream(
+                    account, self.headers(account, request), payload, websocket, started_at,
+                    request.get(UPSTREAM_SOCKET),
+                )
                 async with contextlib.aclosing(stream):
                     async for event in stream:
                         kind = event.get("type")
+                        if kind in TERMINAL:
+                            usage = (event.get("response") or {}).get("usage")
+                            if isinstance(usage, dict):
+                                details = usage.get("input_tokens_details")
+                                for field, value in (
+                                    ("inputTokens", usage.get("input_tokens")),
+                                    ("cachedTokens", details.get("cached_tokens") if isinstance(details, dict) else None),
+                                    ("outputTokens", usage.get("output_tokens")),
+                                ):
+                                    if type(value) is int and value >= 0:
+                                        metrics[field] = metrics.get(field, 0) + value
                         if kind == "response.completed" and prior_usage and event["response"].get("usage"):
                             response = event["response"]
                             event = {
@@ -468,6 +523,7 @@ class Protocol:
                 if backup != account.spillover or account.deployment != wire.get("model"):
                     raise ProtocolError("备用部署已移除，续写已停止", 409, "continuation_stopped")
                 payload = {**payload, "model": backup}
+            metrics["continuations"] += 1
 
     def _save_checkpoint(self, owner, response_id, history):
         try:
@@ -494,7 +550,8 @@ class Protocol:
             checkpoint_saved = True
             outputs = {}
             protocol = "WS" if websocket else "HTTP"
-            events = self.answer_events(account, request, wire, websocket)
+            metrics = {"continuations": 0}
+            events = self.answer_events(account, request, wire, websocket, metrics)
             try:
                 async for event in events:
                     kind = event.get("type")
@@ -536,6 +593,7 @@ class Protocol:
                         "protocol": protocol,
                         "result": status,
                         "ms": round((time.monotonic() - started) * 1000),
+                        **metrics,
                     }
                 )
                 try:
@@ -543,16 +601,17 @@ class Protocol:
                 except sqlite3.Error as exc:
                     logger.warning("网关请求计数写入失败 错误=%s", exc)
 
-    async def upstream(self, account, headers, wire, websocket, started_at):
+    async def upstream(self, account, headers, wire, websocket, started_at, connection=None):
         url = account.base + "/responses"
         if websocket:
+            target = (account.id, account.identity, url, account.deployment, wire.get("model"), headers)
             # Only fall back before a response.create frame has been sent.
             try:
-                upstream = await self.client.ws_connect(
-                    url,
-                    headers=headers,
-                    max_msg_size=MAX_RESOURCE,
-                )
+                upstream = await connection.reuse(target) if connection is not None else None
+                if upstream is None:
+                    upstream = await self.client.ws_connect(url, headers=headers, max_msg_size=MAX_RESOURCE)
+                    if connection is not None:
+                        connection.socket, connection.target = upstream, target
             except aiohttp.WSServerHandshakeError as exc:
                 if exc.status not in (400, 404, 405, 426, 501):
                     if exc.status == 429:
@@ -569,16 +628,28 @@ class Protocol:
                     self.scheduler.rejected(account.id, exc.status, 60)
                     raise ProtocolError(f"上游 WebSocket 握手失败（{exc.status}）", exc.status) from exc
             else:
-                async with upstream:
+                completed = False
+                try:
                     payload = {**wire, "type": "response.create", "store": False}
                     payload.pop("stream", None)
                     await upstream.send_json(payload)
                     while True:
                         msg = await upstream.receive(timeout=150)
-                        if msg.type in (WSMsgType.TEXT, WSMsgType.BINARY):
-                            yield json.loads(msg.data)
-                        else:
+                        if msg.type not in (WSMsgType.TEXT, WSMsgType.BINARY):
                             raise ProtocolError("上游 WebSocket 意外断开", 502)
+                        event = json.loads(msg.data)
+                        kind = event.get("type")
+                        completed = kind == "response.completed"
+                        yield event
+                        if kind in TERMINAL:
+                            break
+                finally:
+                    if connection is None:
+                        await upstream.close()
+                    elif completed:
+                        connection.watch_idle(upstream)
+                    else:
+                        await connection.close()
                 return
         wire = {**wire, "stream": True, "store": False}
         for key in ("generate", "client_metadata", "event_id"):
@@ -664,6 +735,7 @@ class Protocol:
         finally:
             self.pending_handshakes.pop(ws)
         self.sockets[ws] = (owner_id, request.app)
+        connection = request[UPSTREAM_SOCKET] = UpstreamSocket()
         task = None
         finishing = False
 
@@ -742,8 +814,11 @@ class Protocol:
                     )
         finally:
             self.sockets.pop(ws, None)
-            if task:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, ConnectionError):
-                    await task
+            try:
+                if task:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, ConnectionError):
+                        await task
+            finally:
+                await connection.close()
         return ws

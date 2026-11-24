@@ -196,6 +196,14 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
         async with self.client.post(self.base + "/responses", headers=self.headers(n), json=body) as r:
             return r.status, await r.json()
 
+    async def test_gateway_record_leaves_unreported_token_counts_unknown(self):
+        status, _ = await self.post({"input": "hello"})
+        self.assertEqual(status, 200)
+        row = self.gateway.status()["records"][0]
+        self.assertEqual(row["continuations"], 0)
+        for field in ("inputTokens", "cachedTokens", "outputTokens"):
+            self.assertNotIn(field, row)
+
     async def test_balanced_key_routes_locally_and_survives_gateway_restart(self):
         with patch("core.gateway.prepare_launch") as prepare:
             prepare.return_value.native_auth = False
@@ -415,8 +423,8 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
         cleanup_started = asyncio.Event()
         answer_events = self.gateway.proto.answer_events
 
-        async def slow_cleanup(account, request, wire, websocket):
-            events = answer_events(account, request, wire, websocket)
+        async def slow_cleanup(account, request, wire, websocket, metrics):
+            events = answer_events(account, request, wire, websocket, metrics)
             try:
                 async for event in events:
                     yield event
