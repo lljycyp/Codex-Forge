@@ -5,12 +5,14 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import call, patch
 
 from bridge.commands import _sync_active_auth_to_profile
+from bridge.commands import reset_profile_usage as reset_profile_usage_command
 from core.app_server_service import read_account_and_rate_limits
 from core.auth_service import is_newer_auth, is_same_auth_account, parse_last_refresh
 from core.profile_service import (
@@ -244,8 +246,17 @@ class AuthSyncTest(unittest.TestCase):
             },
         }
         client.request.side_effect = lambda method, *_: responses[method]
-        with patch("core.usage_service._merge_usage_results", side_effect=lambda values, _: values):
-            result = reset_profile_usage("work", self.profile, _reset_account_scope(self.main), "second", "attempt", retry=False)
+        scope = _reset_account_scope(self.main)
+        started_at = time.monotonic()
+        with (
+            patch("bridge.commands.load_config", return_value={"profiles": ["work"], "profile_root": str(self.root)}),
+            patch("bridge.commands.db.get_profile", return_value={"id": "profile-id", "dir_name": "profile"}),
+            patch("core.usage_service._merge_usage_results", side_effect=lambda values, _: values),
+        ):
+            result = reset_profile_usage_command({
+                "name": "work", "profileId": "profile-id", "scope": scope,
+                "creditId": "second", "attemptId": "attempt",
+            })
         self.assertEqual(client.request.call_args_list[1:], [
             call("account/rateLimitResetCredit/consume", {"idempotencyKey": "attempt", "creditId": "second"}),
             call("account/rateLimits/read"),
@@ -254,13 +265,19 @@ class AuthSyncTest(unittest.TestCase):
         self.assertEqual(result["usage"]["resetCreditItems"], [])
         self.assertEqual(result["usage"]["resetCredits"], 3)
         self.assertEqual(result["usage"]["oneWeek"]["remainingPercent"], 100)
+        notification = result["gatewayQuotaReset"]
+        self.assertEqual((notification["profileId"], notification["scope"]), ("profile-id", scope))
+        self.assertGreaterEqual(notification["restoredAt"], started_at)
 
     def test_retry_uses_same_attempt_and_card_after_consume_timeout(self):
         client = self.server()
         account = {"account": {"type": "chatgpt"}}
         client.request.side_effect = [
             account, TimeoutError(),
-            account, {"outcome": "alreadyRedeemed"}, {"rateLimitResetCredits": {"availableCount": 2}},
+            account, {"outcome": "alreadyRedeemed"}, {
+                "rateLimits": {"secondary": {"windowDurationMins": 10080, "usedPercent": 0}},
+                "rateLimitResetCredits": {"availableCount": 2},
+            },
         ]
         scope = _reset_account_scope(self.main)
         with patch("core.usage_service._merge_usage_results", side_effect=lambda values, _: values):
@@ -276,6 +293,18 @@ class AuthSyncTest(unittest.TestCase):
         ])
         self.assertEqual(result["outcome"], "alreadyRedeemed")
         self.assertEqual(result["usage"]["resetCredits"], 2)
+        self.assertIsNotNone(result["quotaRestoredAt"])
+
+    def test_old_redemption_with_exhausted_quota_does_not_report_restoration(self):
+        client = self.server()
+        client.request.side_effect = [
+            {"account": {"type": "chatgpt"}}, {"outcome": "alreadyRedeemed"}, {
+                "rateLimits": {"secondary": {"windowDurationMins": 10080, "usedPercent": 100}},
+            },
+        ]
+        with patch("core.usage_service._merge_usage_results", side_effect=lambda values, _: values):
+            result = reset_profile_usage("work", self.profile, _reset_account_scope(self.main), "second", "attempt", retry=True)
+        self.assertIsNone(result["quotaRestoredAt"])
 
     def test_reset_reports_success_when_usage_read_fails(self):
         client = self.server()
@@ -289,6 +318,7 @@ class AuthSyncTest(unittest.TestCase):
             result = reset_profile_usage("work", self.profile, _reset_account_scope(self.main), "second", "attempt", retry=False)
         self.assertEqual(result["outcome"], "reset")
         self.assertEqual(result["usage"]["error"], "暂时无法读取最新额度，请重新查询额度")
+        self.assertIsNotNone(result["quotaRestoredAt"])
         self.assertIn("结果=reset", logs.output[0])
         self.assertIn("额度更新失败", logs.output[1])
 

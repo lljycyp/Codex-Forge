@@ -246,7 +246,13 @@ class Protocol:
                 )
         return hdr
 
-    async def check(self, response, account):
+    def record_limit(self, account, code, delay, started_at):
+        if account.base == CHATGPT_BASE and code == "usage_limit_reached":
+            self.scheduler.quota_rejected(account, delay, started_at)
+        else:
+            self.scheduler.rejected(account.id, 429, delay)
+
+    async def check(self, response, account, started_at):
         if response.status < 300:
             return
         wait = response.headers.get("Retry-After", "")
@@ -257,7 +263,7 @@ class Protocol:
             error = info.get("error") or {}
             limit = quota_limit(error, response.headers, response.status)
             if limit:
-                self.scheduler.rejected(account.id, 429, limit.delay if limit.delay is not None else 60)
+                self.record_limit(account, limit.code, limit.delay if limit.delay is not None else 60, started_at)
                 raise limit
             value = error.get("code") or error.get("type")
             if isinstance(value, str) and value.replace("_", "").isalnum() and len(value) <= 64:
@@ -274,25 +280,25 @@ class Protocol:
         )
 
     async def models(self, request):
-        async with (
-            self.scheduler.reserve(request[OWNER], request[AUTH]) as account,
-            self.client.get(
+        async with self.scheduler.reserve(request[OWNER], request[AUTH]) as account:
+            started_at = time.monotonic()
+            async with self.client.get(
                 account.base + "/models",
                 headers=self.headers(account, request),
                 params={"client_version": request.query.get("client_version", "0.169.0")}
                 if account.base == CHATGPT_BASE
                 else {},
                 allow_redirects=False,
-            ) as resp,
-        ):
-            await self.check(resp, account)
-            return web.Response(body=await resp.read(), content_type="application/json")
+            ) as resp:
+                await self.check(resp, account, started_at)
+                return web.Response(body=await resp.read(), content_type="application/json")
 
     async def compact(self, request):
         body = await request.json()
         owner = request[OWNER]["id"]
         _, wire = prepare_input(self.store, owner, body)
         async with self.scheduler.reserve(request[OWNER], request[AUTH], wire.get("model")) as account:
+            started_at = time.monotonic()
             if account.base == CHATGPT_BASE:
                 # Codex subscriptions expose remote compaction as a Responses generation.
                 headers = self.headers(account, request)
@@ -302,7 +308,7 @@ class Protocol:
                 headers["OpenAI-Beta"] = ",".join(betas)
                 payload = {**wire, "input": [*wire["input"], {"type": "compaction_trigger"}]}
                 output = []
-                async for event in self.upstream(account, headers, payload, False):
+                async for event in self.upstream(account, headers, payload, False, started_at):
                     if event.get("type") == "response.output_item.done":
                         output.append(event["item"])
                     if event.get("type") == "response.completed":
@@ -328,7 +334,7 @@ class Protocol:
                 headers=self.headers(account, request),
                 allow_redirects=False,
             ) as resp:
-                await self.check(resp, account)
+                await self.check(resp, account, started_at)
                 value = await resp.json(content_type=None)
                 if not isinstance(value.get("output"), list):
                     raise ProtocolError("上游未返回压缩结果", 502)
@@ -345,8 +351,9 @@ class Protocol:
         while True:
             adapter = Attempt(state)
             failure = {}
+            started_at = time.monotonic()
             try:
-                stream = self.upstream(account, self.headers(account, request), payload, websocket)
+                stream = self.upstream(account, self.headers(account, request), payload, websocket, started_at)
                 async with contextlib.aclosing(stream):
                     async for event in stream:
                         kind = event.get("type")
@@ -377,7 +384,7 @@ class Protocol:
             except QuotaLimit as limit:
                 delay = max(1, limit.delay if limit.delay is not None else backoff)
                 backoff = min(900, backoff * 2)
-                self.scheduler.rejected(account.id, 429, delay)
+                self.record_limit(account, limit.code, delay, started_at)
                 usage = (failure.get("response") or {}).get("usage") or {}
                 prior_usage = add_usage(prior_usage, usage)
                 if isinstance(token_budget, int) and (state.open or state.done or failure):
@@ -418,9 +425,7 @@ class Protocol:
             payload = state.continuing_input(wire)
             if token_budget is not None:
                 payload = {**payload, "max_output_tokens": token_budget}
-            now = time.monotonic()
-            earliest = now if use_backup else now + delay
-            heartbeat = now
+            heartbeat = time.monotonic()
             # A verified loopback request survives local token refresh. New turns still authenticate normally.
             authorized = request[LISTENING] if request[OWNER]["id"] == "local" else request[AUTH]
             self.quota_waiting[state] = account.id
@@ -444,9 +449,9 @@ class Protocol:
                         raise ProtocolError(
                             "原账号当前不可用：" + current.reason, 409, "continuation_stopped"
                         )
-                    until = max(earliest, time.monotonic() + current.quota_reset - time.time())
+                    until = time.monotonic() + current.quota_reset - time.time()
                     if not use_backup:
-                        until = max(until, self.scheduler.cooldown.get(account.id, 0))
+                        until = max(until, self.scheduler.cooldown_until(current))
                     now = time.monotonic()
                     if now >= until and not current.reason:
                         account = current
@@ -511,7 +516,7 @@ class Protocol:
                             if error.get("code") in ("model_not_found", "unsupported_model"):
                                 self.scheduler.mark_unsupported(account.id, wire.get("model"))
                             if error.get("code") in ("rate_limit_exceeded", "usage_limit_reached"):
-                                self.scheduler.rejected(account.id, 429, 60)
+                                self.record_limit(account, error["code"], 60, started)
                         return
                 raise ProtocolError("上游在生成结束前断开", 502)
             except ProtocolError as exc:
@@ -538,7 +543,7 @@ class Protocol:
                 except sqlite3.Error as exc:
                     logger.warning("网关请求计数写入失败 错误=%s", exc)
 
-    async def upstream(self, account, headers, wire, websocket):
+    async def upstream(self, account, headers, wire, websocket, started_at):
         url = account.base + "/responses"
         if websocket:
             # Only fall back before a response.create frame has been sent.
@@ -551,8 +556,14 @@ class Protocol:
             except aiohttp.WSServerHandshakeError as exc:
                 if exc.status not in (400, 404, 405, 426, 501):
                     if exc.status == 429:
-                        # No response body is exposed by aiohttp at the WS handshake; respect Retry-After.
-                        limit = quota_limit({"code": "429"}, exc.headers, 429)
+                        # The handshake exposes headers only. Require Codex's usage-limit marker.
+                        reached = (exc.headers or {}).get("x-codex-rate-limit-reached-type")
+                        code = (
+                            "usage_limit_reached"
+                            if account.base == CHATGPT_BASE and reached == "rate_limit_reached"
+                            else "429"
+                        )
+                        limit = quota_limit({"code": code}, exc.headers, 429)
                         if limit:
                             raise limit from exc
                     self.scheduler.rejected(account.id, exc.status, 60)
@@ -575,7 +586,7 @@ class Protocol:
         async with self.client.post(
             url, headers={**headers, "Accept": "text/event-stream"}, json=wire, allow_redirects=False
         ) as resp:
-            await self.check(resp, account)
+            await self.check(resp, account, started_at)
             async for event in sse_events(resp):
                 yield event
 

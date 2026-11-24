@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
-from core.auth_service import auth_kind, extract_auth, is_newer_auth, jwt_expiration
+from core.auth_service import auth_kind, chatgpt_account_scope, extract_auth, is_newer_auth, jwt_expiration
 from core.constants import DB_PATH, DEFAULT_PROFILE_ROOT
 from core.profile_service import get_active_auth_path
 
@@ -101,7 +101,9 @@ def read_accounts(policies):
                 values = extract_auth(auth)
                 token = values["accessToken"]
                 identity = (values["accountId"], values["claims"].get("sub") or values["email"])
-                account.identity = json.dumps((identity[0], identity[1] or hashlib.sha256(token.encode()).hexdigest()))
+                account.identity = chatgpt_account_scope(values) or json.dumps(
+                    (identity[0], hashlib.sha256(token.encode()).hexdigest())
+                )
                 if (jwt_expiration(token) or 0) <= time.time() + 10:
                     account.token_expired = True
                     raise ValueError("令牌已过期，请在账号管理刷新额度或重新授权")
@@ -137,6 +139,8 @@ class Scheduler:
         self.owner_active = Counter()
         self.last = Counter()
         self.cooldown = {}
+        self.quota_cooldowns: dict[tuple[str, str], dict[float, float]] = {}
+        self.quota_restored_at: dict[tuple[str, str], float] = {}
         self.unsupported = {}
         self.waiters = defaultdict(deque)
         self.order = deque()
@@ -144,7 +148,31 @@ class Scheduler:
         self.accepting = False
 
     def eligible(self, account):
-        return account.enabled and not account.reason and self.cooldown.get(account.id, 0) <= time.monotonic()
+        return account.enabled and not account.reason and self.cooldown_until(account) <= time.monotonic()
+
+    def cooldown_until(self, account):
+        quota = self.quota_cooldowns.get((account.id, account.identity), {})
+        return max(self.cooldown.get(account.id, 0), max(quota.values(), default=0))
+
+    def quota_rejected(self, account, delay, started_at):
+        key = (account.id, account.identity)
+        # A request sent before a successful reset can report its old limit afterward.
+        if started_at <= self.quota_restored_at.get(key, 0):
+            return
+        now = time.monotonic()
+        limits = {start: until for start, until in self.quota_cooldowns.get(key, {}).items() if until > now}
+        limits[started_at] = max(limits.get(started_at, 0), now + max(1, delay))
+        self.quota_cooldowns[key] = limits
+        self.changed.set()
+
+    def quota_restored(self, aid, identity, restored_at):
+        key = (aid, identity)
+        self.quota_restored_at[key] = max(self.quota_restored_at.get(key, 0), restored_at)
+        if key in self.quota_cooldowns:
+            self.quota_cooldowns[key] = {
+                start: until for start, until in self.quota_cooldowns[key].items() if start > restored_at
+            }
+        self.changed.set()
 
     def mark_unsupported(self, aid, model):
         if model:

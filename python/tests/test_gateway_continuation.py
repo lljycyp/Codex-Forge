@@ -4,7 +4,9 @@ import ssl
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from aiohttp import ClientSession, TCPConnector, web
 from aiohttp.test_utils import TestServer
@@ -181,6 +183,61 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_sse_handles_terminal_snapshot_without_done_frames(self):
         await self.verify_join(False)
+
+    async def test_confirmed_quota_reset_resumes_waiting_turn_and_new_dispatch(self):
+        account = self.accounts[0]
+        self.accounts[1].enabled = False
+        self.script = [
+            message_events("original", ["before "], error={"type": "usage_limit_reached", "resets_in_seconds": 3600}),
+            message_events("continued", ["after"]),
+            message_events("new", ["available"]),
+        ]
+        with patch("core.gateway_protocol.CHATGPT_BASE", account.base):
+            async with self.client.ws_connect(self.url) as ws, asyncio.timeout(5):
+                await ws.send_json({"type": "response.create", "input": "start"})
+                while (await ws.receive_json())["type"] != "response.in_progress":
+                    pass
+                self.assertFalse(self.gateway.scheduler.eligible(account))
+                exhausted = replace(account, reason="当前额度已用完", quota_reset=time.time() + 3600)
+                self.accounts = [exhausted, self.accounts[1]]
+                self.gateway.refreshed = -100.0
+                self.assertIs(self.gateway.accounts()[0], exhausted)
+                self.accounts = [account, self.accounts[1]]
+                await self.gateway.command("quota_reset", {
+                    "profileId": account.id, "scope": account.identity, "restoredAt": time.monotonic(),
+                })
+                self.assertIs(self.gateway.accounts()[0], account)
+                self.assertTrue(self.gateway.scheduler.eligible(self.gateway.accounts()[0]))
+                while (event := await ws.receive_json())["type"] != "response.completed":
+                    pass
+            new_turn = await self.collect({"input": "another request"})
+        self.assertEqual(event["response"]["id"], "original")
+        self.assertEqual(new_turn[-1]["response"]["id"], "new")
+        self.assertEqual([auth for auth, _, _ in self.calls], ["A", "A", "A"])
+
+    async def test_quota_reset_preserves_other_failures_and_new_quota_errors(self):
+        first, second = self.accounts
+        scheduler = self.gateway.scheduler
+        before = time.monotonic() - 2
+        scheduler.rejected(first.id, 401, 60)
+        self.gateway.proto.record_limit(first, "rate_limit_exceeded", 120, before)
+        generic_until = scheduler.cooldown_until(first)
+        scheduler.quota_rejected(first, 3600, before)
+        scheduler.quota_rejected(second, 3600, before)
+        scheduler.quota_rejected(first, 10, before + 2)
+
+        await self.gateway.command("quota_reset", {
+            "profileId": first.id, "scope": "previous_login", "restoredAt": before + 1,
+        })
+        self.assertGreater(scheduler.cooldown_until(first), generic_until)
+        await self.gateway.command("quota_reset", {
+            "profileId": first.id, "scope": first.identity, "restoredAt": before + 1,
+        })
+        scheduler.quota_rejected(first, 3600, before)
+        self.assertEqual(scheduler.cooldown_until(first), generic_until)
+        self.assertGreater(scheduler.cooldown_until(second), generic_until)
+        scheduler.cooldown.pop(first.id)
+        self.assertFalse(scheduler.eligible(first))
 
     async def test_cancel_while_waiting_never_starts_another_request(self):
         self.script = [

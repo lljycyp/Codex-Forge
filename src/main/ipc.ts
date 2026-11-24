@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, type OpenDialogOptions } from "electron";
 import { invokeBackend } from "./python/launcherBackend";
-import { gatewayCommand } from "./gateway";
+import { gatewayCommand, notifyGatewayQuotaReset } from "./gateway";
 import { join } from "node:path";
 import {
   applyCodexSkinTheme,
@@ -78,7 +78,9 @@ export function registerIpcHandlers(): void {
     if (!result.ok) {
       return result;
     }
-    if (command === "launch_profile" || command === "gateway_launch") {
+    if (command === "reset_profile_usage" && result.data.gatewayQuotaReset) {
+      await notifyGatewayQuotaReset(result.data.gatewayQuotaReset);
+    } else if (command === "launch_profile" || command === "gateway_launch") {
       const launch = result.data.skinSession as SkinLaunch | undefined;
       if (launch) await startSkinLaunches([launch]);
     } else if (command === "stop_profile" || (command === "set_codex_skin_enabled" && result.data.codexSkinEnabled === false)) {

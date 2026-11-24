@@ -55,6 +55,13 @@ def extract_auth(auth_json):
     }
 
 
+def chatgpt_account_scope(auth):
+    user_id = auth["claims"].get("sub") or auth["email"]
+    if user_id:
+        return hashlib.sha256(json.dumps([auth["accountId"], user_id]).encode("utf-8")).hexdigest()
+    return None
+
+
 def auth_tokens(auth_json):
     """兼容新旧 auth.json 结构，优先读取 tokens 节点。"""
     if not isinstance(auth_json, dict):

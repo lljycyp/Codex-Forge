@@ -7,7 +7,7 @@ from pathlib import Path
 
 from core import db
 from core.app_server_service import AppServerRequestError, profile_account_app_server, read_account_and_rate_limits
-from core.auth_service import extract_auth
+from core.auth_service import chatgpt_account_scope, extract_auth
 from core.constants import DB_PATH
 from core.logger import get_logger
 from core.profile_service import (
@@ -54,6 +54,7 @@ def reset_profile_usage(profile_name, profile_dir, scope, credit_id, attempt_id,
             return {"outcome": "accountChanged"}
         config_path = get_active_config_path()
         outcome = "unavailable"
+        restored_at = None
         submitted = False
         try:
             with profile_account_app_server(profile_dir, auth_path, config_path) as (client, account):
@@ -81,8 +82,15 @@ def reset_profile_usage(profile_name, profile_dir, scope, credit_id, attempt_id,
                         if status not in ("reset", "alreadyRedeemed", "nothingToReset", "noCredit"):
                             raise RuntimeError("未能确认额度重置结果，请重试同一次操作")
                         outcome = status
+                        if outcome == "reset":
+                            restored_at = time.monotonic()
                     logger.info("额度重置兑换结果 操作=%s 结果=%s", attempt_ref, outcome)
+                    checked_at = time.monotonic()
                     current = _map_app_server_usage(account, client.request("account/rateLimits/read"), scope)
+                    # An idempotent reply can refer to an old reset. Require a fresh usable quota reading.
+                    if (outcome == "alreadyRedeemed" and not current["spendControlReached"]
+                            and (current["oneWeek"] or {}).get("remainingPercent", 0) > 0):
+                        restored_at = checked_at
                     logger.info(
                         "重置后额度读取成功 操作=%s 可用次数=%s 卡片明细数=%s",
                         attempt_ref, current["resetCredits"], len(current["resetCreditItems"]),
@@ -106,7 +114,7 @@ def reset_profile_usage(profile_name, profile_dir, scope, credit_id, attempt_id,
         except Exception as exc:
             logger.warning("重置后额度缓存写入失败 操作=%s 错误类型=%s", attempt_ref, type(exc).__name__)
             usage = current
-        return {"outcome": outcome, "usage": usage}
+        return {"outcome": outcome, "usage": usage, "quotaRestoredAt": restored_at}
 
 
 def refresh_all_profile_usage(profile_dirs):
@@ -286,11 +294,7 @@ def _reset_account_scope(auth_path):
         auth = extract_auth(json.loads(auth_path.read_text(encoding="utf-8")))
     except (OSError, ValueError):
         return None
-    user_id = auth["claims"].get("sub") or auth["email"]
-    if not user_id:
-        return None
-    identity = json.dumps([auth["accountId"], user_id]).encode("utf-8")
-    return hashlib.sha256(identity).hexdigest()
+    return chatgpt_account_scope(auth)
 
 
 def _normalize_usage_error(message):

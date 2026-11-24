@@ -40,10 +40,8 @@ function worker() {
   return process;
 }
 
-export function gatewayCommand(command: string, payload: unknown = {}): Promise<Reply> {
-  if (closing || !commands.has(command)) return Promise.resolve(failure("网关命令不可用"));
+function sendCommand(proc: ReturnType<typeof spawnGateway>, command: string, payload: unknown): Promise<Reply> {
   const id = ++sequence;
-  const proc = worker();
   return new Promise((resolve) => {
     const finish = (value: Reply) => {
       clearTimeout(timer);
@@ -57,6 +55,17 @@ export function gatewayCommand(command: string, payload: unknown = {}): Promise<
       if (err && pending.has(id)) finish(failure("无法连接网关进程"));
     });
   });
+}
+
+export function gatewayCommand(command: string, payload: unknown = {}): Promise<Reply> {
+  if (closing || !commands.has(command)) return Promise.resolve(failure("网关命令不可用"));
+  return sendCommand(worker(), command, payload);
+}
+
+export async function notifyGatewayQuotaReset(reset: unknown): Promise<void> {
+  if (!child || closing) return;
+  const reply = await sendCommand(child, "quota_reset", reset);
+  if (!reply.ok) console.warn("网关未确认额度恢复", reply.error);
 }
 
 export function restoreGateway() {
