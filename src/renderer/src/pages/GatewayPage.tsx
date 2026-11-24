@@ -201,7 +201,7 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
       <h2 className={heading}>{t("参与调度的账号")}</h2>
       <Table<Account> rowKey="id" size="small" pagination={false} dataSource={status?.accounts || []} columns={[
         { title:t("账号"), dataIndex:"name", render:(v:string) => showName(v) },
-        { title:t("状态"), render:(_, row) => row.reason || t(row.enabled ? "可用" : "已停用") },
+        { title:t("状态"), render:(_, row) => t(row.reason || (row.enabled ? "可用" : "已停用")) },
         { title:t("正在处理"),dataIndex:"active" },
         { title:t("并发上限"),render:(_, row) => <Select aria-label={t("并发上限")} size="small" disabled={busy} value={row.cap}
           options={Array.from({length:32}, (_, i) => ({value:i+1}))}

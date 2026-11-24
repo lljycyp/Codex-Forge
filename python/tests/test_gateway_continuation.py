@@ -186,6 +186,8 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_confirmed_quota_reset_resumes_waiting_turn_and_new_dispatch(self):
         account = self.accounts[0]
+        account.cap = 2
+        account.weekly_remaining = 2
         self.accounts[1].enabled = False
         self.script = [
             message_events("original", ["before "], error={"type": "usage_limit_reached", "resets_in_seconds": 3600}),
@@ -198,16 +200,21 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
                 while (await ws.receive_json())["type"] != "response.in_progress":
                     pass
                 self.assertFalse(self.gateway.scheduler.eligible(account))
-                exhausted = replace(account, reason="当前额度已用完", quota_reset=time.time() + 3600)
+                self.assertIn(account.quota_key, self.gateway.scheduler.weekly_recheck_after)
+                exhausted = replace(account, weekly_remaining=0, reason="当前额度已用完", quota_reset=time.time() + 3600)
                 self.accounts = [exhausted, self.accounts[1]]
                 self.gateway.refreshed = -100.0
                 self.assertIs(self.gateway.accounts()[0], exhausted)
-                self.accounts = [account, self.accounts[1]]
+                restored = replace(account, weekly_remaining=100, weekly_checked_at=time.time())
+                self.accounts = [restored, self.accounts[1]]
                 await self.gateway.command("quota_reset", {
                     "profileId": account.id, "scope": account.identity, "restoredAt": time.monotonic(),
                 })
-                self.assertIs(self.gateway.accounts()[0], account)
-                self.assertTrue(self.gateway.scheduler.eligible(self.gateway.accounts()[0]))
+                self.assertIs(self.gateway.accounts()[0], restored)
+                other_owner = {"id": "another-owner", "cap": 1}
+                async with asyncio.timeout(0.5):
+                    async with self.gateway.scheduler.reserve(other_owner, lambda: other_owner) as selected:
+                        self.assertIs(selected, restored)
                 while (event := await ws.receive_json())["type"] != "response.completed":
                     pass
             new_turn = await self.collect({"input": "another request"})

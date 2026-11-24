@@ -145,14 +145,16 @@ def load_usage_cache():
         }
 
 
-def save_usage_cache(cache):
+def save_usage_cache(cache, *, expected_profile=None):
     now = int(time.time())
     with connect() as connection:
         for profile_name, usage in cache.items():
             profile = connection.execute(
                 "SELECT id FROM profiles WHERE display_name = ?", (profile_name,)
             ).fetchone()
-            if not profile:
+            if not profile or (
+                expected_profile and profile_name == expected_profile[0] and profile["id"] != expected_profile[1]
+            ):
                 continue
             fetched_at = usage.get("fetchedAt") if isinstance(usage, dict) else None
             connection.execute(
@@ -190,7 +192,17 @@ def save_usage_cache(cache):
         else:
             connection.execute("DELETE FROM profile_usage")
         connection.execute(
-            "DELETE FROM profile_usage_history WHERE fetched_at < ?",
+            """
+            DELETE FROM profile_usage_history WHERE fetched_at < ? AND id NOT IN (
+                SELECT h.id FROM profiles p JOIN profile_usage_history h ON h.id = (
+                    SELECT id FROM profile_usage_history
+                    WHERE profile_id = p.id
+                      AND CASE WHEN json_valid(payload_json)
+                          THEN json_type(payload_json, '$.oneWeek.remainingPercent') END IN ('integer', 'real')
+                    ORDER BY fetched_at DESC, id DESC LIMIT 1
+                )
+            )
+            """,
             (time.time() - 30 * 24 * 60 * 60,),
         )
 

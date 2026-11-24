@@ -4,6 +4,7 @@ import json
 import sqlite3
 import ssl
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -663,6 +664,106 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.seen), 2)
         self.assertEqual(sum(self.gateway.scheduler.active.values()), 0)
         self.assertEqual(self.gateway.scheduler.waiting, 0)
+
+    async def test_weekly_two_percent_checks_after_each_request_before_dispatching_again(self):
+        account, other = self.accounts
+        account.cap = 4
+        account.weekly_remaining = 2
+        account.weekly_checked_at = time.time()
+        other.enabled = False
+        checked = asyncio.Event()
+        allow_check = threading.Event()
+        loop = asyncio.get_running_loop()
+        remaining = iter((2, 1))
+
+        def publish_reading(value):
+            account.weekly_remaining = value
+            account.weekly_checked_at = time.time()
+
+        def refresh(_account):
+            loop.call_soon_threadsafe(checked.set)
+            if not allow_check.wait(5):
+                raise TimeoutError("test quota reload was not released")
+            loop.call_soon_threadsafe(publish_reading, next(remaining))
+
+        with patch("core.gateway.refresh_weekly_quota", side_effect=refresh) as refresh_quota:
+            async with self.client.ws_connect(self.base + "/responses", headers=self.headers(1)) as ws:
+                first = asyncio.create_task(self.post({"model": "hold", "input": "first"}))
+                try:
+                    await asyncio.wait_for(self.started.wait(), 3)
+                    await ws.send_json({"type": "response.create", "input": "second"})
+                    async with asyncio.timeout(3):
+                        while not self.gateway.scheduler.waiting:
+                            await asyncio.sleep(0.01)
+                    publish_reading(3)
+                    self.gateway.refreshed = -100.0
+                    self.assertEqual(self.gateway.status()["accounts"][0]["reason"], "周额度保护中，限单并发")
+                    self.release.set()
+                    self.assertEqual((await asyncio.wait_for(first, 3))[0], 200)
+                    await asyncio.wait_for(checked.wait(), 3)
+                    self.assertEqual(len(self.seen), 1)
+                    self.assertEqual(self.gateway.status()["accounts"][0]["reason"], "等待复查周额度")
+                finally:
+                    self.release.set()
+                    allow_check.set()
+
+                self.assertEqual((await ws.receive_json(timeout=3))["type"], "response.output_item.done")
+                self.assertEqual((await ws.receive_json(timeout=3))["type"], "response.completed")
+                async with asyncio.timeout(3):
+                    while self.gateway.status()["accounts"][0]["reason"] != "周额度剩余 ≤ 1%，已暂停派发":
+                        await asyncio.sleep(0.01)
+                self.assertEqual(refresh_quota.call_count, 2)
+                self.assertEqual([bearer for bearer, _ in self.seen], ["Bearer upstream-A"] * 2)
+                await ws.send_json({"type": "response.create", "input": "blocked"})
+                event = await ws.receive_json(timeout=3)
+                self.assertEqual((event["type"], event["message"]), ("error", "周额度不足，等待账号额度恢复"))
+
+            publish_reading(3)
+            self.gateway.refreshed = -100.0
+            self.assertEqual((await self.post({"input": "restored"}))[0], 200)
+            self.assertEqual(refresh_quota.call_count, 2)
+
+    async def test_weekly_pause_leaves_active_request_running_and_failed_recheck_stays_blocked(self):
+        account = self.accounts[0]
+        account.cap = 4
+        account.weekly_remaining = 3
+        account.weekly_checked_at = time.time()
+        first = asyncio.create_task(self.post({"model": "hold", "input": "started"}))
+        await asyncio.wait_for(self.started.wait(), 3)
+        with patch("core.gateway.refresh_weekly_quota", side_effect=TimeoutError):
+            account.weekly_remaining = 1
+            self.gateway.refreshed = -100.0
+            self.assertEqual((await self.post({"input": "fallback"}, 1))[0], 200)
+            self.assertEqual(self.seen[-1][0], "Bearer upstream-B")
+            self.assertFalse(first.done())
+            self.release.set()
+            self.assertEqual((await asyncio.wait_for(first, 3))[0], 200)
+            await asyncio.gather(*self.gateway.weekly_refreshes)
+
+        account.weekly_remaining = 2
+        self.gateway.refreshed = -100.0
+        self.assertEqual((await self.post({"input": "old reading"}, 1))[0], 200)
+        self.assertEqual(self.seen[-1][0], "Bearer upstream-B")
+        pending = self.store.option("weeklyRecheckAfter") or {}
+        self.assertGreater(pending[account.quota_key], account.weekly_checked_at)
+
+        await self.gateway.close()
+        self.store = GatewayStore(Path(self.temp.name))
+        self.gateway = Gateway(self.store, lambda _: self.accounts)
+        self.gateway.port = 0
+        await self.gateway.restore()
+        _, runner = self.gateway.listeners[True]
+        self.base = f"https://127.0.0.1:{runner.addresses[0][1]}/v1"
+        self.assertEqual((await self.post({"input": "still waiting after restart"}, 1))[0], 200)
+        self.assertEqual(self.seen[-1][0], "Bearer upstream-B")
+
+        account.weekly_remaining = 3
+        account.weekly_checked_at = time.time()
+        self.accounts[1].enabled = False
+        self.gateway.refreshed = -100.0
+        self.assertEqual((await self.post({"input": "confirmed"}, 1))[0], 200)
+        self.assertEqual(self.seen[-1][0], "Bearer upstream-A")
+        self.assertEqual(self.store.option("weeklyRecheckAfter"), {})
 
     async def test_key_cap_changes_apply_to_queued_turns_on_an_existing_socket(self):
         async def wait_for_queue():

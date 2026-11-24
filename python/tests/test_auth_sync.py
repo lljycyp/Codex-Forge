@@ -13,8 +13,10 @@ from unittest.mock import call, patch
 
 from bridge.commands import _sync_active_auth_to_profile
 from bridge.commands import reset_profile_usage as reset_profile_usage_command
+from core import db
 from core.app_server_service import read_account_and_rate_limits
 from core.auth_service import is_newer_auth, is_same_auth_account, parse_last_refresh
+from core.gateway_accounts import read_accounts, refresh_weekly_quota
 from core.profile_service import (
     apply_profile, profile_auth_lock,
     sync_codex_home_to_profile, write_profile_auth_json,
@@ -234,6 +236,51 @@ class AuthSyncTest(unittest.TestCase):
         self.assertEqual(result["planType"], "team")
         self.assertTrue(result["error"])
         self.assertIsNone(result["oneWeek"])
+
+    def test_weekly_quota_survives_a_failed_refresh_and_applies_to_duplicate_accounts(self):
+        database = self.root / "forge.db"
+        older = time.time() - 32 * 86400
+        with (
+            patch("core.db.DB_PATH", database),
+            patch("core.usage_service.DB_PATH", database),
+            patch("core.gateway_accounts.DB_PATH", database),
+        ):
+            db.save_config({"profiles": ["first", "duplicate", "api"], "profile_root": str(self.root)})
+            auth = make_auth(issued=int(time.time()) - 60)
+            for profile in db.list_profile_records():
+                credential = {"OPENAI_API_KEY": "test"} if profile["display_name"] == "api" else auth
+                write_profile_auth_json(self.root / profile["dir_name"] / "auth.json", credential)
+            cache = {
+                "first": {"fetchedAt": older, "oneWeek": {"remainingPercent": 3}},
+                "duplicate": {"fetchedAt": older + 1, "oneWeek": {"remainingPercent": 0, "resetAt": older + 86400}},
+                "api": {"fetchedAt": time.time(), "oneWeek": {"remainingPercent": 0}},
+            }
+            db.save_usage_cache(cache)
+            cache["duplicate"] = {"fetchedAt": time.time(), "oneWeek": None, "error": "offline"}
+            db.save_usage_cache(cache)
+            first, duplicate, api = read_accounts({})
+            self.assertTrue(first.weekly_paused)
+            self.assertTrue(duplicate.weekly_paused)
+            self.assertIsNone(api.weekly_remaining)
+
+            with patch(
+                "core.usage_service.read_account_and_rate_limits",
+                return_value=(
+                    {"planType": "team"},
+                    {"rateLimits": {"primary": {"windowDurationMins": 10080, "usedPercent": 98}}},
+                ),
+            ) as read:
+                refresh_weekly_quota(first)
+                assert first.profile_dir is not None
+                read.assert_called_once_with(first.profile_dir, first.profile_dir / "auth.json", self.system / "config.toml")
+
+            current = db.load_usage_cache()["first"]
+            first, duplicate, _ = read_accounts({})
+            self.assertEqual((first.weekly_remaining, duplicate.weekly_remaining), (2, 2))
+            self.assertFalse(first.weekly_paused)
+            self.assertTrue(first.weekly_limited)
+            self.assertEqual(first.weekly_checked_at, current["queryStartedAt"])
+            self.assertLessEqual(current["queryStartedAt"], current["fetchedAt"])
 
     def test_reset_consumes_selected_card_even_when_usage_has_no_card_details(self):
         client = self.server()

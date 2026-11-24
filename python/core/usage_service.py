@@ -24,9 +24,9 @@ def load_usage_cache():
     return db.load_usage_cache()
 
 
-def save_usage_cache(cache):
+def save_usage_cache(cache, **kwargs):
     """把额度缓存写入 SQLite。"""
-    db.save_usage_cache(cache)
+    db.save_usage_cache(cache, **kwargs)
 
 
 def get_cached_profile_usage(profile_name):
@@ -35,11 +35,12 @@ def get_cached_profile_usage(profile_name):
     return usage if isinstance(usage, dict) else None
 
 
-def refresh_profile_usage(profile_name, profile_dir):
+def refresh_profile_usage(profile_name, profile_dir, *, profile_id=None):
     """刷新单个账号额度并写入缓存。"""
     started_at = time.time()
     usage = _build_profile_usage(profile_dir)
-    cache = _merge_usage_results({profile_name: usage}, started_at)
+    options = {"expected_profile": (profile_name, profile_id)} if profile_id else {}
+    cache = _merge_usage_results({profile_name: usage}, started_at, **options)
     return cache.get(profile_name, usage)
 
 
@@ -59,7 +60,7 @@ def reset_profile_usage(profile_name, profile_dir, scope, credit_id, attempt_id,
         try:
             with profile_account_app_server(profile_dir, auth_path, config_path) as (client, account):
                 if credit_id is None and not retry:
-                    current = _map_app_server_usage(account, client.request("account/rateLimits/read"), scope)
+                    current = _read_reset_usage(client, account, scope)
                     if current["resetCredits"] is None:
                         outcome = "unsupported"
                     elif current["resetCredits"] <= 0:
@@ -86,7 +87,7 @@ def reset_profile_usage(profile_name, profile_dir, scope, credit_id, attempt_id,
                             restored_at = time.monotonic()
                     logger.info("额度重置兑换结果 操作=%s 结果=%s", attempt_ref, outcome)
                     checked_at = time.monotonic()
-                    current = _map_app_server_usage(account, client.request("account/rateLimits/read"), scope)
+                    current = _read_reset_usage(client, account, scope)
                     # An idempotent reply can refer to an old reset. Require a fresh usable quota reading.
                     if (outcome == "alreadyRedeemed" and not current["spendControlReached"]
                             and (current["oneWeek"] or {}).get("remainingPercent", 0) > 0):
@@ -136,21 +137,27 @@ def refresh_all_profile_usage(profile_dirs):
     return {name: cache.get(name) for name in profile_dirs}
 
 
-def _merge_usage_results(results, started_at):
+def _read_reset_usage(client, account, scope):
+    query_started_at = time.time()
+    usage = _map_app_server_usage(account, client.request("account/rateLimits/read"), scope)
+    return {**usage, "queryStartedAt": query_started_at}
+
+
+def _merge_usage_results(results, started_at, **save_options):
     """合并刷新结果，避免较早请求覆盖较新的成功快照。"""
     with _file_lock(DB_PATH.with_name(f".{DB_PATH.name}.usage.lock")):
         cache = load_usage_cache()
         for profile_name, usage in results.items():
             current = cache.get(profile_name)
             current_fetched_at = current.get("fetchedAt") if isinstance(current, dict) else None
-            if isinstance(current_fetched_at, (int, float)) and current_fetched_at > started_at:
+            if isinstance(current_fetched_at, (int, float)) and current_fetched_at > usage.get("queryStartedAt", started_at):
                 continue
             if usage.get("error") and "API Key" not in usage["error"]:
                 plan_type = (current.get("planType") if isinstance(current, dict) else None) or usage.get("planType")
                 if plan_type:
                     usage = {**usage, "planType": plan_type}
             cache[profile_name] = usage
-        save_usage_cache(cache)
+        save_usage_cache(cache, **save_options)
         return cache
 
 
@@ -179,9 +186,10 @@ def _build_profile_usage(profile_dir):
             return _usage_error("未找到登录信息，请先保存当前账号资料")
         config_path = get_active_config_path()
         try:
+            query_started_at = time.time()
             account, rate_limits = read_account_and_rate_limits(profile_dir, auth_path, config_path)
             scope = _reset_account_scope(auth_path) if rate_limits.get("rateLimitResetCredits") else None
-            return _map_app_server_usage(account, rate_limits, scope)
+            return {**_map_app_server_usage(account, rate_limits, scope), "queryStartedAt": query_started_at}
         except Exception as exc:
             plan_type = None
             try:

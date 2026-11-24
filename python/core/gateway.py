@@ -17,15 +17,17 @@ from core.auth_service import auth_tokens, jwt_expiration
 
 from core import gateway_protocol
 from core.constants import CONFIG_DIR
-from core.gateway_accounts import Scheduler, read_accounts
+from core.gateway_accounts import Scheduler, read_accounts, refresh_weekly_quota
 from core.gateway_client_bundle import export_client_bundle
 from core.gateway_launch import prepare_launch
 from core.gateway_store import GatewayStore, digest
 from core.gateway_tls import server_tls
+from core.logger import get_logger
 from core.profile_service import get_active_auth_path
 
 
 LOCAL_OWNER = {"id": "local", "name": "本机", "cap": 8}
+logger = get_logger(__name__)
 
 
 def addresses():
@@ -44,7 +46,8 @@ class Gateway:
         self.store, self.account_source = store, account_source
         self.snapshot = []
         self.refreshed = -100.0
-        self.scheduler = Scheduler(self.accounts)
+        self.weekly_refreshes = set()
+        self.scheduler = Scheduler(self.accounts, store, self.start_weekly_refresh)
         self.client = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=180),
             trust_env=True,
@@ -88,7 +91,22 @@ class Gateway:
         if time.monotonic() - self.refreshed > 2:
             self.snapshot = self.account_source(self.store.policies())
             self.refreshed = time.monotonic()
+            self.scheduler.update_weekly_checks(self.snapshot)
         return self.snapshot
+
+    def start_weekly_refresh(self, account):
+        task = asyncio.create_task(self.refresh_account_usage(account))
+        self.weekly_refreshes.add(task)
+        task.add_done_callback(self.weekly_refreshes.discard)
+
+    async def refresh_account_usage(self, account):
+        try:
+            await asyncio.to_thread(refresh_weekly_quota, account)
+        except Exception as exc:
+            logger.warning("账号周额度复查失败 错误类型=%s", type(exc).__name__)
+        finally:
+            self.refreshed = -100.0
+            self.scheduler.changed.set()
 
     async def listen(self, local, address, port):
         if local in self.listeners:
@@ -199,7 +217,8 @@ class Gateway:
                     "enabled": a.enabled,
                     "active": active[a.id],
                     "reason": (a.reason if a.token_expired else "")
-                    or ("等待额度恢复后续写" if a.id in self.proto.quota_waiting.values() else "") or a.reason
+                    or ("等待额度恢复后续写" if a.id in self.proto.quota_waiting.values() else "")
+                    or self.scheduler.weekly_reason(a) or a.reason
                     or ("冷却中" if self.scheduler.cooldown_until(a) > time.monotonic() else ""),
                 }
                 for a in self.accounts()
@@ -289,6 +308,8 @@ class Gateway:
         await self.unlisten(True)
         if self.drain:
             await asyncio.gather(*self.drain, return_exceptions=True)
+        if self.weekly_refreshes:
+            await asyncio.gather(*self.weekly_refreshes)
         await self.client.close()
         self.store.db.close()
 
