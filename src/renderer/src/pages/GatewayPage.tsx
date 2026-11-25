@@ -17,10 +17,22 @@ type WebSocketRejection = {
   at: number; ownerId: string; ownerName: string; keyConnections: number; totalConnections: number;
   keyLimitReached: boolean; totalLimitReached: boolean;
 };
+type UpstreamForbidden = {
+  at: number; account: string; operation: string; code: string;
+  reason: "site_block" | "provider_error" | "websocket_handshake" | "forbidden";
+};
+const upstreamReasons: Record<UpstreamForbidden["reason"], string> = {
+  site_block: "站点拦截",
+  provider_error: "上游服务返回错误码",
+  websocket_handshake: "上游 WebSocket 握手被拒绝",
+  forbidden: "上游未提供拒绝详情",
+};
 type Status = {
   enabled: boolean; shared: boolean; base: string; lanBase: string; port: number; address: string;
   addresses: string[]; ca: string; keys: AccessKey[]; accounts: Account[]; records: Log[];
   waiting: number; active: number; error: string;
+  workspaceFailure?: { at: number; route: string; status: number } | null;
+  lastUpstreamForbidden?: UpstreamForbidden | null;
   websocket?: { connections: number; limit: number; perKeyLimit: number; lastRejection: WebSocketRejection | null };
 };
 const panel = "grid grid-cols-1 gap-4 rounded-panel border border-shell-line bg-white p-5";
@@ -109,6 +121,8 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
   }
 
   const showName = (value: string) => privacy ? "••••" : value;
+  const workspaceFailure = status?.workspaceFailure;
+  const upstreamForbidden = status?.lastUpstreamForbidden;
   const websocket = status?.websocket;
   const rejection = websocket?.lastRejection;
   const rejectionReason = rejection ? [
@@ -124,6 +138,20 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
   ].join("\n");
   return <div className="mx-auto grid w-full max-w-[1320px] grid-cols-1 gap-4">
     {error ? <Alert showIcon type="error" message={error} /> : null}
+    {workspaceFailure && <Alert showIcon type="warning" message={t("Codex 启动时工作空间查询失败")}
+      description={[
+        new Date(workspaceFailure.at * 1000).toLocaleString(),
+        workspaceFailure.route,
+        `HTTP ${workspaceFailure.status}`,
+      ].join(" · ")} />}
+    {upstreamForbidden && <Alert showIcon type="warning" message={t("最近一次网关上游拒绝（HTTP 403）")}
+      description={[
+        new Date(upstreamForbidden.at * 1000).toLocaleString(),
+        `${t("池内账号")} ${showName(upstreamForbidden.account)}`,
+        upstreamForbidden.operation,
+        t(upstreamReasons[upstreamForbidden.reason]),
+        ...(upstreamForbidden.reason === "provider_error" ? [upstreamForbidden.code] : []),
+      ].join(" · ")} />}
     <section className={panel}>
       <div className="flex items-center justify-between gap-3">
         <h2 className={heading}><Network className="mr-2 inline" size={17} />{t("网关服务")}</h2>

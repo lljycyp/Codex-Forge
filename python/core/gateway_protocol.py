@@ -195,6 +195,7 @@ class Protocol:
         self.sockets = {}
         self.pending_handshakes = {}
         self.last_ws_rejection = None
+        self.last_upstream_forbidden = None
         self.generating = set()
         self.uploads = 0
         self.quota_waiting = {}
@@ -295,26 +296,59 @@ class Protocol:
         else:
             self.scheduler.rejected(account.id, 429, delay)
 
-    async def check(self, response, account, started_at):
+    def record_upstream_forbidden(self, account, operation, headers, code="upstream_error", body=b""):
+        if headers.get("cf-mitigated") == "challenge" or b'class="blocked-icon"' in body or b"Unable to load site" in body:
+            reason = "site_block"
+        elif code != "upstream_error":
+            reason = "provider_error"
+        elif operation.startswith("WS "):
+            reason = "websocket_handshake"
+        else:
+            reason = "forbidden"
+        self.last_upstream_forbidden = {
+            "at": int(time.time()),
+            "account": account.name,
+            "operation": operation,
+            "reason": reason,
+            "code": code,
+        }
+        logger.warning(
+            "网关上游拒绝 HTTP=403 账号=%r 账号ID=%r 请求=%s 类型=%s 上游错误码=%s",
+            account.name, account.id, operation, reason, code,
+        )
+
+    async def check(self, response, account, started_at, operation):
         if response.status < 300:
             return
         wait = response.headers.get("Retry-After", "")
         # Provider diagnostics can contain account identifiers; expose the protocol code, never credentials.
         code = "upstream_error"
+        if response.status == 403:
+            try:
+                body = await response.content.readexactly(8192)
+            except asyncio.IncompleteReadError as exc:
+                body = exc.partial
+        else:
+            body = await response.content.read(8192)
         try:
-            info = json.loads(await response.content.read(8192))
+            info = json.loads(body)
             error = info.get("error") or {}
             limit = quota_limit(error, response.headers, response.status)
             if limit:
                 self.record_limit(account, limit.code, limit.delay if limit.delay is not None else 60, started_at)
                 raise limit
             value = error.get("code") or error.get("type")
-            if isinstance(value, str) and value.replace("_", "").isalnum() and len(value) <= 64:
+            if (
+                isinstance(value, str) and len(value) <= 64
+                and value.isascii() and value.replace("_", "").isalnum()
+            ):
                 code = value
         except QuotaLimit:
             raise
         except (ValueError, AttributeError):
             pass
+        if response.status == 403:
+            self.record_upstream_forbidden(account, operation, response.headers, code, body)
         self.scheduler.rejected(account.id, response.status, int(wait) if wait.isdigit() else 60)
         raise ProtocolError(
             f"上游返回 HTTP {response.status}（{code}）",
@@ -333,7 +367,7 @@ class Protocol:
                 else {},
                 allow_redirects=False,
             ) as resp:
-                await self.check(resp, account, started_at)
+                await self.check(resp, account, started_at, "GET /v1/models")
                 return web.Response(body=await resp.read(), content_type="application/json")
 
     async def compact(self, request):
@@ -377,7 +411,7 @@ class Protocol:
                 headers=self.headers(account, request),
                 allow_redirects=False,
             ) as resp:
-                await self.check(resp, account, started_at)
+                await self.check(resp, account, started_at, "POST /v1/responses/compact")
                 value = await resp.json(content_type=None)
                 if not isinstance(value.get("output"), list):
                     raise ProtocolError("上游未返回压缩结果", 502)
@@ -628,6 +662,8 @@ class Protocol:
                         connection.socket, connection.target = upstream, target
             except aiohttp.WSServerHandshakeError as exc:
                 if exc.status not in (400, 404, 405, 426, 501):
+                    if exc.status == 403:
+                        self.record_upstream_forbidden(account, "WS /v1/responses", exc.headers or {})
                     if exc.status == 429:
                         # The handshake exposes headers only. Require Codex's usage-limit marker.
                         reached = (exc.headers or {}).get("x-codex-rate-limit-reached-type")
@@ -671,7 +707,7 @@ class Protocol:
         async with self.client.post(
             url, headers={**headers, "Accept": "text/event-stream"}, json=wire, allow_redirects=False
         ) as resp:
-            await self.check(resp, account, started_at)
+            await self.check(resp, account, started_at, "POST /v1/responses")
             async for event in sse_events(resp):
                 yield event
 

@@ -19,7 +19,7 @@ from core import gateway_protocol
 from core.constants import CONFIG_DIR
 from core.gateway_accounts import Scheduler, read_accounts, refresh_weekly_quota
 from core.gateway_client_bundle import export_client_bundle
-from core.gateway_launch import prepare_launch
+from core.gateway_launch import WORKSPACE_STARTUP_SECONDS, prepare_launch, workspace_startup_failure
 from core.gateway_store import GatewayStore, digest
 from core.gateway_tls import ensure_public_ca, server_tls
 from core.logger import get_logger
@@ -62,6 +62,8 @@ class Gateway:
         self.address = store.option("address", "")
         self.local_key_hash = digest(self.local_key()) if store.option("localKey") else ""
         self.local_chatgpt = store.option("localChatgpt") is True
+        self.desktop_startup: tuple[int, float] | None = None
+        self.workspace_failure = None
         self.housekeeping = asyncio.create_task(self.purge_expired())
 
     async def purge_expired(self):
@@ -207,6 +209,8 @@ class Gateway:
             ],
             "waiting": self.scheduler.waiting,
             "error": self.error,
+            "workspaceFailure": self.workspace_failure,
+            "lastUpstreamForbidden": self.proto.last_upstream_forbidden,
             "active": sum(active.values()),
             "records": list(self.proto.records),
             "accounts": [
@@ -232,6 +236,13 @@ class Gateway:
 
     async def command(self, cmd, p) -> dict[str, object]:
         if cmd == "status":
+            if self.desktop_startup is not None:
+                pid, started_at = self.desktop_startup
+                self.workspace_failure = await asyncio.to_thread(
+                    workspace_startup_failure, CONFIG_DIR.parent, pid, started_at,
+                )
+                if time.time() >= started_at + WORKSPACE_STARTUP_SECONDS:
+                    self.desktop_startup = None
             return self.status()
         if cmd == "quota_reset":
             self.refreshed = -100.0
@@ -292,7 +303,12 @@ class Gateway:
                 self.store.set_option("localChatgpt", plan.native_auth)
                 self.local_chatgpt = plan.native_auth
                 if cmd == "launch":
-                    return await asyncio.to_thread(plan.start)
+                    started_at = time.time()
+                    result = await asyncio.to_thread(plan.start)
+                    self.workspace_failure = None
+                    pid = result.get("pid")
+                    self.desktop_startup = (pid, started_at) if plan.native_auth and isinstance(pid, int) else None
+                    return result
                 return {"base": base, "ca": str(ca)}
             except Exception:
                 self.local_chatgpt = previous_login

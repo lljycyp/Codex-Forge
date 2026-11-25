@@ -1,10 +1,12 @@
 import json
 import mmap
 import os
+import re
 import shutil
 import subprocess
 import tomllib
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from core.app_server_service import AppServerClient, AppServerRequestError, find_codex_cli_path
@@ -18,6 +20,45 @@ OVERRIDE = "CODEX_APP_SERVER_OPENAI_BASE_URL"
 BALANCED_FLAG = "--codex-forge-balanced"
 BALANCED_CHATGPT_FLAG = "--codex-forge-balanced-chatgpt"
 BALANCED_HOME = "codex-home"
+WORKSPACE_STARTUP_SECONDS = 120
+WORKSPACE_REQUEST_FAILED = re.compile(
+    rb"routePattern=(/accounts/check/\{version\}|/accounts/optimized/check|/settings/user) status=([45]\d{2})(?:\s|$)"
+)
+
+
+def workspace_startup_failure(local_appdata, pid, started_at):
+    """Read only startup errors from logs named for this Electron process."""
+    roots = [local_appdata / "Codex" / "Logs"]
+    for package in ("OpenAI.Codex_*", "OpenAI.ChatGPT_*"):
+        roots.extend(
+            p / "LocalCache" / "Local" / "Codex" / "Logs"
+            for p in (local_appdata / "Packages").glob(package)
+        )
+    dates = {
+        datetime.fromtimestamp(t, UTC).strftime("%Y/%m/%d")
+        for t in (started_at, started_at + WORKSPACE_STARTUP_SECONDS)
+    }
+    latest = None
+    for root in roots:
+        for date in dates:
+            for log in (root / date).glob(f"codex-desktop-*-{pid}-t*-i*.log"):
+                try:
+                    with log.open("rb") as stream:
+                        lines = stream.read(1024 * 1024).splitlines()
+                    for line in lines:
+                        if b"sa_server_request_failed " not in line:
+                            continue
+                        match = WORKSPACE_REQUEST_FAILED.search(line)
+                        if not match:
+                            continue
+                        at = datetime.fromisoformat(line.split(b" ", 1)[0].decode("ascii")).timestamp()
+                        if started_at <= at <= started_at + WORKSPACE_STARTUP_SECONDS and (
+                            latest is None or at >= latest["at"]
+                        ):
+                            latest = {"at": at, "route": match[1].decode("ascii"), "status": int(match[2])}
+                except (OSError, ValueError):
+                    continue
+    return latest
 
 
 def supports_gateway(executable):

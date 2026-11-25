@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -16,11 +17,40 @@ from aiohttp import ClientSession, TCPConnector, web
 from aiohttp.test_utils import TestServer
 from core.gateway import Gateway
 from core.gateway_accounts import Account
-from core.gateway_launch import BALANCED_CHATGPT_FLAG, BALANCED_FLAG, OVERRIDE, prepare_launch
+from core.gateway_launch import (
+    BALANCED_CHATGPT_FLAG, BALANCED_FLAG, OVERRIDE, prepare_launch, workspace_startup_failure,
+)
 from core.gateway_store import GatewayStore
 
 
 class GatewayDesktopLaunch(unittest.TestCase):
+    def test_workspace_failure_is_scoped_to_the_launched_process_and_startup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            day = root / "Packages" / "OpenAI.Codex_test" / "LocalCache/Local/Codex/Logs/2026/11/25"
+            day.mkdir(parents=True)
+            warning = " warning sa_server_request_failed routePattern="
+            expected = "2026-11-25T02:49:45.793Z" + warning + "/accounts/check/{version} status=432"
+            (day / "codex-desktop-test-13100-t0-i1-024933-0.log").write_text(
+                "\n".join((
+                    "2026-11-25T02:40:45Z" + warning + "/settings/user status=403",
+                    expected,
+                    "2026-11-25T02:49:46Z" + warning + "/pins status=403",
+                    "2026-11-25T03:49:45Z" + warning + "/settings/user status=403",
+                )),
+                encoding="utf-8",
+            )
+            (day / "codex-desktop-test-13000-t0-i1-024933-0.log").write_text(
+                "2026-11-25T02:49:46Z" + warning + "/settings/user status=403",
+                encoding="utf-8",
+            )
+            started_at = datetime.fromisoformat("2026-11-25T02:49:33Z").timestamp()
+            self.assertEqual(workspace_startup_failure(root, 13100, started_at), {
+                "at": datetime.fromisoformat("2026-11-25T02:49:45.793Z").timestamp(),
+                "route": "/accounts/check/{version}",
+                "status": 432,
+            })
+
     def test_running_client_refused_before_touching_home_or_starting_gateway(self):
         with (
             patch("bridge.commands.load_config", return_value={"codex_skin_enabled": True}),
@@ -203,6 +233,49 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["continuations"], 0)
         for field in ("inputTokens", "cachedTokens", "outputTokens"):
             self.assertNotIn(field, row)
+
+    async def test_models_403_reports_selected_account_and_sanitized_rejection(self):
+        async def models(request):
+            if request.headers["Authorization"] == "Bearer upstream-A":
+                return web.Response(text='<p>Unable to load site</p> private upstream data', status=403)
+            return web.json_response({"error": {"code": "account_deactivated", "message": "private upstream data"}}, status=403)
+
+        app = web.Application()
+        app.router.add_get("/models", models)
+        async with TestServer(app) as origin:
+            for account, reason, code in (
+                (self.accounts[0], "site_block", "upstream_error"),
+                (self.accounts[1], "provider_error", "account_deactivated"),
+            ):
+                for candidate in self.accounts:
+                    candidate.enabled = candidate is account
+                    candidate.base = str(origin.make_url("")).rstrip("/")
+                with patch("core.gateway_protocol.logger.warning") as warning:
+                    async with self.client.get(self.base + "/models", headers=self.headers()) as response:
+                        self.assertEqual(response.status, 403)
+                        self.assertNotIn("private upstream data", await response.text())
+                diagnostic = self.gateway.status()["lastUpstreamForbidden"]
+                self.assertEqual((diagnostic["account"], diagnostic["reason"], diagnostic["code"]), (account.name, reason, code))
+                self.assertEqual(diagnostic["operation"], "GET /v1/models")
+                self.assertEqual(warning.call_args.args[1:], (account.name, account.id, "GET /v1/models", reason, code))
+
+    async def test_websocket_upstream_handshake_403_distinguishes_challenge(self):
+        async def reject(_request):
+            return web.Response(status=403, headers={"cf-mitigated": "challenge"})
+
+        app = web.Application()
+        app.router.add_get("/responses", reject)
+        async with TestServer(app) as origin:
+            self.accounts[1].enabled = False
+            self.accounts[0].base = str(origin.make_url("")).rstrip("/")
+            async with self.client.ws_connect(self.base + "/responses", headers=self.headers()) as ws:
+                await ws.send_json({"type": "response.create", "model": "test", "input": "hello"})
+                event = await ws.receive_json(timeout=5)
+                self.assertEqual(event["type"], "error")
+            diagnostic = self.gateway.status()["lastUpstreamForbidden"]
+            self.assertEqual(diagnostic["account"], "A")
+            self.assertEqual(diagnostic["reason"], "site_block")
+            self.assertEqual(diagnostic["operation"], "WS /v1/responses")
 
     async def test_switch_configures_live_gateway_before_desktop_launch(self):
         await self.gateway.unlisten(True)
