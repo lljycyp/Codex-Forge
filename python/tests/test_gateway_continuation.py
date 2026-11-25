@@ -7,6 +7,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
+from uuid import NAMESPACE_URL, uuid5
 
 from aiohttp import ClientSession, TCPConnector, web
 from aiohttp.test_utils import TestServer
@@ -76,12 +77,14 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.calls = []
+        self.upstream_headers = []
         self.script = []
         self.upstream_sockets = []
         self.disconnect_after_reply = False
 
         def next_reply(request, payload):
             self.calls.append((request.headers["Authorization"], payload, time.monotonic()))
+            self.upstream_headers.append(request.headers)
             return self.script.pop(0)
 
         async def http(request):
@@ -107,9 +110,14 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
                     break
             return socket
 
+        async def compact(request):
+            self.calls.append((request.headers["Authorization"], await request.json(), time.monotonic()))
+            return web.json_response({"output": []})
+
         app = web.Application()
         app.router.add_post("/responses", http)
         app.router.add_get("/responses", ws)
+        app.router.add_post("/responses/compact", compact)
         self.origin = TestServer(app)
         await self.origin.start_server()
         self.addAsyncCleanup(self.origin.close)
@@ -164,6 +172,60 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(self.upstream_sockets), 1)
             self.assertEqual([len(wire["input"]) for _, wire, _ in self.calls], [1, 3, 5, 7])
             self.assertTrue(all("previous_response_id" not in wire for _, wire, _ in self.calls))
+
+    async def test_forwards_owner_scoped_session_id_over_http_and_websocket(self):
+        self.script = [message_events(str(i), ["ok"]) for i in range(3)]
+        headers = {"session-id": "shared", "session_id": "legacy"}
+        async with self.client.post(self.url, json={"input": "one"}, headers=headers) as response:
+            self.assertEqual(response.status, 200)
+        async with self.client.ws_connect(self.url, headers=headers) as socket:
+            self.assertEqual((await self.send_turn(socket, input="two"))["type"], "response.completed")
+
+        other = self.store.change_key("create", {"name": "other", "cap": 1})
+        headers["Authorization"] = "Bearer " + other["key"]
+        async with self.client.post(self.url, json={"input": "three"}, headers=headers) as response:
+            self.assertEqual(response.status, 200)
+
+        for upstream, owner in zip(self.upstream_headers, (self.key, self.key, other), strict=True):
+            self.assertEqual(upstream.get("session-id"), str(uuid5(NAMESPACE_URL, owner["id"] + "/shared")))
+            self.assertEqual(upstream.get("session_id"), str(uuid5(NAMESPACE_URL, owner["id"] + "/legacy")))
+
+    async def test_compact_prefers_last_successful_generation_account(self):
+        self.script = [message_events("parent", ["ok"])]
+        headers = {"thread-id": "parent"}
+        async with self.client.ws_connect(self.url, headers=headers) as socket:
+            self.assertEqual((await self.send_turn(socket, model="m", input="one"))["type"], "response.completed")
+
+        for available in (True, False):
+            self.accounts[0].enabled = available
+            async with self.client.post(self.url + "/compact", headers=headers, json={"model": "m"}) as response:
+                self.assertEqual(response.status, 200)
+            self.assertEqual(self.calls[-1][0], "A" if available else "B")
+
+    async def test_subagent_prefers_parent_account_until_own_success(self):
+        self.script = [message_events(str(i), ["ok"]) for i in range(7)]
+        for thread, parent, model, available, expected in (
+            ("parent", None, "m", True, "A"),
+            ("child", "parent", "m", True, "A"),
+            ("child", "parent", "m", False, "B"),
+            ("child", "parent", "m", True, "B"),
+            ("other-model-child", "child", "another-model", True, "A"),
+        ):
+            self.accounts[0].enabled = available
+            async with self.client.ws_connect(self.url, headers={"thread-id": thread}) as socket:
+                metadata = {"x-codex-parent-thread-id": parent} if parent else {}
+                event = await self.send_turn(socket, model=model, input="one", client_metadata=metadata)
+                self.assertEqual(event["type"], "response.completed")
+            self.assertEqual(self.calls[-1][0], expected)
+
+        other = self.store.change_key("create", {"name": "other", "cap": 1})
+        for headers, expected in (
+            ({"Authorization": "Bearer " + other["key"], "x-codex-parent-thread-id": "parent"}, "B"),
+            ({"x-codex-parent-thread-id": "child"}, "B"),
+        ):
+            async with self.client.post(self.url, headers=headers, json={"model": "m", "input": "one"}) as response:
+                self.assertEqual(response.status, 200)
+            self.assertEqual(self.calls[-1][0], expected)
 
     async def test_websocket_keeps_upstream_connections_separate_between_clients(self):
         self.accounts[1].enabled = False

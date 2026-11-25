@@ -52,7 +52,7 @@
 ## 🖼️ Software Preview
 
 <p align="center">
-  <img src="docs/images/home-en.png" alt="Codex Forge home page with load balancing selected" />
+  <img src="docs/images/home-en.png" alt="Codex Forge home page with Load balancing selected at the bottom of the sidebar" />
 </p>
 
 The screenshots use example accounts, usage figures, and LAN addresses.
@@ -80,7 +80,7 @@ The screenshots use example accounts, usage figures, and LAN addresses.
 
 ### 1. 🧭 Runtime Workspace and Profile Inspector
 
-The home page shows the current workspace, selected account, and Codex client status. Choose **Selected account** to launch with the current profile or **Load balancing** to use the gateway. Quit the running Codex client before switching launch options.
+The home page shows the current workspace, selected account, and Codex client status. At the bottom of the sidebar, choose **Selected account** to launch with the current profile or **Load balancing** to use the gateway. Quit the running Codex client before switching launch modes.
 
 The profile management page supports account search, status filters, and multiple sort orders. After you select an account, the profile inspector groups its information and actions into:
 
@@ -96,7 +96,7 @@ Select **Check usage** in **Overview**. If your Codex client supports resets and
 
 ### 2. 🌐 Load Balancing and LAN Sharing
 
-On the home page, select **Load balancing** and wait for Forge to configure the local gateway, then click **Launch with load balancing**. Forge routes model requests to available accounts and uses the local Codex session history. When the system Codex client uses file-based ChatGPT authentication, it keeps that sign-in and the native sidebar. Other supported setups use a local Forge key. If this PC was configured with the Forge LAN bundle, switching back to **Selected account** restores its previous settings.
+At the bottom of the sidebar, select **Load balancing** and wait for Forge to configure the local gateway. On the home page, click **Launch with load balancing**. Forge routes model requests to available accounts and uses the local Codex session history. When the system Codex client uses file-based ChatGPT authentication, it keeps that sign-in and the native sidebar. Other supported setups use a local Forge key. If this PC was configured with the Forge LAN bundle, switching back to **Selected account** restores its previous settings.
 
 Profile management shows the **five-hour** and **weekly** usage windows. When either window has more than 1% and at most 2% remaining, Forge allows one request at a time for that account and refreshes its quota after the request. When either window has 1% or less remaining, Forge pauses new requests to that account.
 

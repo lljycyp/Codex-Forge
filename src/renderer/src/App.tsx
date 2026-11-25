@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Layout, Modal, Progress, message } from "antd";
-import { Boxes, Code2, FileText, Home, Network, Palette, Settings, ShieldCheck } from "lucide-react";
+import { Button, Layout, Modal, Progress, Segmented, message } from "antd";
+import { Boxes, Code2, FileText, Home, LoaderCircle, Network, Palette, Settings, ShieldCheck } from "lucide-react";
 
 import { AppLayout } from "./components/AppLayout";
 import { getViewMeta } from "./constants/views";
@@ -21,6 +21,8 @@ const { Content } = Layout;
 const runtimeStatusPollMs = 3 * 1000;
 const usageAutoRefreshMs = 5 * 60 * 1000;
 const privacyModeStorageKey = "codexForgePrivacyMode";
+const launchModeStorageKey = "forge.home.routing";
+type LaunchMode = "balanced" | "account";
 type UpdateModalEvent = Exclude<UpdateEvent, { status: "error" } | { status: "not-available" }>;
 type ShellSnapshot = { appState: AppState; profiles: ProfileSummary[] };
 
@@ -111,6 +113,9 @@ export default function App() {
   const [activeView, setActiveView] = useState<ViewKey>("home");
   const [appState, setAppState] = useState<AppState>(emptyState);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [balanced, setBalanced] = useState(() => localStorage.getItem(launchModeStorageKey) === "balanced");
+  const [launchingBalanced, setLaunchingBalanced] = useState(false);
+  const [pendingMode, setPendingMode] = useState<LaunchMode | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [refreshingView, setRefreshingView] = useState<ViewKey | null>(null);
   const [commandingView, setCommandingView] = useState<ViewKey | null>(null);
@@ -269,7 +274,7 @@ export default function App() {
   }, [initialLoading, t]);
 
   useEffect(() => {
-    if (initialLoading || (activeView !== "profiles" && activeView !== "home")) {
+    if (initialLoading) {
       return undefined;
     }
 
@@ -426,6 +431,37 @@ export default function App() {
     [runCommand, t],
   );
 
+  const switchMode = async (nextMode: LaunchMode) => {
+    const nextBalanced = nextMode === "balanced";
+    if (pendingMode || launchingBalanced || nextBalanced === balanced) return;
+    if (appState.runningCount > 0) {
+      message.warning(t("请退出当前 Codex，再切换启动模式"));
+      return;
+    }
+    setPendingMode(nextMode);
+    try {
+      await invokeLauncher(nextBalanced ? "gateway_prepare_launch" : "prepare_account_mode");
+      localStorage.setItem(launchModeStorageKey, nextMode);
+      setBalanced(nextBalanced);
+    } catch (error) {
+      message.error(t(error instanceof Error ? error.message : "操作失败"));
+    } finally {
+      setPendingMode(null);
+    }
+  };
+
+  const launchBalanced = async () => {
+    setLaunchingBalanced(true);
+    try {
+      await invokeLauncher("gateway_launch");
+      message.success(t("已通过负载均衡启动 Codex"));
+    } catch (error) {
+      message.error(t(error instanceof Error ? error.message : "启动失败"));
+    } finally {
+      setLaunchingBalanced(false);
+    }
+  };
+
   const hideUpdateModal = useCallback(() => {
     showUpdateProgressRef.current = false;
     setShowUpdateProgress(false);
@@ -474,6 +510,17 @@ export default function App() {
         menuItems={menuItems}
         taskText={taskText}
         onChangeView={changeView}
+        sidebarFooter={
+          <Segmented<LaunchMode>
+            block
+            className="[&_.ant-segmented-item]:min-w-0 [&_.ant-segmented-item-label]:grid [&_.ant-segmented-item-label]:min-h-9 [&_.ant-segmented-item-label]:place-items-center [&_.ant-segmented-item-label]:whitespace-normal [&_.ant-segmented-item-label]:!px-1 [&_.ant-segmented-item-label]:text-xs [&_.ant-segmented-item-label]:font-semibold [&_.ant-segmented-item-label]:leading-tight"
+            aria-label={t("启动模式")}
+            value={balanced ? "balanced" : "account"}
+            disabled={initialLoading || launchingBalanced || pendingMode !== null}
+            options={[{ label: t("指定账号"), value: "account" }, { label: t("负载均衡"), value: "balanced" }]}
+            onChange={(value) => void switchMode(value)}
+          />
+        }
       >
         <Content
           ref={contentRef}
@@ -487,8 +534,12 @@ export default function App() {
             <HomePage
               appState={appState}
               profiles={profiles}
+              balanced={balanced}
+              launchingBalanced={launchingBalanced}
+              switchingMode={pendingMode !== null}
               onOpenView={changeView}
               onLaunchProfile={launchProfileFromHome}
+              onLaunchBalanced={launchBalanced}
             />
           ) : null}
           {activeView === "profiles" ? (
@@ -525,6 +576,23 @@ export default function App() {
           ) : null}
         </Content>
       </AppLayout>
+      <Modal
+        open={pendingMode !== null}
+        centered
+        width={320}
+        footer={null}
+        closable={false}
+        maskClosable={false}
+        keyboard={false}
+        title={
+          <div role="status" className="flex flex-col items-center gap-3 py-2 text-center">
+            <span className="grid h-12 w-12 place-items-center rounded-full bg-brand-50 text-brand-700">
+              <LoaderCircle size={24} className="motion-safe:animate-spin" aria-hidden />
+            </span>
+            {pendingMode && t(pendingMode === "balanced" ? "正在配置本机网关…" : "正在复原账号设置…")}
+          </div>
+        }
+      />
       {initialLoading ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-white/80 backdrop-blur-md">
           <div className="grid place-items-center gap-4 text-center">

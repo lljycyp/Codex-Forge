@@ -283,12 +283,31 @@ class Protocol:
         for key in ("version", "OpenAI-Beta"):
             if request.headers.get(key):
                 hdr[key] = request.headers[key]
-        for key in ("session_id", "thread_id"):
+        for key in ("session-id", "session_id", "thread_id"):
             if request.headers.get(key):
                 hdr[key] = str(
                     uuid.uuid5(uuid.NAMESPACE_URL, request[OWNER]["id"] + "/" + request.headers[key])
                 )
         return hdr
+
+    def session_affinity(self, request, wire):
+        owner_id = request[OWNER]["id"]
+        model = wire.get("model")
+        thread = (
+            request.headers.get("thread-id") or request.headers.get("thread_id")
+            or request.headers.get("session-id") or request.headers.get("session_id")
+        )
+        session = (owner_id, thread, model) if thread else None
+        parent = request.headers.get("x-codex-parent-thread-id")
+        if not parent and isinstance(metadata := wire.get("client_metadata"), dict):
+            parent = metadata.get("x-codex-parent-thread-id")
+        parent_session = (owner_id, parent, model) if isinstance(parent, str) and parent else None
+
+        def preferred():
+            own_account = self.session_accounts.get(session) if session else None
+            return own_account or (self.session_accounts.get(parent_session) if parent_session else None)
+
+        return session, preferred
 
     def record_limit(self, account, code, delay, started_at):
         if account.base == CHATGPT_BASE and code == "usage_limit_reached":
@@ -372,9 +391,10 @@ class Protocol:
 
     async def compact(self, request):
         body = await request.json()
-        owner = request[OWNER]["id"]
-        _, wire = prepare_input(self.store, owner, body)
-        async with self.scheduler.reserve(request[OWNER], request[AUTH], wire.get("model")) as account:
+        owner = request[OWNER]
+        _, wire = prepare_input(self.store, owner["id"], body)
+        _, preferred = self.session_affinity(request, wire)
+        async with self.scheduler.reserve(owner, request[AUTH], wire.get("model"), preferred=preferred) as account:
             started_at = time.monotonic()
             if account.base == CHATGPT_BASE:
                 # Codex subscriptions expose remote compaction as a Responses generation.
@@ -581,12 +601,7 @@ class Protocol:
             await send({"type": "response.completed", "response": response})
             return
         model = wire.get("model")
-        thread = (
-            request.headers.get("thread-id") or request.headers.get("thread_id")
-            or request.headers.get("session-id") or request.headers.get("session_id")
-        )
-        session = (owner["id"], thread, model) if thread else None
-        preferred = (lambda: self.session_accounts.get(session)) if session is not None else None
+        session, preferred = self.session_affinity(request, wire)
         async with self.scheduler.reserve(owner, request[AUTH], model, preferred=preferred) as account:
             started = time.monotonic()
             status = "interrupted"

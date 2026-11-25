@@ -23,6 +23,7 @@ type AppLayoutProps = {
   activeView: ViewKey;
   menuItems: MenuItem[];
   taskText: string;
+  sidebarFooter: ReactNode;
   children: ReactNode;
   onChangeView: (view: ViewKey) => void;
 };
@@ -31,6 +32,7 @@ export function AppLayout({
   activeView,
   menuItems,
   taskText,
+  sidebarFooter,
   children,
   onChangeView,
 }: AppLayoutProps) {
@@ -59,10 +61,12 @@ export function AppLayout({
               <span className="whitespace-nowrap text-[16px] font-extrabold tracking-wide text-white">
                 Codex Forge
               </span>
-              <div className="flex items-center gap-2 text-[11px] font-medium text-white/80">
+              <div className="flex items-center gap-1.5 whitespace-nowrap text-[10px] font-medium text-white/80 max-[960px]:gap-1 max-[960px]:text-[9px]">
                 <span>{t("切换")}</span>
                 <span className="h-[3px] w-[3px] rounded-full bg-white/40" />
                 <span>{t("指令")}</span>
+                <span className="h-[3px] w-[3px] rounded-full bg-white/40" />
+                <span>{t("共享")}</span>
               </div>
             </div>
           </div>
@@ -107,6 +111,7 @@ export function AppLayout({
               />
             ))}
           </nav>
+          {sidebarFooter}
         </Sider>
         <Layout className="relative mb-3.5 mr-3.5 h-[calc(100%-14px)] min-w-0 overflow-hidden rounded-panel bg-shell-surface shadow-panel">
           {children}
