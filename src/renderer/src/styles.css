@@ -28,6 +28,68 @@ button {
   cursor: pointer;
 }
 
+.forge-launch-mode.ant-segmented {
+  padding: 3px;
+  border: 1px solid rgba(20, 83, 78, 0.22);
+  border-radius: 12px;
+  background: rgba(20, 83, 78, 0.12);
+  color: #103f3d;
+}
+
+.forge-launch-mode .ant-segmented-item,
+.forge-launch-mode .ant-segmented-thumb {
+  border-radius: 8px;
+}
+
+.forge-launch-mode .ant-segmented-item-selected,
+.forge-launch-mode .ant-segmented-thumb {
+  background: #0c655d;
+  box-shadow: 0 2px 5px rgba(10, 61, 56, 0.16);
+}
+
+.forge-launch-mode .ant-segmented-item-selected {
+  color: #fff;
+}
+
+.forge-launch-mode .ant-segmented-item-label {
+  display: flex;
+  min-height: 46px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 1px;
+  white-space: normal;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+[lang="en-US"] .forge-launch-mode .ant-segmented-item-label {
+  font-size: 10px;
+  letter-spacing: -0.025em;
+}
+
+.forge-launch-mode .ant-segmented-item-icon + span {
+  margin-inline-start: 0;
+}
+
+.forge-launch-mode .ant-segmented-item-focused {
+  outline-color: #064e3b;
+}
+
+.forge-launch-mode.ant-segmented-disabled {
+  opacity: 0.6;
+}
+
+.forge-launch-mode.ant-segmented-disabled .ant-segmented-item {
+  color: inherit;
+}
+
+.forge-launch-mode.ant-segmented-disabled .ant-segmented-item-selected {
+  color: #fff;
+}
+
 .ant-drawer,
 .ant-drawer-mask,
 .ant-modal-root {

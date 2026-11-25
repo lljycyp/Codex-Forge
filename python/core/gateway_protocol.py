@@ -368,6 +368,11 @@ class Protocol:
             pass
         if response.status == 403:
             self.record_upstream_forbidden(account, operation, response.headers, code, body)
+        elif response.status == 502:
+            logger.warning(
+                "网关 502 来源=上游HTTP响应 账号=%r 账号ID=%r 请求=%s 上游错误码=%s",
+                account.name, account.id, operation, code,
+            )
         self.scheduler.rejected(account.id, response.status, int(wait) if wait.isdigit() else 60)
         raise ProtocolError(
             f"上游返回 HTTP {response.status}（{code}）",
@@ -610,6 +615,8 @@ class Protocol:
             protocol = "WS" if websocket else "HTTP"
             metrics = {"continuations": 0}
             events = self.answer_events(account, request, wire, websocket, metrics)
+            sending = False
+            interruption = None
             try:
                 async for event in events:
                     kind = event.get("type")
@@ -628,7 +635,9 @@ class Protocol:
                         replay = [replay_item(item) for item in actual]
                         if resp.get("id"):
                             checkpoint_saved = self._save_checkpoint(owner["id"], resp["id"], items + replay)
+                    sending = True
                     await send(event)
+                    sending = False
                     if kind in TERMINAL:
                         status = kind if checkpoint_saved else kind + " (续接需完整历史)"
                         if kind in ("response.failed", "error"):
@@ -644,7 +653,25 @@ class Protocol:
                     self.scheduler.mark_unsupported(account.id, wire.get("model"))
                 status = f"{exc.status} {exc.code}"
                 raise
+            except asyncio.CancelledError as exc:
+                reason = exc.args[0] if exc.args else None
+                interruption = (
+                    reason if reason in ("客户端主动取消", "客户端连接关闭") else "请求任务取消",
+                    type(exc).__name__,
+                )
+                raise
+            except (aiohttp.ClientError, TimeoutError, OSError) as exc:
+                interruption = (
+                    "客户端连接关闭" if sending else "上游传输异常",
+                    type(exc).__name__,
+                )
+                raise
             finally:
+                if interruption is not None and status == "interrupted":
+                    logger.warning(
+                        "网关 interrupted 来源=%s 账号=%r 账号ID=%r 模型=%r 协议=%s 异常类型=%s",
+                        interruption[0], account.name, account.id, str(model or "")[:100], protocol, interruption[1],
+                    )
                 await events.aclose()
                 self.records.appendleft(
                     {
@@ -679,6 +706,11 @@ class Protocol:
                 if exc.status not in (400, 404, 405, 426, 501):
                     if exc.status == 403:
                         self.record_upstream_forbidden(account, "WS /v1/responses", exc.headers or {})
+                    elif exc.status == 502:
+                        logger.warning(
+                            "网关 502 来源=上游WebSocket握手HTTP响应 账号=%r 账号ID=%r 请求=WS /v1/responses",
+                            account.name, account.id,
+                        )
                     if exc.status == 429:
                         # The handshake exposes headers only. Require Codex's usage-limit marker.
                         reached = (exc.headers or {}).get("x-codex-rate-limit-reached-type")
@@ -701,6 +733,11 @@ class Protocol:
                     while True:
                         msg = await upstream.receive(timeout=150)
                         if msg.type not in (WSMsgType.TEXT, WSMsgType.BINARY):
+                            logger.warning(
+                                "网关 502 来源=上游WebSocket断开 账号=%r 账号ID=%r "
+                                "请求=WS /v1/responses 帧类型=%s 关闭码=%s",
+                                account.name, account.id, msg.type.name, upstream.close_code,
+                            )
                             raise ProtocolError("上游 WebSocket 意外断开", 502)
                         event = json.loads(msg.data)
                         kind = event.get("type")
@@ -864,7 +901,7 @@ class Protocol:
                             break
                     if kind == "response.cancel":
                         if task and not task.done() and not finishing:
-                            task.cancel()
+                            task.cancel("客户端主动取消")
                             with contextlib.suppress(asyncio.CancelledError):
                                 await task
                             await ws.send_json({"type": "response.cancelled"})
@@ -881,7 +918,7 @@ class Protocol:
             self.sockets.pop(ws, None)
             try:
                 if task:
-                    task.cancel()
+                    task.cancel("客户端连接关闭")
                     with contextlib.suppress(asyncio.CancelledError, ConnectionError):
                         await task
             finally:

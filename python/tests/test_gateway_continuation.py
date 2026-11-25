@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import NAMESPACE_URL, uuid5
 
-from aiohttp import ClientSession, TCPConnector, web
+from aiohttp import ClientSession, ServerDisconnectedError, TCPConnector, web
 from aiohttp.test_utils import TestServer
 from core.gateway import Gateway
 from core.gateway_accounts import Account, configure_api
@@ -323,12 +323,43 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
             async with asyncio.timeout(4):
                 while (await ws.receive_json())["type"] != "response.output_text.delta":
                     pass
-                await ws.send_json({"type": "response.cancel"})
-                self.assertEqual((await ws.receive_json())["type"], "response.cancelled")
+                with self.assertLogs("core.gateway_protocol", "WARNING") as logs:
+                    await ws.send_json({"type": "response.cancel"})
+                    self.assertEqual((await ws.receive_json())["type"], "response.cancelled")
+                self.assertIn("网关 interrupted 来源=客户端主动取消", logs.output[0])
+                self.assertEqual(self.gateway.status()["records"][0]["result"], "interrupted")
             self.assertTrue(self.upstream_sockets[0].closed)
             self.assertEqual(len(self.calls), 1)
             self.assertEqual((await self.send_turn(ws, input="next"))["type"], "response.completed")
             self.assertEqual(len(self.upstream_sockets), 2)
+
+    async def test_websocket_logs_client_close_during_generation(self):
+        self.accounts[1].enabled = False
+        self.script = [message_events("active", ["partial"])[:4]]
+        with self.assertLogs("core.gateway_protocol", "WARNING") as logs:
+            async with self.client.ws_connect(self.url) as ws:
+                await ws.send_json({"type": "response.create", "model": "m", "input": "first"})
+                self.assertEqual((await ws.receive_json(timeout=4))["type"], "response.created")
+            async with asyncio.timeout(4):
+                while not self.gateway.status()["records"]:
+                    await asyncio.sleep(0.01)
+        self.assertIn("网关 interrupted 来源=客户端连接关闭", logs.output[0])
+        self.assertEqual(self.gateway.status()["records"][0]["result"], "interrupted")
+
+    async def test_websocket_logs_upstream_transport_error(self):
+        self.accounts[1].enabled = False
+        with (
+            patch.object(self.gateway.client, "ws_connect", side_effect=ServerDisconnectedError("private details")),
+            self.assertLogs("core.gateway_protocol", "WARNING") as logs,
+        ):
+            async with self.client.ws_connect(self.url) as ws:
+                error = await self.send_turn(ws, model="m", input="private input")
+                self.assertEqual((error["type"], error["code"]), ("error", "gateway_error"))
+        self.assertEqual(
+            [record.getMessage() for record in logs.records],
+            ["网关 interrupted 来源=上游传输异常 账号='A' 账号ID='A' 模型='m' 协议=WS 异常类型=ServerDisconnectedError"],
+        )
+        self.assertEqual(self.gateway.status()["records"][0]["result"], "interrupted")
 
     async def test_websocket_reconnects_on_account_or_model_change(self):
         self.script = [message_events(str(i), ["ok"]) for i in range(3)]

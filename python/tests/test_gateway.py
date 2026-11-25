@@ -277,6 +277,50 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(diagnostic["reason"], "site_block")
             self.assertEqual(diagnostic["operation"], "WS /v1/responses")
 
+    async def test_websocket_request_logs_distinct_upstream_502_sources(self):
+        async def websocket(request):
+            if scenario == "fallback":
+                return web.Response(status=405)
+            if scenario == "handshake":
+                return web.Response(status=502)
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            await ws.receive_json()
+            await ws.close(code=1011, message=b"private close reason")
+            return ws
+
+        async def post(_request):
+            return web.json_response(
+                {"error": {"type": "invalid_request_error", "message": "private upstream data"}},
+                status=502,
+            )
+
+        app = web.Application()
+        app.router.add_get("/responses", websocket)
+        app.router.add_post("/responses", post)
+        async with TestServer(app) as origin:
+            self.accounts[1].enabled = False
+            self.accounts[0].base = str(origin.make_url("")).rstrip("/")
+            for scenario, diagnostic in (
+                (
+                    "disconnect",
+                    "来源=上游WebSocket断开 账号='A' 账号ID='A' 请求=WS /v1/responses 帧类型=CLOSE 关闭码=1011",
+                ),
+                ("handshake", "来源=上游WebSocket握手HTTP响应 账号='A' 账号ID='A' 请求=WS /v1/responses"),
+                (
+                    "fallback",
+                    "来源=上游HTTP响应 账号='A' 账号ID='A' 请求=POST /v1/responses 上游错误码=invalid_request_error",
+                ),
+            ):
+                self.gateway.scheduler.cooldown.clear()
+                with self.subTest(scenario=scenario), self.assertLogs("core.gateway_protocol", "WARNING") as logs:
+                    async with self.client.ws_connect(self.base + "/responses", headers=self.headers()) as ws:
+                        await ws.send_json({"type": "response.create", "model": "test", "input": "private input"})
+                        event = await ws.receive_json(timeout=5)
+                        self.assertEqual((event["type"], event["code"]), ("error", "invalid_request_error"))
+                    self.assertEqual(self.gateway.status()["records"][0]["result"], "502 invalid_request_error")
+                    self.assertEqual([record.getMessage() for record in logs.records], ["网关 502 " + diagnostic])
+
     async def test_switch_configures_live_gateway_before_desktop_launch(self):
         await self.gateway.unlisten(True)
         ca = self.store.directory / "forge-gateway-ca.pem"

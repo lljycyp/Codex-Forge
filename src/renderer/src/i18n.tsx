@@ -386,8 +386,6 @@ const en: Record<string, string> = {
   "使用当前路径": "Use current path",
   "更改位置": "Change location",
   "已保存账号资料根目录": "Account profile root saved",
-  "隐私模式": "Privacy mode",
-  "隐藏账号邮箱、账号编号和系统用户名，便于截图或屏幕共享。": "Hide account email, account ID, and Windows username for screenshots or screen sharing.",
   "复制诊断报告": "Copy diagnostics",
   "诊断报告已复制": "Diagnostics copied",
   "复制诊断报告失败": "Failed to copy diagnostics",

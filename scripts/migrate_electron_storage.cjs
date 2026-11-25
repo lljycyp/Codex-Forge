@@ -23,12 +23,10 @@ app.whenReady().then(async () => {
     const result = await window.webContents.executeJavaScript(`(() => {
       if (${JSON.stringify(seedTestValues)}) {
         localStorage.setItem("chatgptForgeLanguage", "en-US");
-        localStorage.setItem("chatgptForgePrivacyMode", "true");
         localStorage.setItem("chatgptForgeWorkspaceTab", "mcp");
       }
       const mappings = [
         ["chatgptForgeLanguage", "codexForgeLanguage"],
-        ["chatgptForgePrivacyMode", "codexForgePrivacyMode"],
         ["chatgptForgeWorkspaceTab", "codexForgeWorkspaceTab"],
       ];
       const migrated = [];

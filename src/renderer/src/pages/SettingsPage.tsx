@@ -1,15 +1,13 @@
 import { useEffect, useState } from "react";
 import { Button, Form, Input, InputNumber, message, Modal, Radio, Space, Switch } from "antd";
-import { Bell, ClipboardCopy, EyeOff, FolderOpen, Github, HardDrive, Info, Power, RefreshCw } from "lucide-react";
+import { Bell, ClipboardCopy, FolderOpen, Github, HardDrive, Info, Power, RefreshCw } from "lucide-react";
 import { invokeLauncher } from "../api/launcher";
 import { useI18n } from "../i18n";
 import type { AppState, RunCommand } from "../types";
 
 type SettingsPageProps = {
   appState: AppState;
-  privacyMode: boolean;
   runCommand: RunCommand;
-  onPrivacyModeChange: (enabled: boolean) => void;
 };
 
 function GiteeIcon({ size = 16 }: { size?: number }) {
@@ -31,7 +29,7 @@ function GiteeIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeChange }: SettingsPageProps) {
+export function SettingsPage({ appState, runCommand }: SettingsPageProps) {
   const { language, setLanguage, t } = useI18n();
   const [form] = Form.useForm();
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
@@ -304,21 +302,6 @@ export function SettingsPage({ appState, privacyMode, runCommand, onPrivacyModeC
               <Radio.Button value="zh-CN">{t("中文")}</Radio.Button>
               <Radio.Button value="en-US">{t("English")}</Radio.Button>
             </Radio.Group>
-          </div>
-        </div>
-
-        <div className="mb-4 rounded-xl border border-[#e4ebf3] bg-slate-50/50 p-6">
-          <div className="flex items-center justify-between gap-6">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 font-semibold text-slate-700">
-                <EyeOff size={16} />
-                {t("隐私模式")}
-              </div>
-              <div className="mt-1 text-sm leading-6 text-slate-500">
-                {t("隐藏账号邮箱、账号编号和系统用户名，便于截图或屏幕共享。")}
-              </div>
-            </div>
-            <Switch checked={privacyMode} onChange={onPrivacyModeChange} />
           </div>
         </div>
 

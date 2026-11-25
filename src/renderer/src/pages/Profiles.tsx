@@ -43,7 +43,6 @@ type ProfilesProps = {
   profiles: ProfileSummary[];
   runningCount: number;
   systemAuthMode: AppState["systemAuthMode"];
-  privacyMode: boolean;
   runCommand: RunCommand;
   onUsageUpdated: (profileId: string, usage: ProfileUsage) => void;
   loading: boolean;
@@ -91,7 +90,7 @@ const profileRowBaseClass =
 const profilePillBaseClass =
   "inline-flex h-[22px] items-center rounded-[6px] px-2 text-[11.5px] font-bold leading-none border";
 
-export function Profiles({ profiles, runningCount, systemAuthMode, privacyMode, runCommand, onUsageUpdated, loading }: ProfilesProps) {
+export function Profiles({ profiles, runningCount, systemAuthMode, runCommand, onUsageUpdated, loading }: ProfilesProps) {
   const { language, t } = useI18n();
   const [createOpen, setCreateOpen] = useState(false);
   const [createMode, setCreateMode] = useState<"oauth" | "current" | "file">("oauth");
@@ -254,7 +253,7 @@ export function Profiles({ profiles, runningCount, systemAuthMode, privacyMode, 
       title: t(pending ? "重试重置额度" : "确认重置额度"),
       content: (
         <div className="grid gap-2">
-          <div>{t("账号")} · {maskSensitive(profile.name, privacyMode)}</div>
+          <div>{t("账号")} · {profile.name}</div>
           {attempt.workspaceName ? <div>{t("工作区")} · {attempt.workspaceName}</div> : null}
           {attempt.credit ? <div>{t("所选卡到期时间")} · {attempt.credit.expiresAt == null ? t("无到期时间") : formatTimestamp(attempt.credit.expiresAt, language)}</div> : null}
           <div>{t(pending ? "将核对上次重置结果，已完成的操作不会再次扣次。" : "将消耗 1 次重置权益。")}</div>
@@ -522,7 +521,6 @@ export function Profiles({ profiles, runningCount, systemAuthMode, privacyMode, 
           <ProfileInspector
             profile={selectedProfile}
             recommendedProfileName={recommendedProfileName}
-            privacyMode={privacyMode}
             language={language}
             t={t}
             refreshing={selectedProfile ? pendingUsageProfileNames.has(selectedProfile.name) : false}
@@ -708,7 +706,6 @@ export function Profiles({ profiles, runningCount, systemAuthMode, privacyMode, 
           <ProfileDetailPanel
             detail={currentDetail}
             language={language}
-            privacyMode={privacyMode}
             t={t}
             onToggleRunning={toggleProfileRunning}
             onRefreshUsage={refreshDetailUsage}
@@ -797,7 +794,6 @@ function RuntimeMetric({ label, value, tone }: { label: string; value: number; t
 function ProfileInspector({
   profile,
   recommendedProfileName,
-  privacyMode,
   language,
   t,
   refreshing,
@@ -815,7 +811,6 @@ function ProfileInspector({
 }: {
   profile: ProfileSummary | null;
   recommendedProfileName: string;
-  privacyMode: boolean;
   language: "zh-CN" | "en-US";
   t: (text: string) => string;
   refreshing: boolean;
@@ -900,7 +895,7 @@ function ProfileInspector({
             label: t("运行环境"),
             children: (
               <div className="grid gap-2.5 pb-4">
-                <InspectorRow label={t("账号目录")} value={maskPath(profile.profileDir, privacyMode)} />
+                <InspectorRow label={t("账号目录")} value={profile.profileDir} />
                 <InspectorRow label="auth.json" value={profile.authExists ? t("存在") : t("缺失")} />
                 <InspectorRow label="config.toml" value={profile.configExists ? t("存在") : t("缺失")} />
                 <Button icon={<FolderOpen size={14} />} onClick={openProfilePath}>{t("打开目录")}</Button>
@@ -947,7 +942,6 @@ function InspectorRow({ label, value }: { label: string; value: string }) {
 function ProfileDetailPanel({
   detail,
   language,
-  privacyMode,
   t,
   onToggleRunning,
   onRefreshUsage,
@@ -956,7 +950,6 @@ function ProfileDetailPanel({
 }: {
   detail: ProfileDetail;
   language: "zh-CN" | "en-US";
-  privacyMode: boolean;
   t: (text: string) => string;
   onToggleRunning: (profile: ProfileSummary) => void;
   onRefreshUsage: (profile: ProfileDetail) => Promise<void>;
@@ -968,8 +961,8 @@ function ProfileDetailPanel({
   const planText = detail.auth.authMode === "api"
     ? "API Key"
     : formatPlanType(detail.auth.planType || detail.usage?.planType, t);
-  const accountId = maskSensitive(detail.auth.accountId || "-", privacyMode);
-  const email = maskSensitive(detail.auth.email || "-", privacyMode);
+  const accountId = detail.auth.accountId || "-";
+  const email = detail.auth.email || "-";
 
   return (
     <div className="min-h-full bg-[#f7f9fc]">
@@ -1060,7 +1053,7 @@ function ProfileDetailPanel({
                         [t("限制状态"), detail.usage?.rateLimitReachedType ? t("已触发") : t("未触发")],
                         [t("当前账号"), detail.active ? t("是") : t("否")],
                         [t("运行状态"), detail.running ? t("运行中") : t("就绪")],
-                        [t("账号目录"), maskPath(detail.profileDir, privacyMode)],
+                        [t("账号目录"), detail.profileDir],
                       ]}
                     />
                   </div>
@@ -1092,9 +1085,9 @@ function ProfileDetailPanel({
                 label: t("文件位置"),
                 children: (
                   <div className="grid gap-3">
-                    <PathRow label={t("账号目录")} path={detail.profileDir} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
-                    <PathRow label="auth.json" path={detail.authPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
-                    <PathRow label="config.toml" path={detail.configPath} privacyMode={privacyMode} t={t} onOpenPath={onOpenPath} />
+                    <PathRow label={t("账号目录")} path={detail.profileDir} t={t} onOpenPath={onOpenPath} />
+                    <PathRow label="auth.json" path={detail.authPath} t={t} onOpenPath={onOpenPath} />
+                    <PathRow label="config.toml" path={detail.configPath} t={t} onOpenPath={onOpenPath} />
                   </div>
                 ),
               },
@@ -1192,17 +1185,14 @@ function InfoGrid({ rows }: { rows: Array<[string, string]> }) {
 function PathRow({
   label,
   path,
-  privacyMode,
   t,
   onOpenPath,
 }: {
   label: string;
   path: string;
-  privacyMode: boolean;
   t: (text: string) => string;
   onOpenPath: (path: string) => void;
 }) {
-  const visiblePath = maskPath(path, privacyMode);
   const copyPath = async () => {
     await navigator.clipboard.writeText(path);
     message.success(t("路径已复制"));
@@ -1210,8 +1200,8 @@ function PathRow({
   return (
     <div className="grid grid-cols-[120px_minmax(0,1fr)_auto] items-center gap-3 rounded-[9px] border border-slate-200 bg-white px-4 py-3 max-[720px]:grid-cols-1">
       <div className="text-sm font-bold text-slate-600">{label}</div>
-      <Tooltip title={visiblePath}>
-        <div className="min-w-0 truncate font-mono text-xs text-slate-500">{visiblePath}</div>
+      <Tooltip title={path}>
+        <div className="min-w-0 truncate font-mono text-xs text-slate-500">{path}</div>
       </Tooltip>
       <Space.Compact>
         <Button size="small" onClick={() => void copyPath()}>{t("复制")}</Button>
@@ -1465,22 +1455,4 @@ function formatCreditExpiries(values: number[] | null | undefined, language: "zh
     return "-";
   }
   return values.map((value, index) => `${index + 1}. ${formatTimestamp(value, language)}`).join("\n");
-}
-
-function maskSensitive(value: string, enabled: boolean) {
-  if (!enabled || !value || value === "-") {
-    return value;
-  }
-  if (value.includes("@")) {
-    const [name, domain] = value.split("@");
-    return `${name.slice(0, 2)}***@${domain}`;
-  }
-  return value.length <= 8 ? "***" : `${value.slice(0, 4)}***${value.slice(-4)}`;
-}
-
-function maskPath(value: string, enabled: boolean) {
-  if (!enabled) {
-    return value;
-  }
-  return value.replace(/C:\\Users\\[^\\/]+/gi, "C:\\Users\\<user>");
 }

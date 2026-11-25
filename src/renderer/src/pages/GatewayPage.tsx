@@ -38,7 +38,7 @@ type Status = {
 const panel = "grid grid-cols-1 gap-4 rounded-panel border border-shell-line bg-white p-5";
 const heading = "m-0 text-base font-bold text-slate-900";
 
-export function GatewayPage({ privacy }: { privacy: boolean }) {
+export function GatewayPage() {
   const { t } = useI18n();
   const formatCount = (n?: number) => n == null ? t("未知") : n.toLocaleString();
   const [status, setStatus] = useState<Status>();
@@ -120,7 +120,6 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
     }
   }
 
-  const showName = (value: string) => privacy ? "••••" : value;
   const workspaceFailure = status?.workspaceFailure;
   const upstreamForbidden = status?.lastUpstreamForbidden;
   const websocket = status?.websocket;
@@ -147,7 +146,7 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
     {upstreamForbidden && <Alert showIcon type="warning" message={t("最近一次网关上游拒绝（HTTP 403）")}
       description={[
         new Date(upstreamForbidden.at * 1000).toLocaleString(),
-        `${t("池内账号")} ${showName(upstreamForbidden.account)}`,
+        `${t("池内账号")} ${upstreamForbidden.account}`,
         upstreamForbidden.operation,
         t(upstreamReasons[upstreamForbidden.reason]),
         ...(upstreamForbidden.reason === "provider_error" ? [upstreamForbidden.code] : []),
@@ -171,7 +170,7 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
         message={`${t("最近一次 WebSocket 握手 429")} · ${rejectionReason}`}
         description={<div className="flex flex-wrap gap-x-4 gap-y-1">
           <span>{new Date(rejection.at * 1000).toLocaleString()}</span>
-          <span>{t("来源")} {rejection.ownerId === "local" ? t("本机") : showName(rejection.ownerName)}</span>
+          <span>{t("来源")} {rejection.ownerId === "local" ? t("本机") : rejection.ownerName}</span>
           <span>{t("WebSocket 连接")} {rejection.keyConnections} / {websocket.perKeyLimit}</span>
           <span>{t("WebSocket 总连接")} {rejection.totalConnections} / {websocket.limit}</span>
         </div>} /> : null}
@@ -206,7 +205,7 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
       </div>
       <Table<AccessKey> size="small" rowKey="id" pagination={false} scroll={{ x: 740 }} dataSource={status?.keys || []}
         columns={[
-          { title: t("名称"), dataIndex: "name", render: (v: string, row) => row.id === "local" ? t("本机") : showName(v) },
+          { title: t("名称"), dataIndex: "name", render: (v: string, row) => row.id === "local" ? t("本机") : v },
           { title: t("WebSocket 连接"), render: (_, row) => (
             <span className="whitespace-nowrap" title={t("占用包含正在握手的连接")}>
               {websocket && row.websocketConnections !== undefined ? `${row.websocketConnections} / ${websocket.perKeyLimit}` : "—"}
@@ -232,7 +231,7 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
     <section className={panel}>
       <h2 className={heading}>{t("参与调度的账号")}</h2>
       <Table<Account> rowKey="id" size="small" pagination={false} dataSource={status?.accounts || []} columns={[
-        { title:t("账号"), dataIndex:"name", render:(v:string) => showName(v) },
+        { title:t("账号"), dataIndex:"name" },
         { title:t("状态"), render:(_, row) => t(row.reason || (row.enabled ? "可用" : "已停用")) },
         { title:t("正在处理"),dataIndex:"active" },
         { title:t("并发上限"),render:(_, row) => <Select aria-label={t("并发上限")} size="small" disabled={busy} value={row.cap}
@@ -247,8 +246,8 @@ export function GatewayPage({ privacy }: { privacy: boolean }) {
       <Table<Log> rowKey="id" size="small" pagination={{pageSize:8,hideOnSinglePage:true}} scroll={{ x: 940 }} dataSource={status?.records || []}
         columns={[
           {title:t("时间"),dataIndex:"at",render:n => new Date(n*1000).toLocaleTimeString()},
-          {title:t("来源"),dataIndex:"owner",render:(v:string) => showName(v)},
-          {title:t("账号"),dataIndex:"account",render:(v:string) => showName(v)}, {title:t("模型"),dataIndex:"model"},
+          {title:t("来源"),dataIndex:"owner"},
+          {title:t("账号"),dataIndex:"account"}, {title:t("模型"),dataIndex:"model"},
           {title:t("协议"),dataIndex:"protocol"}, {title:t("结果"),dataIndex:"result"},
           {title:t("输入 Token"),dataIndex:"inputTokens",align:"right",render:formatCount},
           {title:t("缓存命中 Token"),dataIndex:"cachedTokens",align:"right",render:formatCount},

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Layout, Modal, Progress, Segmented, message } from "antd";
-import { Boxes, Code2, FileText, Home, LoaderCircle, Network, Palette, Settings, ShieldCheck } from "lucide-react";
+import { Boxes, Code2, FileText, Home, LoaderCircle, Network, Palette, Settings, ShieldCheck, UserRound } from "lucide-react";
 
 import { AppLayout } from "./components/AppLayout";
 import { getViewMeta } from "./constants/views";
@@ -20,7 +20,6 @@ const GatewayPage = lazy(() => import("./pages/GatewayPage").then(m => ({ defaul
 const { Content } = Layout;
 const runtimeStatusPollMs = 3 * 1000;
 const usageAutoRefreshMs = 5 * 60 * 1000;
-const privacyModeStorageKey = "codexForgePrivacyMode";
 const launchModeStorageKey = "forge.home.routing";
 type LaunchMode = "balanced" | "account";
 type UpdateModalEvent = Exclude<UpdateEvent, { status: "error" } | { status: "not-available" }>;
@@ -132,12 +131,6 @@ export default function App() {
   const [updateEvent, setUpdateEvent] = useState<UpdateModalEvent | null>(null);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [showUpdateProgress, setShowUpdateProgress] = useState(false);
-  const [privacyMode, setPrivacyModeState] = useState(() => localStorage.getItem(privacyModeStorageKey) === "1");
-
-  const setPrivacyMode = useCallback((enabled: boolean) => {
-    localStorage.setItem(privacyModeStorageKey, enabled ? "1" : "0");
-    setPrivacyModeState(enabled);
-  }, []);
 
   useEffect(() => {
     activeViewRef.current = activeView;
@@ -513,11 +506,14 @@ export default function App() {
         sidebarFooter={
           <Segmented<LaunchMode>
             block
-            className="[&_.ant-segmented-item]:min-w-0 [&_.ant-segmented-item-label]:grid [&_.ant-segmented-item-label]:min-h-9 [&_.ant-segmented-item-label]:place-items-center [&_.ant-segmented-item-label]:whitespace-normal [&_.ant-segmented-item-label]:!px-1 [&_.ant-segmented-item-label]:text-xs [&_.ant-segmented-item-label]:font-semibold [&_.ant-segmented-item-label]:leading-tight"
+            className="forge-launch-mode"
             aria-label={t("启动模式")}
             value={balanced ? "balanced" : "account"}
             disabled={initialLoading || launchingBalanced || pendingMode !== null}
-            options={[{ label: t("指定账号"), value: "account" }, { label: t("负载均衡"), value: "balanced" }]}
+            options={[
+              { label: t("指定账号"), value: "account", icon: <UserRound size={16} aria-hidden /> },
+              { label: t("负载均衡"), value: "balanced", icon: <Network size={16} aria-hidden /> },
+            ]}
             onChange={(value) => void switchMode(value)}
           />
         }
@@ -547,13 +543,12 @@ export default function App() {
               profiles={profiles}
               runningCount={appState.runningCount}
               systemAuthMode={appState.systemAuthMode}
-              privacyMode={privacyMode}
               runCommand={runCommand}
               onUsageUpdated={updateProfileUsage}
               loading={commandingView === "profiles" || refreshingView === "profiles"}
             />
           ) : null}
-          {activeView === "gateway" ? <Suspense fallback={null}><GatewayPage privacy={privacyMode} /></Suspense> : null}
+          {activeView === "gateway" ? <Suspense fallback={null}><GatewayPage /></Suspense> : null}
           {activeView === "workspace" ? (
             <WorkspacePage appState={appState} profiles={profiles} onDirtyChange={setWorkspaceDirty} />
           ) : null}
@@ -569,9 +564,7 @@ export default function App() {
           {activeView === "settings" ? (
             <SettingsPage
               appState={appState}
-              privacyMode={privacyMode}
               runCommand={runCommand}
-              onPrivacyModeChange={setPrivacyMode}
             />
           ) : null}
         </Content>
