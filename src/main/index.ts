@@ -27,6 +27,7 @@ let latestUpdateVersion = "";
 let latestUpdateReleaseNotes = "";
 let checkingUpdateManually = false;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
+const isWindows = process.platform === "win32";
 
 type UpdateEvent =
   | {
@@ -199,11 +200,12 @@ function createTray(): void {
   void refreshTrayMenu();
   tray.on("click", showMainWindow);
   tray.on("double-click", showMainWindow);
-  tray.on("right-click", () => void refreshTrayMenu());
+  // Windows opens a registered context menu without emitting right-click.
+  tray.on("right-click", () => void refreshTrayMenu(isWindows));
 }
 
-async function refreshTrayMenu(): Promise<void> {
-  if (!tray) {
+async function refreshTrayMenu(popup = false): Promise<void> {
+  if (!tray || (isWindows && !popup)) {
     return;
   }
   let activeProfile = "未选择";
@@ -237,8 +239,8 @@ async function refreshTrayMenu(): Promise<void> {
       await refreshTrayMenu();
     },
   }));
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
+  const menu = Menu.buildFromTemplate(
+    [
       { label: `当前账号：${activeProfile}`, enabled: false },
       { label: `运行实例：${runningCount}`, enabled: false },
       { type: "separator" },
@@ -281,7 +283,7 @@ async function refreshTrayMenu(): Promise<void> {
       {
         label: "刷新托盘状态",
         click: () => {
-          void refreshTrayMenu();
+          void refreshTrayMenu(isWindows);
         },
       },
       { type: "separator" },
@@ -294,8 +296,13 @@ async function refreshTrayMenu(): Promise<void> {
           app.quit();
         },
       },
-    ]),
+    ],
   );
+  if (popup) {
+    tray.popUpContextMenu(menu);
+  } else {
+    tray.setContextMenu(menu);
+  }
 }
 
 if (!gotSingleInstanceLock) {
