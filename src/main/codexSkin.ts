@@ -203,6 +203,11 @@ html[data-codex-forge-skin="active"] [data-radix-popper-content-wrapper] > * {
   backdrop-filter: blur(18px) saturate(108%);
 }
 
+/* Backdrop filters on the popover host prevent the project card from resolving its anchor. */
+html[data-codex-forge-skin="active"] [role="dialog"][popover]:has([class~="group/project-hover-card-row"]) {
+  backdrop-filter: none;
+}
+
 html[data-codex-forge-skin="active"] .composer-surface-chrome {
   background-color: rgb(var(--forge-skin-panel) / .72) !important;
   border-color: rgb(var(--forge-skin-line) / .18) !important;

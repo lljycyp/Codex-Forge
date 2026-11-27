@@ -44,9 +44,11 @@ ChatGPT 订阅账号的周额度或 5 小时额度剩余超过 1% 且不超过 2
 
 ## 回答中途遇到额度限制
 
-使用 ChatGPT Team（现称 Business）或个人订阅登录时，一次进行中的回答始终使用原席位。收到明确的可恢复额度错误后，Forge 保留当前问题、已完成的上下文和已经显示的文字，等候上游给出的恢复时间，再用原席位续写。没有恢复时间时，首次等待 60 秒，后续逐步延长至 15 分钟。工作区已开通共享点数时，点数及消费上限仍由上游执行。[Business 点数与消费控制](https://help.openai.com/en/articles/20001155-managing-credits-and-spend-controls-in-chatgpt-business)
+使用 ChatGPT Team（现称 Business）或个人订阅登录时，收到明确的账号额度用尽错误后，Forge 会优先把可以安全续写的回答转给支持同一模型、还有并发名额的其他可用订阅账号。切换时会保留本轮问题、已完成的上下文和已显示的文字。工作区、组织等共享限额仍在原账号处理，Forge 也会排除与原账号共享同一 ChatGPT 工作区的候选账号。[Business 点数与消费控制](https://help.openai.com/en/articles/20001155-managing-credits-and-spend-controls-in-chatgpt-business)
 
-等待期间「负载均衡 → 参与调度的账号」会显示「等待额度恢复后续写」。请保持 Forge 和该次请求的连接开启。等待占用这次请求原有的并发名额，可在 Codex 中随时停止。访问 Key 被撤销、席位被禁用或连接断开时，网关会释放名额。若原席位凭证在等待中到期，账号管理更新同一身份的登录后即可继续。退出 Forge 会结束正在等待的请求。
+没有可用的其他账号时，Forge 可等候原账号恢复。首次额度错误未提供恢复时间时，按 60 秒估算。自动续写的等待期限为首次额度错误后的 90 秒。预计在期限内无法恢复，或等到期限仍无法续写时，Forge 会返回错误并释放并发名额。在 Codex 重试本轮时，网关会重新调度。
+
+等待期间「负载均衡 → 参与调度的账号」会显示「等待额度恢复后续写」。请保持 Forge 和该次请求的连接开启。等待占用这次请求原有的并发名额，可在 Codex 中随时停止。访问 Key 被撤销、席位被禁用或连接断开时，网关会释放名额。若原席位凭证在等待中到期，在等待期限内更新同一身份的登录后可继续。退出 Forge 会结束正在等待的请求。
 
 续写沿用原回答和消息 ID，只追加后续文字。Forge 会去掉衔接处可识别的逐字重复，重新生成的后半段仍可能有措辞差异。当本轮已经发出工具调用而执行结果尚未确认时，Forge 会交回上游错误，避免重复执行命令或写文件。权限错误、账单硬限制和普通网络断开也会直接交回错误。
 
@@ -65,7 +67,7 @@ base_url = "https://RESOURCE.openai.azure.com/openai/v1"
 http_headers = { x-ms-spillover-deployment = "secondary" }
 ```
 
-上游明确报告主部署的限流时，Forge 使用原资源地址和原 API 凭证，在已登记的备用部署上续写。组织或工作区限额、作用范围不明的限流均留在原部署等待。备用部署本身的配额与费用由云端执行。[Azure 部署配额](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/quota)
+上游明确报告主部署的限流时，Forge 使用原资源地址和原 API 凭证，在已登记的备用部署上续写。组织或工作区限额、作用范围不明的限流均留在原部署等待，也适用 90 秒等待期限。备用部署本身的配额与费用由云端执行。[Azure 部署配额](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/quota)
 
 ## 支持的协议与状态
 

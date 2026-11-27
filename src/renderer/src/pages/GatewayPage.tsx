@@ -6,7 +6,7 @@ import { useI18n } from "../i18n";
 
 type AccessKey = {
   id: string; name: string; cap: number | string | null; enabled: number | boolean; expires: number;
-  calls: number; active: number; waiting: number; websocketConnections?: number;
+  calls: number; active: number; waiting: number; websocketConnections?: number; websocketLimit?: number;
 };
 type Account = { id: string; name: string; cap: number; enabled: boolean; active: number; reason: string };
 type Log = {
@@ -15,7 +15,7 @@ type Log = {
 };
 type WebSocketRejection = {
   at: number; ownerId: string; ownerName: string; keyConnections: number; totalConnections: number;
-  keyLimitReached: boolean; totalLimitReached: boolean;
+  keyLimit?: number;
 };
 type UpstreamForbidden = {
   at: number; account: string; operation: string; code: string;
@@ -33,7 +33,7 @@ type Status = {
   waiting: number; active: number; error: string;
   workspaceFailure?: { at: number; route: string; status: number } | null;
   lastUpstreamForbidden?: UpstreamForbidden | null;
-  websocket?: { connections: number; limit: number; perKeyLimit: number; lastRejection: WebSocketRejection | null };
+  websocket?: { connections: number; perKeyLimit: number; lastRejection: WebSocketRejection | null };
 };
 const panel = "grid grid-cols-1 gap-4 rounded-panel border border-shell-line bg-white p-5";
 const heading = "m-0 text-base font-bold text-slate-900";
@@ -48,6 +48,7 @@ export function GatewayPage() {
   const [port, setPort] = useState<number>();
   const [keyEditor, setKeyEditor] = useState<"create" | AccessKey>();
   const [name, setName] = useState("");
+  const [websocketLimit, setWebsocketLimit] = useState<number | null>(null);
   const [cap, setCap] = useState("2");
   const [unlimited, setUnlimited] = useState(false);
   const [days, setDays] = useState(0);
@@ -84,7 +85,7 @@ export function GatewayPage() {
     try {
       const res = await invokeLauncher<{ key?: string; saved?: boolean }>("gateway_" + command, payload);
       if (res.key) { setKeyEditor(undefined); setName(""); setFreshKey(res.key); }
-      if (command === "key" && payload.action === "set_cap") {
+      if (command === "key" && payload.action === "edit") {
         setKeyEditor(undefined);
         message.success(t("已保存"));
       }
@@ -104,19 +105,23 @@ export function GatewayPage() {
   }
   function openKeyEditor(key: "create" | AccessKey) {
     setKeyEditor(key);
+    setName(key === "create" ? "" : key.name);
+    setWebsocketLimit(key === "create" ? null : key.websocketLimit ?? status?.websocket?.perKeyLimit ?? null);
     setCap(key === "create" || key.cap === null ? "2" : String(key.cap));
     setUnlimited(key !== "create" && key.cap === null);
   }
 
   const creating = keyEditor === "create";
   const capValid = unlimited || /^0*[1-9][0-9]*$/.test(cap.trim());
+  const websocketLimitValid = websocketLimit !== null && Number.isSafeInteger(websocketLimit) && websocketLimit > 0;
+  const keyValid = !!name.trim() && capValid && (creating || websocketLimitValid);
   function saveKey() {
-    if (!keyEditor || !capValid) return;
+    if (!keyEditor || !keyValid) return;
     const limit = unlimited ? null : cap.trim();
     if (keyEditor === "create") {
-      if (name.trim()) void change("key", { action: "create", name, cap: limit, days });
+      void change("key", { action: "create", name, cap: limit, days });
     } else {
-      void change("key", { action: "set_cap", id: keyEditor.id, cap: limit });
+      void change("key", { action: "edit", id: keyEditor.id, name, cap: limit, websocketLimit });
     }
   }
 
@@ -124,10 +129,6 @@ export function GatewayPage() {
   const upstreamForbidden = status?.lastUpstreamForbidden;
   const websocket = status?.websocket;
   const rejection = websocket?.lastRejection;
-  const rejectionReason = rejection ? [
-    rejection.keyLimitReached && t("该 Key 连接已满"),
-    rejection.totalLimitReached && t("网关总连接已满"),
-  ].filter(Boolean).join(" · ") : "";
   const selectedAddress = address || status?.address || status?.addresses[0] || "";
   const selectedPort = port ?? status?.port ?? 19381;
   const snippet = [
@@ -161,18 +162,18 @@ export function GatewayPage() {
         <Tag color={status?.enabled ? "green" : "default"}>{t(status?.enabled ? "运行中" : "已停止")}</Tag>
         <span>{t("本机地址")} <code>{status?.base || "—"}</code></span>
         <span title={t("占用包含正在握手的连接")}>
-          {t("WebSocket 总连接")} <strong>{websocket ? `${websocket.connections} / ${websocket.limit}` : "—"}</strong>
+          {t("WebSocket 总连接")} <strong>{websocket?.connections ?? "—"}</strong>
         </span>
         <span>{t("正在处理")} <strong>{status?.active ?? 0}</strong></span>
         <span>{t("排队")} <strong>{status?.waiting ?? 0}</strong></span>
       </div>
       {websocket && rejection ? <Alert showIcon type="warning"
-        message={`${t("最近一次 WebSocket 握手 429")} · ${rejectionReason}`}
+        message={`${t("最近一次 WebSocket 握手 429")} · ${t("该 Key 连接已满")}`}
         description={<div className="flex flex-wrap gap-x-4 gap-y-1">
           <span>{new Date(rejection.at * 1000).toLocaleString()}</span>
           <span>{t("来源")} {rejection.ownerId === "local" ? t("本机") : rejection.ownerName}</span>
-          <span>{t("WebSocket 连接")} {rejection.keyConnections} / {websocket.perKeyLimit}</span>
-          <span>{t("WebSocket 总连接")} {rejection.totalConnections} / {websocket.limit}</span>
+          <span>{t("WebSocket 连接")} {rejection.keyConnections} / {rejection.keyLimit ?? websocket.perKeyLimit}</span>
+          <span>{t("WebSocket 总连接")} {rejection.totalConnections}</span>
         </div>} /> : null}
     </section>
     <section className={panel}>
@@ -208,7 +209,7 @@ export function GatewayPage() {
           { title: t("名称"), dataIndex: "name", render: (v: string, row) => row.id === "local" ? t("本机") : v },
           { title: t("WebSocket 连接"), render: (_, row) => (
             <span className="whitespace-nowrap" title={t("占用包含正在握手的连接")}>
-              {websocket && row.websocketConnections !== undefined ? `${row.websocketConnections} / ${websocket.perKeyLimit}` : "—"}
+              {websocket && row.websocketConnections !== undefined ? `${row.websocketConnections} / ${row.websocketLimit ?? websocket.perKeyLimit}` : "—"}
             </span>
           ) },
           { title: t("生成并发"), render: (_, row) => {
@@ -256,11 +257,18 @@ export function GatewayPage() {
           {title:t("耗时"),dataIndex:"ms",render:n => (n/1000).toFixed(1)+" s"},
         ]} />
     </section>
-    <Modal title={t(creating ? "创建 Key" : "编辑生成并发上限")} open={!!keyEditor} confirmLoading={busy}
-      okText={t("保存")} cancelText={t("取消")} okButtonProps={{ disabled: !capValid || (creating && !name.trim()) }}
+    <Modal title={t(creating ? "创建 Key" : "编辑 Key")} open={!!keyEditor} confirmLoading={busy}
+      okText={t("保存")} cancelText={t("取消")} okButtonProps={{ disabled: !keyValid }}
       onCancel={() => { if (!busy) setKeyEditor(undefined); }} onOk={saveKey}>
       <div className="grid gap-3">
-        {creating && <label>{t("使用者名称")}<Input autoFocus maxLength={64} disabled={busy} value={name} onChange={e => setName(e.target.value)} /></label>}
+        <label>{t("使用者名称")}<Input autoFocus maxLength={64} disabled={busy} value={name} onChange={e => setName(e.target.value)} /></label>
+        {!creating && <label>{t("WebSocket 连接上限")} <InputNumber min={1} max={Number.MAX_SAFE_INTEGER}
+          disabled={busy} value={websocketLimit} onChange={setWebsocketLimit}
+          status={websocketLimitValid ? undefined : "error"} aria-invalid={!websocketLimitValid}
+          aria-describedby={websocketLimitValid ? undefined : "gateway-key-ws-limit-error"} /></label>}
+        {!creating && !websocketLimitValid && <span id="gateway-key-ws-limit-error" className="text-sm text-red-600">
+          {t("WebSocket 连接上限必须为正整数")}
+        </span>}
         <Space wrap>
           <label>{t("生成并发上限")} <Input inputMode="numeric" value={unlimited ? "" : cap} disabled={busy || unlimited}
             className="w-40" status={capValid ? undefined : "error"} aria-invalid={!capValid}

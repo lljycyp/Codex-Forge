@@ -14,6 +14,7 @@ from core.secure_store import protect_bytes, unprotect_bytes
 MAX_RESOURCE = 24 * 1024 * 1024
 OWNER_BUDGET = 96 * 1024 * 1024
 TOTAL_BUDGET = 384 * 1024 * 1024
+DEFAULT_WS_CONNECTION_LIMIT = 12
 
 
 def digest(value):
@@ -57,6 +58,12 @@ class GatewayStore:
                 PRIMARY KEY(owner,id));
             CREATE INDEX IF NOT EXISTS objects_expiry ON objects(expires);
         """)
+        self.db.execute("BEGIN IMMEDIATE")
+        with self.db:
+            if not any(row["name"] == "websocketLimit" for row in self.db.execute("PRAGMA table_info(owners)")):
+                self.db.execute(
+                    f"ALTER TABLE owners ADD COLUMN websocketLimit INTEGER NOT NULL DEFAULT {DEFAULT_WS_CONNECTION_LIMIT}"
+                )
         self.purge()
 
     def purge(self):
@@ -72,7 +79,7 @@ class GatewayStore:
     def list_keys(self):
         return [
             _read_key(row)
-            for row in self.db.execute("SELECT id,name,enabled,cap,expires,calls FROM owners ORDER BY rowid")
+            for row in self.db.execute("SELECT id,name,enabled,cap,expires,calls,websocketLimit FROM owners ORDER BY rowid")
         ]
 
     def record_call(self, owner):
@@ -97,7 +104,7 @@ class GatewayStore:
                     raise ValueError("请检查名称和有效天数")
                 owner = secrets.token_hex(12)
                 self.db.execute(
-                    "INSERT INTO owners VALUES(?,?,?,1,?,?,0)",
+                    "INSERT INTO owners(id,name,hash,enabled,cap,expires,calls) VALUES(?,?,?,1,?,?,0)",
                     (owner, name, digest(key), cap, int(time.time()) + days * 86400 if days else 0),
                 )
             else:
@@ -107,6 +114,17 @@ class GatewayStore:
             self.db.execute("UPDATE owners SET enabled=? WHERE id=?", (bool(payload["enabled"]), owner))
         elif action == "set_cap":
             self.db.execute("UPDATE owners SET cap=? WHERE id=?", (_encode_key_cap(payload["cap"]), owner))
+        elif action == "edit":
+            name = str(payload.get("name") or "").strip()
+            limit = payload.get("websocketLimit")
+            if not name or len(name) > 64:
+                raise ValueError("请检查名称")
+            if type(limit) is not int or not 1 <= limit <= 2**53 - 1:
+                raise ValueError("WebSocket 连接上限必须为正整数")
+            self.db.execute(
+                "UPDATE owners SET name=?,cap=?,websocketLimit=? WHERE id=?",
+                (name, _encode_key_cap(payload["cap"]), limit, owner),
+            )
         elif action == "revoke":
             self.db.execute("DELETE FROM owners WHERE id=?", (owner,))
             self.db.execute("DELETE FROM objects WHERE owner=?", (owner,))
@@ -116,7 +134,7 @@ class GatewayStore:
 
     def identify(self, key):
         row = self.db.execute(
-            "SELECT id,name,cap FROM owners WHERE hash=? AND enabled AND (expires=0 OR expires>?)",
+            "SELECT id,name,cap,websocketLimit FROM owners WHERE hash=? AND enabled AND (expires=0 OR expires>?)",
             (digest(key), int(time.time())),
         ).fetchone()
         return _read_key(row) if row else None

@@ -7,13 +7,14 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import AsyncExitStack
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zipfile import ZipFile
 
-from aiohttp import ClientSession, TCPConnector, web
+from aiohttp import ClientSession, TCPConnector, WSServerHandshakeError, web
 from aiohttp.test_utils import TestServer
 from core.gateway import Gateway
 from core.gateway_accounts import Account
@@ -210,7 +211,7 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
         self.base = f"https://127.0.0.1:{runner.addresses[0][1]}/v1"
         self.keys = [self.store.change_key("create", {"name": i, "cap": 1}) for i in ("one", "two")]
         ctx = ssl.create_default_context(cafile=str(self.store.directory / "forge-gateway-ca.pem"))
-        self.client = ClientSession(connector=TCPConnector(ssl=ctx))
+        self.client = ClientSession(connector=TCPConnector(ssl=ctx, limit=0))
 
     async def asyncTearDown(self):
         self.release.set()
@@ -397,7 +398,7 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
 
         restarted = Gateway(GatewayStore(self.store.directory), lambda _: self.accounts)
         try:
-            self.assertEqual(restarted.identify_local(key), {"id": "local", "name": "本机", "cap": 8})
+            self.assertEqual(restarted.identify_local(key), {"id": "local", "name": "本机", "cap": 8, "websocketLimit": 32})
             local = restarted.status()["keys"][0]
             self.assertEqual((local["active"], local["waiting"], local["calls"]), (0, 0, 2))
         finally:
@@ -445,7 +446,7 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
 
             restarted = Gateway(GatewayStore(self.store.directory), lambda _: self.accounts)
             try:
-                self.assertEqual(restarted.identify_local(current), {"id": "local", "name": "本机", "cap": 8})
+                self.assertEqual(restarted.identify_local(current), {"id": "local", "name": "本机", "cap": 8, "websocketLimit": 32})
                 write(expired)
                 self.assertIsNone(restarted.identify_local(expired))
                 self.assertEqual(await post(local, current), 401)
@@ -463,51 +464,109 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.store.option("localChatgpt"))
             self.assertEqual(await post(local, newer), 200)
 
-    async def test_ws_handshake_429_logs_connection_counts_and_limits(self):
+    async def test_ws_handshake_limits_keys_even_above_128_total_connections(self):
         owner = self.keys[0]["id"]
-        other_owner = self.keys[1]["id"]
-        for key_count, total_count, key_limit_reached, total_limit_reached in (
-            (12, 12, True, False),
-            (1, 64, False, True),
-            (12, 64, True, True),
-        ):
-            sockets = {
-                index: (owner if index < key_count else other_owner, None)
-                for index in range(total_count)
-            }
-            with self.subTest(key_count=key_count, total_count=total_count):
-                with (
-                    patch.object(self.gateway.proto, "sockets", sockets),
-                    self.assertLogs("core.gateway_protocol", level="WARNING") as logs,
-                ):
-                    async with self.client.get(self.base + "/responses", headers=self.headers()) as response:
-                        self.assertEqual(response.status, 429)
-                        self.assertEqual((await response.json())["error"]["code"], "capacity")
-                    status = await self.gateway.command("status", {})
-                    websocket = status["websocket"]
-                    self.assertEqual(websocket["connections"], total_count)
-                    self.assertEqual((websocket["limit"], websocket["perKeyLimit"]), (64, 12))
-                    self.assertEqual(status["keys"][0]["websocketConnections"], key_count)
-                    rejection = websocket["lastRejection"]
-                    self.assertGreater(rejection["at"], 0)
-                    self.assertEqual(rejection["ownerId"], owner)
-                    self.assertEqual(rejection["ownerName"], "one")
-                    self.assertEqual(
-                        (rejection["keyConnections"], rejection["totalConnections"]),
-                        (key_count, total_count),
-                    )
-                    self.assertEqual(
-                        (rejection["keyLimitReached"], rejection["totalLimitReached"]),
-                        (key_limit_reached, total_limit_reached),
-                    )
-                self.assertEqual(
-                    [record.getMessage() for record in logs.records],
-                    [
-                        f"WebSocket 握手拒绝 HTTP 429 key_id={owner} key_connections={key_count}/12 "
-                        f"total_connections={total_count}/64 key_limit_reached={key_limit_reached} "
-                        f"total_limit_reached={total_limit_reached}"
-                    ],
+        for index in range(9):
+            self.keys.append(self.store.change_key("create", {"name": f"key-{index}", "cap": 1}))
+        url = self.base + "/responses"
+        async with asyncio.timeout(15), AsyncExitStack() as sockets:
+            for index in range(11):
+                for _ in range(9 if index == 10 else 12):
+                    await sockets.enter_async_context(self.client.ws_connect(url, headers=self.headers(index)))
+            with self.assertLogs("core.gateway_protocol", level="WARNING") as logs:
+                async with self.client.get(url, headers=self.headers()) as response:
+                    self.assertEqual(response.status, 429)
+                    self.assertEqual((await response.json())["error"]["code"], "capacity")
+            status = await self.gateway.command("status", {})
+            websocket = status["websocket"]
+            self.assertEqual(websocket["connections"], 129)
+            self.assertNotIn("limit", websocket)
+            key = next(key for key in status["keys"] if key["id"] == owner)
+            self.assertEqual((key["websocketConnections"], key["websocketLimit"]), (12, 12))
+            rejection = websocket["lastRejection"]
+            self.assertGreater(rejection["at"], 0)
+            self.assertEqual((rejection["ownerId"], rejection["ownerName"]), (owner, "one"))
+            self.assertEqual(
+                (rejection["keyConnections"], rejection["keyLimit"], rejection["totalConnections"]),
+                (12, 12, 129),
+            )
+            self.assertEqual(
+                [record.getMessage() for record in logs.records],
+                [f"WebSocket 握手拒绝 HTTP 429 key_id={owner} key_connections=12/12 total_connections=129"],
+            )
+
+    async def test_local_ws_allows_32_connections_before_rejecting(self):
+        with patch("core.gateway.prepare_launch") as prepare:
+            prepare.return_value.native_auth = False
+            await self.gateway.command("prepare_launch", {})
+        headers = {"Authorization": "Bearer " + self.gateway.local_key()}
+        url = self.base + "/responses"
+        async with AsyncExitStack() as sockets:
+            for _ in range(32):
+                await sockets.enter_async_context(self.client.ws_connect(url, headers=headers))
+            with self.assertRaises(WSServerHandshakeError) as rejected:
+                await self.client.ws_connect(url, headers=headers)
+            self.assertEqual(rejected.exception.status, 429)
+
+            status = self.gateway.status()
+            local = status["keys"][0]
+            self.assertEqual((local["id"], local["websocketConnections"], local["websocketLimit"]), ("local", 32, 32))
+            self.assertEqual((local["active"], local["cap"]), (0, 8))
+            rejection = status["websocket"]["lastRejection"]
+            self.assertEqual((rejection["keyConnections"], rejection["keyLimit"]), (32, 32))
+
+    async def test_edit_key_updates_name_and_live_handshake_limit(self):
+        key = self.keys[0]
+        url = self.base + "/responses"
+        payload = {"action": "edit", "id": key["id"], "name": "  renamed  ", "cap": 2, "websocketLimit": 1}
+        async with self.client.ws_connect(url, headers=self.headers()) as ws:
+            for invalid in (0, -1, 1.5, True, None, 2**53):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    await self.gateway.command("key", {**payload, "websocketLimit": invalid})
+            with self.assertRaises(ValueError):
+                await self.gateway.command("key", {**payload, "name": " "})
+            original = self.gateway.status()["keys"][0]
+            self.assertEqual((original["name"], original["cap"], original["websocketLimit"]), ("one", 1, 12))
+
+            await self.gateway.command("key", payload)
+            await ws.send_json({"type": "response.create", "input": "hello", "generate": False})
+            self.assertEqual((await ws.receive_json(timeout=3))["type"], "response.created")
+            self.assertEqual((await ws.receive_json(timeout=3))["type"], "response.completed")
+            with self.assertRaises(WSServerHandshakeError) as rejected:
+                await self.client.ws_connect(url, headers=self.headers())
+            self.assertEqual(rejected.exception.status, 429)
+            status = self.gateway.status()
+            updated = status["keys"][0]
+            self.assertEqual((updated["name"], updated["cap"], updated["websocketLimit"]), ("renamed", 2, 1))
+            self.assertEqual(status["websocket"]["lastRejection"]["ownerName"], "renamed")
+
+        reopened = GatewayStore(self.store.directory)
+        try:
+            saved = reopened.identify(key["key"])
+            assert saved is not None
+            self.assertEqual((saved["id"], saved["name"], saved["websocketLimit"]), (key["id"], "renamed", 1))
+        finally:
+            reopened.db.close()
+
+    async def test_existing_key_gets_default_websocket_limit_on_upgrade(self):
+        directory = Path(self.temp.name) / "legacy"
+        directory.mkdir()
+        db = sqlite3.connect(directory / "gateway.sqlite")
+        try:
+            with db:
+                db.execute(
+                    "CREATE TABLE owners(id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE, "
+                    "enabled INTEGER NOT NULL, cap INTEGER NOT NULL, expires INTEGER NOT NULL, calls INTEGER NOT NULL DEFAULT 0)"
                 )
+                db.execute("INSERT INTO owners VALUES('legacy','existing','hash',1,3,0,19)")
+        finally:
+            db.close()
+        upgraded = GatewayStore(directory)
+        try:
+            key = upgraded.list_keys()[0]
+            self.assertEqual((key["name"], key["cap"], key["calls"], key["websocketLimit"]), ("existing", 3, 19, 12))
+        finally:
+            upgraded.db.close()
 
     async def test_pending_ws_handshake_reserves_capacity_until_prepare_fails(self):
         await self.gateway.listen(False, "127.0.0.1", 0)
@@ -522,32 +581,34 @@ class GatewayIntegration(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             raise ValueError("test handshake failure")
 
-        with patch("core.gateway_protocol.MAX_WS_CONNECTIONS", 1):
-            with patch.object(web.WebSocketResponse, "prepare", fail_prepare):
-                first = asyncio.create_task(self.client.get(local, headers=self.headers()))
-                try:
-                    await asyncio.wait_for(preparing.wait(), 3)
-                    status = self.gateway.status()
-                    self.assertEqual(status["websocket"]["connections"], 1)
-                    self.assertEqual(status["websocket"]["limit"], 1)
-                    self.assertEqual(status["keys"][0]["websocketConnections"], 1)
-                    self.assertEqual(status["keys"][0]["active"], 0)
-                    async with asyncio.timeout(3):
-                        async with self.client.get(shared, headers=self.headers(1)) as rejected:
-                            self.assertEqual(rejected.status, 429)
-                finally:
-                    release.set()
-                    async with await asyncio.wait_for(first, 3) as failed:
-                        self.assertEqual(failed.status, 400)
+        await self.gateway.command("key", {
+            "action": "edit", "id": self.keys[0]["id"], "name": "one", "cap": 1, "websocketLimit": 1,
+        })
+        with patch.object(web.WebSocketResponse, "prepare", fail_prepare):
+            first = asyncio.create_task(self.client.get(local, headers=self.headers()))
+            try:
+                await asyncio.wait_for(preparing.wait(), 3)
+                status = self.gateway.status()
+                self.assertEqual(status["websocket"]["connections"], 1)
+                self.assertEqual(status["keys"][0]["websocketLimit"], 1)
+                self.assertEqual(status["keys"][0]["websocketConnections"], 1)
+                self.assertEqual(status["keys"][0]["active"], 0)
+                async with asyncio.timeout(3):
+                    async with self.client.get(shared, headers=self.headers()) as rejected:
+                        self.assertEqual(rejected.status, 429)
+            finally:
+                release.set()
+                async with await asyncio.wait_for(first, 3) as failed:
+                    self.assertEqual(failed.status, 400)
 
-            self.assertEqual(self.gateway.status()["websocket"]["connections"], 0)
-            async with self.client.ws_connect(shared, headers=self.headers(1)):
-                self.assertEqual(self.gateway.status()["keys"][1]["websocketConnections"], 1)
-            async with asyncio.timeout(3):
-                while self.gateway.status()["websocket"]["connections"]:
-                    await asyncio.sleep(0.01)
-                async with self.client.ws_connect(local, headers=self.headers()):
-                    self.assertEqual(self.gateway.status()["websocket"]["connections"], 1)
+        self.assertEqual(self.gateway.status()["websocket"]["connections"], 0)
+        async with self.client.ws_connect(shared, headers=self.headers(1)):
+            self.assertEqual(self.gateway.status()["keys"][1]["websocketConnections"], 1)
+        async with asyncio.timeout(3):
+            while self.gateway.status()["websocket"]["connections"]:
+                await asyncio.sleep(0.01)
+            async with self.client.ws_connect(local, headers=self.headers()):
+                self.assertEqual(self.gateway.status()["websocket"]["connections"], 1)
 
     async def test_incremental_ws_across_accounts_and_owners(self):
         initial = {"model": "m", "input": [{"role": "user", "content": "remember this"}]}

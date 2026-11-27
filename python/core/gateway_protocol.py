@@ -32,9 +32,8 @@ OWNER = web.RequestKey[dict]("gateway_owner")
 AUTH = web.RequestKey[Callable[[], dict | None]]("gateway_auth")
 LISTENING = web.RequestKey[Callable[[], bool]]("gateway_listening")
 MAX_BODY = 16 * 1024 * 1024
-MAX_WS_CONNECTIONS = 64
-MAX_WS_CONNECTIONS_PER_KEY = 12
 MAX_SESSION_ACCOUNTS = 4096
+QUOTA_WAIT_SECONDS = 90
 TERMINAL = {"response.completed", "response.failed", "response.incomplete", "response.cancelled", "error"}
 
 
@@ -381,7 +380,8 @@ class Protocol:
         )
 
     async def models(self, request):
-        async with self.scheduler.reserve(request[OWNER], request[AUTH]) as account:
+        async with self.scheduler.reserve(request[OWNER], request[AUTH]) as reservation:
+            account = reservation.account
             started_at = time.monotonic()
             async with self.client.get(
                 account.base + "/models",
@@ -399,7 +399,8 @@ class Protocol:
         owner = request[OWNER]
         _, wire = prepare_input(self.store, owner["id"], body)
         _, preferred = self.session_affinity(request, wire)
-        async with self.scheduler.reserve(owner, request[AUTH], wire.get("model"), preferred=preferred) as account:
+        async with self.scheduler.reserve(owner, request[AUTH], wire.get("model"), preferred=preferred) as reservation:
+            account = reservation.account
             started_at = time.monotonic()
             if account.base == CHATGPT_BASE:
                 # Codex subscriptions expose remote compaction as a Responses generation.
@@ -442,15 +443,19 @@ class Protocol:
                     raise ProtocolError("上游未返回压缩结果", 502)
                 return web.json_response(value)
 
-    async def answer_events(self, account, request, wire, websocket, metrics) -> AsyncGenerator[dict, None]:
+    async def answer_events(self, reservation, request, wire, websocket, metrics) -> AsyncGenerator[dict, None]:
         state = AnswerStream(wire)
+        account = reservation.account
         payload = wire
-        original_identity = (account.id, account.identity, account.base, account.deployment)
+        attempted = set()
+        cross_account = False
         backup = ""
         backoff = 60
+        wait_deadline = None
         token_budget = wire.get("max_output_tokens")
         prior_usage = {}
         while True:
+            attempted.add(account.quota_key)
             adapter = Attempt(state)
             failure = {}
             started_at = time.monotonic()
@@ -521,27 +526,19 @@ class Protocol:
                     if (not backup and limit.deployment_limited and wire.get("model") == account.deployment)
                     else ""
                 )
+                can_switch = (
+                    account.base == CHATGPT_BASE and limit.code == "usage_limit_reached"
+                    and not limit.deployment_limited and limit.scope in ("", "account", "user", "seat")
+                )
             except (ProtocolError, aiohttp.ClientError, TimeoutError, OSError):
                 for output in state.flush():
                     yield output
                 raise
-            # A client keeps the same response ID and sees a single terminal event.
+            # Keep response IDs and sequence numbers continuous across the wait and resumed stream.
             state.resuming = True
-            state.closers.clear()
-            if not state.response.get("id"):
-                created = {
-                    "id": "resp_forge_" + secrets.token_hex(16),
-                    "object": "response",
-                    "created_at": int(time.time()),
-                    "model": state.model,
-                    "status": "in_progress",
-                    "output": [],
-                }
-                yield state.deliver({"type": "response.created", "response": created})
-            payload = state.continuing_input(wire)
-            if token_budget is not None:
-                payload = {**payload, "max_output_tokens": token_budget}
             heartbeat = time.monotonic()
+            if wait_deadline is None:
+                wait_deadline = heartbeat + QUOTA_WAIT_SECONDS
             # A verified loopback request survives local token refresh. New turns still authenticate normally.
             authorized = request[LISTENING] if request[OWNER]["id"] == "local" else request[AUTH]
             self.quota_waiting[state] = account.id
@@ -555,8 +552,8 @@ class Protocol:
                     if (
                         not current
                         or not current.enabled
-                        or (current.id, current.identity, current.base, current.deployment)
-                        != original_identity
+                        or (current.identity, current.base, current.deployment)
+                        != (account.identity, account.base, account.deployment)
                     ):
                         raise ProtocolError(
                             "原账号已停用或身份已变更，续写已停止", 409, "continuation_stopped"
@@ -569,15 +566,42 @@ class Protocol:
                     if not use_backup:
                         until = max(until, self.scheduler.cooldown_until(current))
                     now = time.monotonic()
+                    if can_switch and now < wait_deadline and self.scheduler.switch_account(
+                        reservation, wire.get("model"), attempted,
+                    ):
+                        account = reservation.account
+                        cross_account = True
+                        break
+                    if now >= wait_deadline or until >= wait_deadline:
+                        for output in state.flush():
+                            yield output
+                        raise ProtocolError(
+                            "原账号额度未能及时恢复，自动续写已结束，可以重试本轮请求。",
+                            429, "quota_wait_timeout",
+                        )
                     if now >= until and not current.reason:
                         account = current
                         break
                     if now >= heartbeat:
+                        if not state.response.get("id"):
+                            created = {
+                                "id": "resp_forge_" + secrets.token_hex(16),
+                                "object": "response",
+                                "created_at": int(time.time()),
+                                "model": state.model,
+                                "status": "in_progress",
+                                "output": [],
+                            }
+                            yield state.deliver({"type": "response.created", "response": created})
                         yield state.deliver({"type": "response.in_progress", "response": state.response})
                         heartbeat = now + 10
-                    await asyncio.sleep(min(1, until - now) if until > now else 1)
+                    await asyncio.sleep(min(1, wait_deadline - now, until - now if until > now else 1))
             finally:
                 self.quota_waiting.pop(state, None)
+            state.closers.clear()
+            payload = state.continuing_input(wire, cross_account=cross_account)
+            if token_budget is not None:
+                payload = {**payload, "max_output_tokens": token_budget}
             if use_backup:
                 backup = use_backup
             if backup:
@@ -607,18 +631,19 @@ class Protocol:
             return
         model = wire.get("model")
         session, preferred = self.session_affinity(request, wire)
-        async with self.scheduler.reserve(owner, request[AUTH], model, preferred=preferred) as account:
+        async with self.scheduler.reserve(owner, request[AUTH], model, preferred=preferred) as reservation:
             started = time.monotonic()
             status = "interrupted"
             checkpoint_saved = True
             outputs = {}
             protocol = "WS" if websocket else "HTTP"
             metrics = {"continuations": 0}
-            events = self.answer_events(account, request, wire, websocket, metrics)
+            events = self.answer_events(reservation, request, wire, websocket, metrics)
             sending = False
             interruption = None
             try:
                 async for event in events:
+                    account = reservation.account
                     kind = event.get("type")
                     if kind == "response.output_item.done":
                         outputs[event.get("output_index", len(outputs))] = event["item"]
@@ -650,7 +675,7 @@ class Protocol:
                 raise ProtocolError("上游在生成结束前断开", 502)
             except ProtocolError as exc:
                 if exc.code in ("model_not_found", "unsupported_model"):
-                    self.scheduler.mark_unsupported(account.id, wire.get("model"))
+                    self.scheduler.mark_unsupported(reservation.account.id, wire.get("model"))
                 status = f"{exc.status} {exc.code}"
                 raise
             except asyncio.CancelledError as exc:
@@ -667,6 +692,7 @@ class Protocol:
                 )
                 raise
             finally:
+                account = reservation.account
                 if interruption is not None and status == "interrupted":
                     logger.warning(
                         "网关 interrupted 来源=%s 账号=%r 账号ID=%r 模型=%r 协议=%s 异常类型=%s",
@@ -804,30 +830,25 @@ class Protocol:
         owner = request[OWNER]
         owner_id = owner["id"]
         counts = self.websocket_counts()
-        total_count = counts.total()
         key_count = counts[owner_id]
-        total_limit_reached = total_count >= MAX_WS_CONNECTIONS
-        key_limit_reached = key_count >= MAX_WS_CONNECTIONS_PER_KEY
-        if total_limit_reached or key_limit_reached:
+        key_limit = owner["websocketLimit"]
+        if key_count >= key_limit:
+            total_count = counts.total()
             self.last_ws_rejection = {
                 "at": int(time.time()),
                 "ownerId": owner_id,
                 "ownerName": owner["name"],
                 "keyConnections": key_count,
+                "keyLimit": key_limit,
                 "totalConnections": total_count,
-                "keyLimitReached": key_limit_reached,
-                "totalLimitReached": total_limit_reached,
             }
             logger.warning(
                 "WebSocket 握手拒绝 HTTP 429 key_id=%s key_connections=%d/%d "
-                "total_connections=%d/%d key_limit_reached=%s total_limit_reached=%s",
+                "total_connections=%d",
                 owner_id,
                 key_count,
-                MAX_WS_CONNECTIONS_PER_KEY,
+                key_limit,
                 total_count,
-                MAX_WS_CONNECTIONS,
-                key_limit_reached,
-                total_limit_reached,
             )
             raise CapacityError("WebSocket 连接已满")
         ws = web.WebSocketResponse(max_msg_size=MAX_BODY, heartbeat=35)
@@ -885,7 +906,7 @@ class Protocol:
                 await ws.close(code=1001, message=b"listener stopped")
                 return ws
             async for msg in ws:
-                if not request[AUTH]() or not self.scheduler.accepting:
+                if not (current_owner := request[AUTH]()) or not self.scheduler.accepting:
                     await ws.close(code=1008, message=b"credential or service disabled")
                     break
                 if msg.type not in (WSMsgType.TEXT, WSMsgType.BINARY):
@@ -896,7 +917,7 @@ class Protocol:
                     if kind == "response.create" and finishing and task and not task.done():
                         # The client can submit its next turn while the previous upstream stream is closing.
                         await task
-                        if ws.closed or not request[AUTH]() or not self.scheduler.accepting:
+                        if ws.closed or not (current_owner := request[AUTH]()) or not self.scheduler.accepting:
                             await ws.close(code=1008, message=b"credential or service disabled")
                             break
                     if kind == "response.cancel":
@@ -909,6 +930,7 @@ class Protocol:
                         raise ValueError("当前连接只接受一个正在生成的 response.create")
                     else:
                         finishing = False
+                        request[OWNER] = current_owner
                         task = asyncio.create_task(run(body))
                 except (ValueError, KeyError, AttributeError, TypeError) as exc:
                     await ws.send_json(

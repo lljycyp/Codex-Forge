@@ -77,6 +77,11 @@ class Account:
         return min(self.weekly_checked_at, self.five_hour_checked_at)
 
 
+@dataclass
+class Reservation:
+    account: Account
+
+
 AZURE_V1 = re.compile(r"https://[a-zA-Z0-9-]+\.(?:openai\.azure\.com|services\.ai\.azure\.com)/openai/v1/?")
 DEPLOYMENT = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}")
 
@@ -267,10 +272,24 @@ class Scheduler:
         }
 
     def eligible(self, account):
-        return (
-            account.enabled and not account.reason and not account.low_quota_window(PAUSE_WEEKLY_AT)
-            and self.cooldown_until(account) <= time.monotonic()
-        )
+        return not self._ineligible_reason(account)
+
+    def _ineligible_reason(self, account):
+        if not account.enabled:
+            return "未参与调度"
+        if account.reason:
+            if account.token_expired:
+                return "令牌已过期"
+            if account.quota_reset:
+                return "当前额度已用完"
+            if account.reason == "重复的登录身份":
+                return account.reason
+            return "账号配置或认证异常"
+        if window := account.low_quota_window(PAUSE_WEEKLY_AT):
+            return f"{window}剩余 ≤ 1%"
+        if self.cooldown_until(account) > time.monotonic():
+            return "冷却中"
+        return ""
 
     def cooldown_until(self, account):
         quota = self.quota_cooldowns.get((account.id, account.identity), {})
@@ -350,6 +369,49 @@ class Scheduler:
         if model:
             self.unsupported[(aid, model)] = time.monotonic() + 600
 
+    def _supports(self, account, model):
+        return (not model or not account.deployment or account.deployment == model) and (
+            self.unsupported.get((account.id, model), 0) <= time.monotonic()
+        )
+
+    def _claim_account(self, account):
+        self.active[account.id] += 1
+        self.identity_active[account.quota_key] += 1
+        self.last[account.id] = time.monotonic_ns()
+        if account.quota_limited:
+            self.weekly_recheck_after[account.quota_key] = None
+            self._save_weekly_checks()
+
+    def _release_account(self, account):
+        self.active[account.id] -= 1
+        key = account.quota_key
+        self.identity_active[key] -= 1
+        if not self.identity_active[key] and self.weekly_recheck_after.get(key, 0) is None:
+            # Only a quota read started after the last request finished may release this account.
+            self.weekly_recheck_after[key] = time.time()
+            self._save_weekly_checks()
+            if self.accepting:
+                self.refresh_usage(account)
+
+    def switch_account(self, reservation, model, attempted):
+        current = reservation.account
+        workspace = current.headers.get("ChatGPT-Account-Id")
+        available = [
+            account for account in self.accounts()
+            if account.base == current.base and account.id != current.id and account.quota_key not in attempted
+            and (not workspace or account.headers.get("ChatGPT-Account-Id") != workspace)
+            and self.eligible(account) and self._supports(account, model) and self._has_capacity(account)
+        ]
+        if not available:
+            return False
+        selected = min(available, key=lambda a: (self.active[a.id] / a.cap, self.last[a.id]))
+        self._claim_account(selected)
+        self._release_account(current)
+        reservation.account = selected
+        self.changed.set()
+        logger.info("网关额度续写切换账号 原账号=%r 新账号=%r", current.name, selected.name)
+        return True
+
     @property
     def waiting(self):
         return sum(map(len, self.waiters.values()))
@@ -358,6 +420,14 @@ class Scheduler:
         if status in (401, 403, 429) or status >= 500:
             self.cooldown[aid] = max(self.cooldown.get(aid, 0), time.monotonic() + max(1, delay))
             self.changed.set()
+
+    def _log_dispatch(self, owner_id, model, candidates, excluded, selected=None, preferred=None, failure=""):
+        logger.info(
+            "网关调度 来源ID=%r 模型=%r 候选(占用/上限)=%r 排除=%r 会话首选=%r 选中=%r 失败原因=%r",
+            owner_id, str(model or "")[:100],
+            [(a.name, f"{self.active[a.id]}/{a.cap}") for a in candidates], excluded, preferred,
+            selected.name if selected else None, failure,
+        )
 
     @asynccontextmanager
     async def reserve(self, owner, authenticate, model=None, *, preferred=None):
@@ -370,28 +440,46 @@ class Scheduler:
             self.order.append(owner_id)
         entry = (ticket, authenticate, model)
         queue.append(entry)
-        selected = None
+        reservation = None
         deadline = time.monotonic() + 25
         try:
             while True:
                 if not self.accepting or not (current := authenticate()):
                     raise CapacityError("服务已关闭或凭证已失效")
                 accounts = self.accounts()
-                online = [a for a in accounts if self.eligible(a)]
+                excluded = []
+                online = []
+                for account in accounts:
+                    if reason := self._ineligible_reason(account):
+                        excluded.append((account.name, reason))
+                    else:
+                        online.append(account)
 
-                def supports(account, requested):
-                    return (not requested or not account.deployment or account.deployment == requested) and (
-                        self.unsupported.get((account.id, requested), 0) <= time.monotonic()
-                    )
-
-                candidates = [a for a in online if supports(a, model)]
-                if not candidates:
+                supports_request = False
+                available = []
+                for account in online:
+                    if not self._supports(account, model):
+                        reason = "模型不匹配" if account.deployment and account.deployment != model else "上游暂不支持该模型"
+                        excluded.append((account.name, reason))
+                        continue
+                    supports_request = True
+                    if self._has_capacity(account):
+                        available.append(account)
+                        continue
+                    if account.quota_key in self.weekly_recheck_after:
+                        reason = self.weekly_reason(account) or "等待复查额度"
+                    else:
+                        reason = "额度保护单并发已满" if account.quota_limited else "账号并发已满"
+                    excluded.append((account.name, reason))
+                if not supports_request:
+                    failure = "没有符合条件的可用账号"
                     for account in accounts:
-                        if account.enabled and supports(account, model):
+                        if account.enabled and self._supports(account, model):
                             if window := account.low_quota_window(PAUSE_WEEKLY_AT):
-                                raise CapacityError(f"{window}不足，等待账号额度恢复")
-                    raise CapacityError("没有符合条件的可用账号")
-                available = [a for a in candidates if self._has_capacity(a)]
+                                failure = f"{window}不足，等待账号额度恢复"
+                                break
+                    self._log_dispatch(owner_id, model, [], excluded, failure=failure)
+                    raise CapacityError(failure)
 
                 def ready(oid, available_accounts=online):
                     head, authorize, requested = self.waiters[oid][0]
@@ -400,50 +488,42 @@ class Scheduler:
                         return False
                     cap = owner_now["cap"]
                     return (cap is None or self.owner_active[oid] < Decimal(cap)) and any(
-                        self._has_capacity(a) and supports(a, requested) for a in available_accounts
+                        self._has_capacity(a) and self._supports(a, requested) for a in available_accounts
                     )
 
                 next_owner = next((oid for oid in self.order if ready(oid)), None)
                 if available and next_owner == owner_id and queue[0][0] is ticket:
                     preference = preferred() if preferred is not None else None
-                    selected = min(available, key=lambda a: (
+                    ranked = sorted(available, key=lambda a: (
                         (a.id, a.quota_key) != preference, self.active[a.id] / a.cap, self.last[a.id],
                     ))
+                    selected = ranked[0]
+                    preferred_name = next((a.name for a in accounts if (a.id, a.quota_key) == preference), None)
+                    self._log_dispatch(owner_id, model, ranked, excluded, selected, preferred_name)
                     queue.popleft()
                     self.order.remove(owner_id)
                     if queue:
                         self.order.append(owner_id)
                     else:
                         del self.waiters[owner_id]
-                    self.active[selected.id] += 1
-                    self.identity_active[selected.quota_key] += 1
                     self.owner_active[owner_id] += 1
-                    self.last[selected.id] = time.monotonic_ns()
-                    if selected.quota_limited:
-                        self.weekly_recheck_after[selected.quota_key] = None
-                        self._save_weekly_checks()
+                    reservation = Reservation(selected)
+                    self._claim_account(selected)
                     self.changed.set()
                     break
                 if time.monotonic() >= deadline:
+                    self._log_dispatch(owner_id, model, available, excluded, failure="等待可用账号超时")
                     raise CapacityError("等待可用账号超时")
                 self.changed.clear()
                 try:
                     await asyncio.wait_for(self.changed.wait(), 1)
                 except TimeoutError:
                     pass
-            yield selected
+            yield reservation
         finally:
-            if selected:
-                self.active[selected.id] -= 1
+            if reservation:
                 self.owner_active[owner_id] -= 1
-                key = selected.quota_key
-                self.identity_active[key] -= 1
-                if not self.identity_active[key] and self.weekly_recheck_after.get(key, 0) is None:
-                    # Only a quota read started after the last request finished may release this account.
-                    self.weekly_recheck_after[key] = time.time()
-                    self._save_weekly_checks()
-                    if self.accepting:
-                        self.refresh_usage(selected)
+                self._release_account(reservation.account)
             elif entry in queue:
                 queue.remove(entry)
                 if not queue:

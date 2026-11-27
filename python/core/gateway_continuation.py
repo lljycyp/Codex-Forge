@@ -15,10 +15,11 @@ class ProtocolError(ValueError):
 
 
 class QuotaLimit(ProtocolError):
-    def __init__(self, code, delay, deployment_limited=False):
+    def __init__(self, code, delay, deployment_limited=False, scope=""):
         super().__init__("上游额度受限", 429, code)
         self.delay = delay
         self.deployment_limited = deployment_limited
+        self.scope = scope
 
 
 def quota_limit(error, headers=None, status=None):
@@ -70,7 +71,7 @@ def quota_limit(error, headers=None, status=None):
             )
         )
     )
-    return QuotaLimit(code, max(seconds) if seconds else None, deployment)
+    return QuotaLimit(code, max(seconds) if seconds else None, deployment, scope)
 
 
 def replay_item(item):
@@ -168,8 +169,11 @@ class AnswerStream:
             )
         )
 
-    def continuing_input(self, wire):
-        items = [replay_item(value) for _, value in sorted(self.done.items())]
+    def continuing_input(self, wire, *, cross_account=False):
+        items = [
+            replay_item(value) for _, value in sorted(self.done.items())
+            if not cross_account or value.get("type") != "reasoning"
+        ]
         partial = "".join(self.text)
         if partial:
             message = {"role": "assistant", "content": partial}

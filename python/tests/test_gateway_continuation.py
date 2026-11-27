@@ -249,6 +249,27 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([len(wire["input"]) for _, wire, _ in self.calls], [1, 3, 5])
         self.assertEqual(len(self.upstream_sockets), 2)
 
+    async def test_dispatch_log_explains_candidates_and_exclusions(self):
+        self.accounts[0].five_hour_remaining = 1
+        self.accounts.extend([
+            Account("C", "C", 1, True, deployment="another-model"),
+            Account("D", "D", 1, True),
+            Account("E", "E", 1, True),
+        ])
+        self.gateway.scheduler.active["E"] = 1
+        self.script = [message_events("logged", ["ok"])]
+        with self.assertLogs("core.gateway_accounts", "INFO") as logs:
+            async with self.client.ws_connect(self.url, headers={"thread-id": "independent"}) as ws:
+                result = await self.send_turn(ws, model="m", input="hello")
+
+        self.assertEqual(result["type"], "response.completed")
+        [record] = logs.output
+        self.assertIn("候选(占用/上限)=[('B', '0/1'), ('D', '0/1')]", record)
+        self.assertIn("('A', '5 小时额度剩余 ≤ 1%')", record)
+        self.assertIn("('C', '模型不匹配')", record)
+        self.assertIn("('E', '账号并发已满')", record)
+        self.assertIn("会话首选=None 选中='B'", record)
+
     async def test_session_falls_back_when_preferred_account_is_full_and_remembers_success(self):
         self.script = [message_events(str(i), ["ok"]) for i in range(3)]
         holder = {"id": "holder", "cap": 1}
@@ -258,7 +279,7 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
             async with self.gateway.scheduler.reserve(
                 holder, lambda: holder, preferred=lambda: (account.id, account.quota_key),
             ) as occupied:
-                self.assertEqual(occupied.id, "A")
+                self.assertEqual(occupied.account.id, "A")
                 second = await self.send_turn(ws, model="m", input="two", previous_response_id=first["response"]["id"])
             third = await self.send_turn(ws, model="m", input="three", previous_response_id=second["response"]["id"])
         self.assertEqual(third["type"], "response.completed")
@@ -433,13 +454,88 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
     async def test_sse_handles_terminal_snapshot_without_done_frames(self):
         await self.verify_join(False)
 
+    async def test_subscription_quota_switches_partial_answer_to_available_account(self):
+        self.script = [
+            message_events(
+                "original", ["partial "], reasoning=True,
+                error={"code": "usage_limit_reached", "resets_in_seconds": 3600},
+            ),
+            message_events("continued", ["done"]),
+        ]
+        with patch("core.gateway_protocol.CHATGPT_BASE", self.accounts[0].base):
+            events = await self.collect({"model": "m", "input": "go"}, websocket=True)
+        self.assertEqual([auth for auth, _, _ in self.calls], ["A", "B"])
+        resumed = self.calls[1][1]["input"]
+        self.assertEqual(resumed[-2], {"role": "assistant", "content": "partial "})
+        self.assertFalse(any(item.get("type") == "reasoning" for item in resumed))
+        self.assertEqual(events[-1]["response"]["id"], "original")
+        self.assertEqual(
+            "".join(e["delta"] for e in events if e["type"] == "response.output_text.delta"), "partial done",
+        )
+        self.assertEqual(self.gateway.status()["records"][0]["account"], "B")
+        self.assertEqual(self.store.list_keys()[0]["calls"], 1)
+        self.assertEqual(sum(self.gateway.scheduler.active.values()), 0)
+
+    async def test_subscription_quota_switches_before_http_output(self):
+        self.script = [
+            (429, {"error": {"code": "usage_limit_reached"}}, {"Retry-After": "3600"}),
+            message_events("continued", ["done"]),
+        ]
+        with patch("core.gateway_protocol.CHATGPT_BASE", self.accounts[0].base):
+            events = await self.collect({"model": "m", "input": "go"})
+        self.assertEqual(events[-1]["type"], "response.completed")
+        self.assertEqual([auth for auth, _, _ in self.calls], ["A", "B"])
+
+    async def test_long_quota_reset_releases_turn_and_retry_uses_available_account(self):
+        self.script = [
+            message_events("original", ["partial"], error={"code": "usage_limit_reached", "resets_in_seconds": 3600}),
+            message_events("retried", ["done"]),
+        ]
+        async with self.client.ws_connect(self.url) as ws:
+            error = await self.send_turn(ws, model="m", input="go")
+            self.assertEqual((error["type"], error["code"]), ("error", "quota_wait_timeout"))
+            self.assertFalse(self.gateway.proto.quota_waiting)
+            self.assertEqual(sum(self.gateway.scheduler.active.values()), 0)
+            result = await self.send_turn(ws, model="m", input="go")
+            self.assertEqual(result["type"], "response.completed")
+        self.assertEqual([auth for auth, _, _ in self.calls], ["A", "B"])
+
+    async def test_workspace_quota_does_not_switch_and_returns_429_before_output(self):
+        self.script = [
+            (429, {"error": {"code": "usage_limit_reached", "scope": "workspace"}}, {"Retry-After": "3600"}),
+        ]
+        with patch("core.gateway_protocol.CHATGPT_BASE", self.accounts[0].base):
+            async with asyncio.timeout(4), self.client.post(self.url, json={"input": "go", "stream": True}) as response:
+                self.assertEqual(response.status, 429)
+                self.assertEqual((await response.json())["error"]["code"], "quota_wait_timeout")
+        self.assertEqual([auth for auth, _, _ in self.calls], ["A"])
+        self.assertFalse(self.gateway.proto.quota_waiting)
+        self.assertEqual(sum(self.gateway.scheduler.active.values()), 0)
+
+    async def test_quota_wait_ends_if_original_credential_stays_expired(self):
+        self.script = [
+            message_events("original", ["partial"], error={"code": "usage_limit_reached", "resets_in_seconds": 1}),
+        ]
+        with patch("core.gateway_protocol.QUOTA_WAIT_SECONDS", 2):
+            async with self.client.ws_connect(self.url) as ws, asyncio.timeout(4):
+                await ws.send_json({"type": "response.create", "input": "go"})
+                while (await ws.receive_json())["type"] != "response.in_progress":
+                    pass
+                self.accounts[0] = replace(self.accounts[0], reason="令牌已过期", token_expired=True)
+                self.gateway.refreshed = -100.0
+                error = await ws.receive_json()
+                self.assertEqual((error["type"], error["code"]), ("error", "quota_wait_timeout"))
+        self.assertEqual(len(self.calls), 1)
+        self.assertFalse(self.gateway.proto.quota_waiting)
+        self.assertEqual(sum(self.gateway.scheduler.active.values()), 0)
+
     async def test_confirmed_quota_reset_resumes_waiting_turn_and_new_dispatch(self):
         account = self.accounts[0]
         account.cap = 2
         account.weekly_remaining = 2
         self.accounts[1].enabled = False
         self.script = [
-            message_events("original", ["before "], error={"type": "usage_limit_reached", "resets_in_seconds": 3600}),
+            message_events("original", ["before "], error={"type": "usage_limit_reached", "resets_in_seconds": 30}),
             message_events("continued", ["after"]),
             message_events("new", ["available"]),
         ]
@@ -450,7 +546,7 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
                     pass
                 self.assertFalse(self.gateway.scheduler.eligible(account))
                 self.assertIn(account.quota_key, self.gateway.scheduler.weekly_recheck_after)
-                exhausted = replace(account, weekly_remaining=0, reason="当前额度已用完", quota_reset=time.time() + 3600)
+                exhausted = replace(account, weekly_remaining=0, reason="当前额度已用完", quota_reset=time.time() + 30)
                 self.accounts = [exhausted, self.accounts[1]]
                 self.gateway.refreshed = -100.0
                 self.assertIs(self.gateway.accounts()[0], exhausted)
@@ -463,7 +559,7 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
                 other_owner = {"id": "another-owner", "cap": 1}
                 async with asyncio.timeout(0.5):
                     async with self.gateway.scheduler.reserve(other_owner, lambda: other_owner) as selected:
-                        self.assertIs(selected, restored)
+                        self.assertIs(selected.account, restored)
                 while (event := await ws.receive_json())["type"] != "response.completed":
                     pass
             new_turn = await self.collect({"input": "another request"})
@@ -497,7 +593,7 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancel_while_waiting_never_starts_another_request(self):
         self.script = [
-            message_events("r", ["partial"], error={"code": "usage_limit_reached", "resets_in_seconds": 3600})
+            message_events("r", ["partial"], error={"code": "usage_limit_reached", "resets_in_seconds": 30})
         ]
         async with self.client.ws_connect(self.url) as ws:
             await ws.send_json({"type": "response.create", "input": "go"})
@@ -520,13 +616,14 @@ class ContinuationTest(unittest.IsolatedAsyncioTestCase):
                 {"type": "error", "error": {"code": "usage_limit_reached", "resets_in_seconds": 1}},
             ]
         ]
-        events = await self.collect({"input": "save"})
+        with patch("core.gateway_protocol.CHATGPT_BASE", self.accounts[0].base):
+            events = await self.collect({"input": "save"})
         self.assertEqual(events[-1]["type"], "error")
         self.assertEqual(len(self.calls), 1)
 
     async def test_pending_request_stops_after_key_revocation(self):
         self.script = [
-            message_events("r", ["partial"], error={"code": "usage_limit_reached", "resets_in_seconds": 600})
+            message_events("r", ["partial"], error={"code": "usage_limit_reached", "resets_in_seconds": 30})
         ]
         async with self.client.ws_connect(self.url) as ws:
             await ws.send_json({"type": "response.create", "input": "go"})

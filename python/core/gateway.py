@@ -20,13 +20,13 @@ from core.constants import CONFIG_DIR
 from core.gateway_accounts import Scheduler, read_accounts, refresh_weekly_quota
 from core.gateway_client_bundle import export_client_bundle
 from core.gateway_launch import WORKSPACE_STARTUP_SECONDS, prepare_launch, workspace_startup_failure
-from core.gateway_store import GatewayStore, digest
+from core.gateway_store import DEFAULT_WS_CONNECTION_LIMIT, GatewayStore, digest
 from core.gateway_tls import ensure_public_ca, server_tls
 from core.logger import get_logger
 from core.profile_service import get_active_auth_path
 
 
-LOCAL_OWNER = {"id": "local", "name": "本机", "cap": 8}
+LOCAL_OWNER = {"id": "local", "name": "本机", "cap": 8, "websocketLimit": 32}
 logger = get_logger(__name__)
 
 
@@ -194,8 +194,7 @@ class Gateway:
             "addresses": addresses(),
             "websocket": {
                 "connections": websocket_counts.total(),
-                "limit": gateway_protocol.MAX_WS_CONNECTIONS,
-                "perKeyLimit": gateway_protocol.MAX_WS_CONNECTIONS_PER_KEY,
+                "perKeyLimit": DEFAULT_WS_CONNECTION_LIMIT,
                 "lastRejection": self.proto.last_ws_rejection,
             },
             "keys": [
