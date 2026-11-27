@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 const { pruneReleases } = require("./release_retention");
 
 const root = path.join(__dirname, "..");
@@ -76,7 +77,8 @@ async function findRelease() {
     return await api(`/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tagName)}`);
   } catch (error) {
     if (error.message.includes("failed: 404 ")) {
-      return null;
+      const releases = await listReleases();
+      return releases.find((release) => release.tag_name === tagName);
     }
     throw error;
   }
@@ -90,13 +92,13 @@ async function createRelease(notes) {
       target_commitish: "main",
       name: `Codex Forge ${version}`,
       body: notes,
-      draft: false,
+      draft: true,
       prerelease: false,
     },
   });
 }
 
-async function updateRelease(id, notes) {
+async function publishRelease(id, notes) {
   return api(`/repos/${owner}/${repo}/releases/${id}`, {
     method: "PATCH",
     body: {
@@ -124,8 +126,12 @@ async function listReleases() {
   }
 }
 
-async function deleteAsset(assetId) {
-  return api(`/repos/${owner}/${repo}/releases/assets/${assetId}`, { method: "DELETE" });
+async function assetDigest(file) {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(file)) {
+    hash.update(chunk);
+  }
+  return `sha256:${hash.digest("hex")}`;
 }
 
 async function deleteRelease(releaseId) {
@@ -174,20 +180,41 @@ async function main() {
 
   console.log(`Finding GitHub release ${tagName}`);
   let release = await findRelease();
-  console.log(release?.id ? `Updating GitHub release ${tagName}` : `Creating GitHub release ${tagName}`);
-  release = release?.id ? await updateRelease(release.id, notes) : await createRelease(notes);
+  if (!release) {
+    console.log(`Creating GitHub draft release ${tagName}`);
+    release = await createRelease(notes);
+  }
 
-  const assets = await listAssets(release.id);
+  let assets = await listAssets(release.id);
+  if (release.draft) {
+    for (const file of files) {
+      const fileName = path.basename(file);
+      const existing = assets.find((asset) => asset.name === fileName);
+      if (existing) {
+        if (existing.state !== "uploaded" || existing.digest !== await assetDigest(file)) {
+          throw new Error(`Draft ${tagName} has an incomplete or different ${fileName}; remove the affected draft assets before retrying`);
+        }
+        console.log(`Reusing GitHub draft asset ${fileName}`);
+        continue;
+      }
+      console.log(`Uploading ${fileName} (${assetSize(file)}) to GitHub draft ${tagName}`);
+      await uploadAsset(release.id, file);
+    }
+    assets = await listAssets(release.id);
+  }
+
   for (const file of files) {
     const fileName = path.basename(file);
-    const oldAsset = assets.find((asset) => asset.name === fileName);
-    if (oldAsset?.id) {
-      console.log(`Deleting old GitHub asset ${fileName}`);
-      await deleteAsset(oldAsset.id);
+    if (!assets.some((asset) => asset.name === fileName && asset.state === "uploaded")) {
+      throw new Error(`GitHub release ${tagName} is missing uploaded asset ${fileName}`);
     }
-    console.log(`Uploading ${fileName} (${assetSize(file)}) to GitHub release ${tagName}`);
-    await uploadAsset(release.id, file);
-    console.log(`Uploaded ${fileName} to GitHub release ${tagName}`);
+  }
+
+  if (release.draft) {
+    console.log(`Publishing GitHub release ${tagName}`);
+    release = await publishRelease(release.id, notes);
+  } else {
+    console.log(`GitHub release ${tagName} is already published with both assets`);
   }
 
   await pruneReleases({ currentRelease: release, listReleases, listAssets, deleteRelease });

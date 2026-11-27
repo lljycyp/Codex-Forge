@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
@@ -110,10 +111,21 @@ test("release deletion errors are reported", async () => {
   await assert.rejects(pruneReleases(store), /Delete denied/);
 });
 
-async function runPublisher(provider, { failUploadAt = 0, dryRun = false, missingManifest = false } = {}) {
+async function runPublisher(provider, {
+  failUploadAt = 0, dryRun = false, missingManifest = false, githubRelease = "new", differentDraftAsset = false,
+} = {}) {
   const releases = [4, 3, 2, 1, 0].map((version) => makeRelease(version + 1, `1.0.${version}`));
   const current = releases[0];
-  current.assets = [];
+  const digest = `sha256:${crypto.createHash("sha256").update("fixture").digest("hex")}`;
+  let githubReleaseExists = githubRelease !== "new";
+  if (provider === "github") {
+    current.draft = githubRelease !== "published";
+    const existingAssetCount = { new: 0, draft: 1, published: 2 }[githubRelease];
+    current.assets = current.assets.slice(0, existingAssetCount)
+      .map((asset) => ({ ...asset, state: "uploaded", digest: differentDraftAsset ? "sha256:other" : digest }));
+  } else {
+    current.assets = [];
+  }
   releases[3].assets = [];
   releases[4].assets = [];
   const assets = new Map(releases.map((release) => [release.id, [...release.assets]]));
@@ -129,7 +141,7 @@ async function runPublisher(provider, { failUploadAt = 0, dryRun = false, missin
     }
     events.push({ type: "upload", name });
     if (!(missingManifest && name === "latest.yml")) {
-      assets.get(current.id).push({ id: 100 + uploadCount, name });
+      assets.get(current.id).push({ id: 100 + uploadCount, name, state: "uploaded", digest });
     }
     return true;
   }
@@ -140,6 +152,23 @@ async function runPublisher(provider, { failUploadAt = 0, dryRun = false, missin
     requests.push({ path: url.pathname, method, page: url.searchParams.get("page") });
     if (url.hostname === "uploads.github.com") {
       return response({}, upload(url.searchParams.get("name")) ? 201 : 500);
+    }
+    if (provider === "github" && method === "POST" && url.pathname.endsWith("/releases")) {
+      assert.equal(JSON.parse(options.body).draft, true);
+      githubReleaseExists = true;
+      events.push({ type: "draft" });
+      return response(current, 201);
+    }
+    if (provider === "github" && method === "PATCH") {
+      assert.equal(JSON.parse(options.body).draft, false);
+      assert.equal(current.draft, true);
+      assert.deepEqual(assets.get(current.id).map((asset) => asset.name), ["Codex-Forge-Setup-1.0.4.exe", "latest.yml"]);
+      current.draft = false;
+      events.push({ type: "publish" });
+      return response(current);
+    }
+    if (provider === "github" && url.pathname.includes("/releases/tags/") && current.draft) {
+      return response({ message: "Not Found" }, 404);
     }
     if (url.pathname.includes("/releases/tags/") || method === "PATCH") {
       return response(current);
@@ -155,8 +184,10 @@ async function runPublisher(provider, { failUploadAt = 0, dryRun = false, missin
     }
     if (url.pathname.endsWith("/releases")) {
       assert.equal(url.searchParams.get("per_page"), "100");
+      const firstPage = releases.slice(provider === "github" && !githubReleaseExists ? 1 : 0, 4);
       const pages = [
-        [...releases.slice(0, 4), ...Array.from({ length: 96 }, (_, index) => ({ id: 1000 + index, tag_name: "draft", draft: true }))],
+        [...firstPage, ...Array.from({ length: 100 - firstPage.length },
+          (_, index) => ({ id: 1000 + index, tag_name: "draft", draft: true }))],
         [releases[4]],
       ];
       return response(pages[Number(url.searchParams.get("page")) - 1]);
@@ -170,7 +201,7 @@ async function runPublisher(provider, { failUploadAt = 0, dryRun = false, missin
     existsSync: () => true,
     statSync: () => ({ isDirectory: () => false, size: 8 }),
     readFileSync: (file) => path.basename(file) === "package.json" ? JSON.stringify({ version: "1.0.4" }) : "Release notes",
-    createReadStream: () => Buffer.from("fixture"),
+    createReadStream: () => [Buffer.from("fixture")],
   };
   const fakeProcess = {
     platform: "win32",
@@ -188,6 +219,7 @@ async function runPublisher(provider, { failUploadAt = 0, dryRun = false, missin
       AbortSignal,
       fetch: fetchFixture,
       require: (name) => {
+        if (name === "node:crypto") return crypto;
         if (name === "node:fs") return fakeFs;
         if (name === "node:path") return path;
         if (name === "./release_retention") return { pruneReleases };
@@ -200,33 +232,37 @@ async function runPublisher(provider, { failUploadAt = 0, dryRun = false, missin
   } catch (caught) {
     error = caught;
   }
-  return { error, events, requests };
+  return { error, events, requests, draft: current.draft };
 }
 
 for (const provider of ["github", "gitee"]) {
   test(`${provider}: uploads both files before cleanup and finds older releases on later pages`, async () => {
     const result = await runPublisher(provider);
     assert.ifError(result.error);
-    assert.deepEqual(result.events.slice(0, 2), [
+    assert.deepEqual(result.events.filter((event) => event.type !== "delete"), [
+      ...(provider === "github" ? [{ type: "draft" }] : []),
       { type: "upload", name: "Codex-Forge-Setup-1.0.4.exe" }, { type: "upload", name: "latest.yml" },
+      ...(provider === "github" ? [{ type: "publish" }] : []),
     ]);
-    assert.deepEqual(result.events.slice(2).map((event) => event.id), [2, 1]);
-    assert.ok(result.requests.some((request) => request.page === "2"));
+    assert.deepEqual(result.events.slice(-2), [{ type: "delete", id: 2 }, { type: "delete", id: 1 }]);
+    assert.ok(result.requests.filter((request) => request.page === "2").length >= (provider === "github" ? 2 : 1));
   });
 
   for (const failUploadAt of [1, 2]) {
     test(`${provider}: upload failure ${failUploadAt} leaves old versions untouched`, async () => {
       const result = await runPublisher(provider, { failUploadAt });
       assert.match(result.error?.message || "", /Exit 1/);
-      assert.ok(result.events.every((event) => event.type === "upload"));
-      assert.ok(result.requests.every((request) => !request.path.endsWith("/releases")));
+      assert.ok(result.events.every((event) => ["draft", "upload"].includes(event.type)));
+      assert.equal(result.draft, provider === "github" ? true : undefined);
+      assert.equal(result.requests.filter((request) => request.page === "1").length, provider === "github" ? 1 : 0);
     });
   }
 
   test(`${provider}: missing uploaded manifest prevents cleanup`, async () => {
     const result = await runPublisher(provider, { missingManifest: true });
     assert.match(result.error?.message || "", /Exit 1/);
-    assert.ok(result.events.every((event) => event.type === "upload"));
+    assert.ok(result.events.every((event) => ["draft", "upload"].includes(event.type)));
+    assert.equal(result.draft, provider === "github" ? true : undefined);
   });
 
   test(`${provider}: dry run makes no remote requests or deletions`, async () => {
@@ -236,3 +272,22 @@ for (const provider of ["github", "gitee"]) {
     assert.deepEqual(result.events, []);
   });
 }
+
+test("github: resumes a draft with a matching installer", async () => {
+  const result = await runPublisher("github", { githubRelease: "draft" });
+  assert.ifError(result.error);
+  assert.deepEqual(result.events.slice(0, 2), [{ type: "upload", name: "latest.yml" }, { type: "publish" }]);
+});
+
+test("github: leaves a draft with a different installer untouched", async () => {
+  const result = await runPublisher("github", { githubRelease: "draft", differentDraftAsset: true });
+  assert.match(result.error?.message || "", /Exit 1/);
+  assert.deepEqual(result.events, []);
+  assert.equal(result.draft, true);
+});
+
+test("github: a rerun leaves published assets untouched", async () => {
+  const result = await runPublisher("github", { githubRelease: "published" });
+  assert.ifError(result.error);
+  assert.deepEqual(result.events, [{ type: "delete", id: 2 }, { type: "delete", id: 1 }]);
+});
